@@ -49,9 +49,21 @@ export interface SessionFactsProps {
 export function SessionFacts({ session, selected = false, onFile, lang = 'en', metaColor }: SessionFactsProps) {
   const wants = sessionNotify(session)
   return (
-    <span style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 3 }}>
+    <span style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {/* The DELIVERY's name, read above the title rather than folded into the meta line below —
+          the meta line's Bookmark segment (onFile) still does the filing gesture; this is purely
+          about where the name is READ. */}
+      {session.task && (
+        <span style={{
+          fontSize: 9.5, color: 'var(--text-tertiary)', fontWeight: 600,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {session.task}
+        </span>
+      )}
       <span style={{
-        fontSize: 12.5, fontWeight: selected || wants ? 650 : 500,
+        fontSize: session.task ? 13.5 : 12.5,
+        fontWeight: (selected || wants ? 650 : 500) + (session.task ? 50 : 0),
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>
         {session.title}
