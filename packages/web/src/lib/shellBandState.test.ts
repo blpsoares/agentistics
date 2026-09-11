@@ -110,3 +110,32 @@ describe('the band never claims to be opening with nothing in flight', () => {
     expect(shellResolveWanted(shellBandReducer(INITIAL_SHELL_BAND, { type: 'openBand' }))).toBe(true)
   })
 })
+
+describe('the refusal keeps its CODE, not only its sentence', () => {
+  const refuse = (message: string, reason?: string) =>
+    shellBandReducer(INITIAL_SHELL_BAND, { type: 'refused', message, ...(reason ? { reason } : {}) })
+
+  // The sentence is what a person reads; the CODE is what the band acts on. Only the ceiling
+  // refusal has anything to offer — a list of the open shells — and without the code the band
+  // would have to match on the sentence, which is localized and would break on a rewording.
+  test('a ceiling refusal is recognisable afterwards', () => {
+    const s = refuse('All 8 terminals are open.', 'at-cap')
+    expect(s.phase).toBe('refused')
+    expect(s.reason).toBe('at-cap')
+  })
+
+  test('a refusal with no code carries none rather than inventing one', () => {
+    expect(refuse('the network went away').reason).toBeNull()
+  })
+
+  test('retrying clears the code with the sentence — both describe an attempt that is over', () => {
+    const s = shellBandReducer(refuse('All 8 terminals are open.', 'at-cap'), { type: 'retry' })
+    expect(s.reason).toBeNull()
+    expect(s.message).toBeNull()
+  })
+
+  test('a resolved shell clears it too', () => {
+    const s = shellBandReducer(refuse('x', 'at-cap'), { type: 'resolved', shell: { id: 'a', cwd: '/x' } })
+    expect(s.reason).toBeNull()
+  })
+})
