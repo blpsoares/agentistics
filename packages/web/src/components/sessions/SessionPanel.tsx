@@ -69,6 +69,8 @@ export interface SessionPanelProps {
    * then the enlarge control is ABSENT too rather than inert.
    */
   onOpenTerminal?: () => void
+  /** Take the SHELL to its own screen. Absent where there is no route to take it to. */
+  onOpenShellFullscreen?: () => void
   /**
    * May this machine serve a per-session utility SHELL right now — `CAPS.localShell` AND the
    * user's own switch, as `/api/team/session` reports it.
@@ -81,7 +83,7 @@ export interface SessionPanelProps {
   shellEnabled?: boolean
 }
 
-export function SessionPanel({ session, row, lang, theme, act, authorName, onGone, onOpened, view: viewProp, onViewChange, onArtifacts, shellEnabled, onOpenTerminal }: SessionPanelProps) {
+export function SessionPanel({ session, row, lang, theme, act, authorName, onGone, onOpened, view: viewProp, onViewChange, onArtifacts, shellEnabled, onOpenTerminal, onOpenShellFullscreen }: SessionPanelProps) {
   /**
    * Is this a session of ANOTHER machine, reached through the relay?
    *
@@ -243,6 +245,7 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
           key={session.id}
           sessionId={session.id}
           {...(session.cwd ? { cwd: session.cwd } : {})}
+          {...(onOpenShellFullscreen ? { onOpenFullscreen: onOpenShellFullscreen } : {})}
           lang={lang}
           theme={theme}
         />
