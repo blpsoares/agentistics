@@ -14,7 +14,9 @@
  * of them — nothing here double-counts a session or invents a split the data does not record. See
  * docs/superpowers/specs/2026-09-10-task-session-hierarchy-design.md §4.2.
  *
- * The Cost/Tokens columns below read `p.subtaskRollups`, keyed by subtask id, and render them with
+ * The Cost/Tokens columns below read `p.subtaskRollups` through `subtaskRollupOf`, which resolves
+ * the EFFECTIVE key — a subtask's own id, or its `groupId` when it is one of a group, since the
+ * server files a whole group under ONE bucket (see `rollupKeyOf`) — and render them with
  * the exact same formatters `TaskTable.tsx`'s own cost/tokens cells use (`useMoney()`, `fmtTokens`,
  * `NA`) — a second formatting rule here would be a second answer for the same figure. A subtask
  * with no session filed yet still gets a bucket from the server (`sessionsUsed: 0`, every metric
@@ -158,7 +160,7 @@ export function SubtaskTable(p: SubtaskTableProps) {
             </tr>
           )}
           {p.subtasks.map(t => {
-            const r = subtaskRollupOf(p.subtaskRollups, t.id)
+            const r = subtaskRollupOf(p.subtaskRollups, t)
             const cost = costCellFor(r)
             return (
             <tr key={t.id}>
