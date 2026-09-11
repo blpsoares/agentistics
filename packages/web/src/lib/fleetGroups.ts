@@ -148,15 +148,3 @@ export function asideGroups(
 export function showsGroupHeadings(groups: readonly SessionGroup[]): boolean {
   return groups.length > 1
 }
-
-/**
- * TEMPORARY compatibility shims — `SessionsAside.tsx` (this module's only caller) still imports
- * these two names and is not updated until a later task in the same plan. Without them, this
- * commit would leave the build broken (a missing named import) until that later task lands, and
- * the pre-commit hook (`bun tsc --noEmit` + `bun test`) would refuse every commit in between.
- * That later task deletes both of these lines when it switches `SessionsAside.tsx` over to
- * `asideGroups`/`showsGroupHeadings` directly — do not delete them here.
- */
-export const projectGroups = (rows: readonly ControlSession[], lang: Lang): SessionGroup[] =>
-  asideGroups(rows, 'project', lang)
-export const showsProjectHeadings = showsGroupHeadings
