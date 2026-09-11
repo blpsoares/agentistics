@@ -1,13 +1,15 @@
 /**
  * SubtaskSessions — the sessions filed under one subtask, wherever a subtask is drawn.
  *
- * **A subtask holds ANY NUMBER of sessions, and a delivery holds none directly.** Both halves are
- * new. The cell it replaces was `Subtask.sessionId` — ONE session, written straight onto the
- * subtask record — which could not express the ordinary case (a piece of work picked up again the
- * next morning is a second session on the same subtask) and was a second place the link lived: the
- * server's `task-attach.ts` decides where a session is filed, and a field on the other record was a
- * rule nothing enforced. So this reads the SESSIONS and asks which subtask each names, never the
- * other way round.
+ * **A subtask holds ANY NUMBER of sessions.** That is new — the cell it replaces was
+ * `Subtask.sessionId`, ONE session written straight onto the subtask record, which could not
+ * express the ordinary case (a piece of work picked up again the next morning is a second session
+ * on the same subtask) and was a second place the link lived: the server's `task-attach.ts` decides
+ * where a session is filed, and a field on the other record was a rule nothing enforced. So this
+ * reads the SESSIONS and asks which subtask each names, never the other way round. (A session may
+ * also be filed on the delivery directly, under no subtask at all — see `task-attach.ts` and
+ * docs/superpowers/specs/2026-09-10-task-session-hierarchy-design.md §4.1; that branch is drawn
+ * elsewhere, not by this component.)
  *
  * `Subtask.sessionId` still exists on records written before this and is deliberately NOT read
  * here. It is not evidence: `TaskSessionRow.subtaskId` is what every rollup, every filter and the
