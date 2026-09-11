@@ -10,6 +10,7 @@
  */
 import { readdir, realpath, stat } from 'node:fs/promises'
 import type { StartHost } from '../cli-start'
+import { gitEnv } from '../backup/repo-probe'
 import { planSessionDirectory, type SessionDirPlan } from './editor-directory'
 import { containedInRoot, resolveTreePath } from './editor-path'
 import { childrenFromDirents, collapseToChildren, type TreeChild } from './editor-list'
@@ -31,6 +32,10 @@ export async function resolveSessionDirectory(host: StartHost, id: string): Prom
   }
   let storeDir: string | undefined
   if (!liveCwd) {
+    // Dynamic: this branch only runs when the session has no live cwd, so the common (live)
+    // path never pays for loading the consolidate store. Verified there is no require-cycle to
+    // avoid here — `../consolidate` and everything it imports (`./config`, `./utils`) never
+    // reach back into `../cli-start` or this module, static or dynamic.
     const { loadConsolidated } = await import('../consolidate')
     const map = await loadConsolidated()
     const meta = map.get(id)
@@ -118,10 +123,23 @@ async function gitListRecursive(root: string, relDir: string): Promise<string[] 
   return res.out.split('\n').filter(Boolean).map(p => (p.startsWith(prefix) ? p.slice(prefix.length) : p))
 }
 
+/**
+ * `-C <cwd>` does NOT override `GIT_DIR` for repository discovery — an ambient `GIT_DIR` /
+ * `GIT_WORK_TREE` / `GIT_INDEX_FILE` / `GIT_PREFIX` / `GIT_COMMON_DIR` (exactly what this repo's
+ * own pre-commit hook exports while running from a linked worktree, and what any parent process
+ * spawning the server could equally set) silently redirects `git -C <cwd> ls-files` onto whatever
+ * repository those variables name instead of `cwd` — measured here: without stripping them, this
+ * module listed the OUTER checkout's files for a request scoped to an unrelated temp directory.
+ * Reuses `backup/repo-probe.ts`'s own `gitEnv()` rather than reimplementing the strip — same rule,
+ * same variable set, one place to keep it right.
+ */
+
 /** One `git` runner for this whole module — mirrors `shell-web.ts`'s own `tmux()` helper. */
 async function runGit(cwd: string, args: string[]): Promise<{ ok: boolean; out: string }> {
   try {
-    const p = Bun.spawn(['git', '-C', cwd, ...args], { stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' })
+    const p = Bun.spawn(['git', '-C', cwd, ...args], {
+      stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', env: gitEnv(),
+    })
     const out = await new Response(p.stdout).text()
     const code = await p.exited
     return { ok: code === 0, out }
