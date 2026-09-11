@@ -22,10 +22,11 @@ import { fmtCost } from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import type { CentralTaskMachine, CentralTaskRow } from '../../lib/tasks'
 import {
-  NA, STATUS, button, fmtInt, fmtTokens, harnessColor, microLabel, numeric, pill, surface,
+  NA, STATUS, button, fmtInt, fmtTokens, microLabel, numeric, pill, surface,
   type BoardStatus,
 } from './board'
 import { TaskProgressBar } from './TaskProgressBar'
+import { HarnessBadges } from './HarnessBadges'
 
 export interface CentralTaskBoardProps {
   machines: CentralTaskMachine[]
@@ -212,17 +213,7 @@ function RowList({ rows, showMachine, lang, cost, isMobile }: {
                 <td style={tdNum}>{fmtInt(r.rollup.rounds)}</td>
                 <td style={tdNum}>{fmtTokens(r.rollup.tokens)}</td>
                 <td style={{ ...tdNum, color: 'var(--anthropic-orange)' }}>{cost(r.rollup.costUSD)}</td>
-                <td style={td}>
-                  {r.harnesses.length === 0
-                    ? <span style={{ color: 'var(--text-tertiary)' }}>{NA}</span>
-                    : (
-                      <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
-                        {r.harnesses.map(h => (
-                          <span key={h} style={{ ...pill(harnessColor(h)), fontSize: 10 }}>{h}</span>
-                        ))}
-                      </span>
-                    )}
-                </td>
+                <td style={td}><HarnessBadges harnesses={r.harnesses} fontSize={10} /></td>
               </tr>
             )
           })}
