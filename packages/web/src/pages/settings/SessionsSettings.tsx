@@ -30,18 +30,24 @@ export default function SessionsSettings() {
   const [editorSaving, setEditorSaving] = useState(false)
   const editorCapable = ctx.capabilities?.localShell !== false
   // Autosave is a CONVENIENCE, not a gate: no capability guards it, because it can only ever
-  // narrow what `editorEnabled` already gates. So it lives in the app context like
-  // `chatSoundEnabled` — the Repository tab reads the change without a reload — rather than in a
-  // second local copy of a preference this page would then have to keep in sync.
+  // narrow what `editorEnabled` already gates. It still has to reach the Repository tab without a
+  // reload, so the change is MIRRORED into the app context — but the switch is RENDERED from this
+  // page's own read, `boolean | null` exactly like `shellEnabled` above and for a sharper version of
+  // the same reason. `ctx.editorAutosave` is a plain `boolean` that App seeds `false` and only
+  // corrects when its own `/api/preferences` load lands — and it stays `false` through that load's
+  // backoff retries. So with App's load failing while the fetch below answers `editorEnabled: true`,
+  // the switch was ENABLED while drawing a guessed OFF, and one click wrote `true` over a stored
+  // `true`: a user who had turned autosave off got it on, by opening this page and pressing the
+  // control that claimed it was already off. Same pattern as `ChatSettings.tsx`.
+  const [editorAutosave, setEditorAutosave] = useState<boolean | null>(null)
   const [autosaveSaving, setAutosaveSaving] = useState(false)
-  const editorAutosave = ctx.editorAutosave
 
   useEffect(() => {
     fetch('/api/preferences')
       .then(r => (r.ok ? r.json() : null))
       .then((p: {
         archiveMode?: ArchiveMode; archiveSessions?: boolean
-        shellEnabled?: boolean; editorEnabled?: boolean
+        shellEnabled?: boolean; editorEnabled?: boolean; editorAutosave?: boolean
       } | null) => {
         const m: ArchiveMode =
           p?.archiveMode ?? (p?.archiveSessions === true ? 'full' : p?.archiveSessions === false ? 'off' : 'off')
@@ -50,8 +56,12 @@ export default function SessionsSettings() {
         setShellEnabled(p?.shellEnabled === true)
         // Nor a read/write file editor — same reading, same reason.
         setEditorEnabled(p?.editorEnabled === true)
+        // A convenience rather than a gate, but still OFF unless the store says otherwise.
+        setEditorAutosave(p?.editorAutosave === true)
       })
-      .catch(() => { setMode('off'); setShellEnabled(false); setEditorEnabled(false) })
+      .catch(() => {
+        setMode('off'); setShellEnabled(false); setEditorEnabled(false); setEditorAutosave(false)
+      })
   }, [])
 
   const toggleShell = () => {
@@ -85,18 +95,23 @@ export default function SessionsSettings() {
   }
 
   const toggleAutosave = () => {
-    // Meaningless while the editor itself is off, and while its own read has not landed yet.
-    if (editorEnabled !== true || autosaveSaving) return
+    // Meaningless while the editor itself is off, and while this page's own read has not landed:
+    // flipping a value nobody has read yet writes a guess over whatever is stored.
+    if (editorEnabled !== true || editorAutosave === null || autosaveSaving) return
     const next = !editorAutosave
     setAutosaveSaving(true)
-    ctx.setEditorAutosave(next)
+    setEditorAutosave(next)
+    ctx.setEditorAutosave(next)  // keeps the Repository tab in sync, no reload needed
     fetch('/api/preferences', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ editorAutosave: next }),
     })
       .then(r => { if (!r.ok) throw new Error('save failed') })
-      .catch(() => ctx.setEditorAutosave(!next))  // put the switch back; nothing was saved
+      .catch(() => {  // put the switch back, in both places; nothing was saved
+        setEditorAutosave(!next)
+        ctx.setEditorAutosave(!next)
+      })
       .finally(() => setAutosaveSaving(false))
   }
 
@@ -214,9 +229,9 @@ export default function SessionsSettings() {
           : 'Off by default. Turning it on saves on its own ~1–2s after the last keystroke — the cost is a wider window to collide with an agent’s own write to the same file.'}
       >
         <Toggle
-          on={editorAutosave}
+          on={editorAutosave === true}
           onToggle={toggleAutosave}
-          disabled={editorEnabled !== true || autosaveSaving}
+          disabled={editorEnabled !== true || editorAutosave === null || autosaveSaving}
         />
       </PrefRow>
 
