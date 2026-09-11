@@ -91,6 +91,7 @@ export interface TaskDetail {
   comments: TaskComment[]
   subtasks: Subtask[]
   files: TaskFile[]
+  subtaskRollups: SubtaskView[]
 }
 
 /**
@@ -188,6 +189,49 @@ export function attemptViews(
       label: 'no attempt named',
       status: 'unattributed',
       rollup: rollupAttempt({ sessions: rollupSessionsFor(loose, metas, costOf) }),
+    })
+  }
+  return views
+}
+
+/** One rollup for a subtask, or for the direct branch (`id: null`) — sessions filed on the task
+ *  itself, under no subtask. Every row of a task falls into EXACTLY one of these buckets, because
+ *  `subtaskId` and "no subtaskId" partition `rowsOfTask(task, rows)` completely — the same
+ *  guarantee `filedUnder` already gives every session a single owner. */
+export interface SubtaskView {
+  id: string | null
+  rollup: AttemptRollup
+}
+
+/**
+ * A rollup per subtask, plus one `id: null` bucket for the sessions filed on the delivery directly
+ * — the same pattern `attemptViews` already applies to attempts, over the same partition.
+ *
+ * `rows` is expected already scoped to the task (`rowsOfTask(task, allRows)`), exactly like
+ * `attemptViews`'s own `rows` parameter — this never re-derives that scope, and never re-sums the
+ * partitions back into a total: `TaskDetail.rollup` is computed once, over the whole set, and this
+ * is only ever a breakdown of it. A subtask with no sessions filed under it yet still gets a row —
+ * "nothing filed here" is a real, empty measurement, not an omission.
+ */
+export function subtaskViews(
+  task: Task,
+  subtasks: readonly Subtask[],
+  rows: readonly ManagedSession[],
+  metas: ReadonlyMap<string, SessionMeta>,
+  costOf: (m: SessionMeta) => number,
+): SubtaskView[] {
+  const mine = subtasks.filter(s => s.taskId === task.id)
+  const views: SubtaskView[] = mine.map(s => ({
+    id: s.id,
+    rollup: rollupAttempt({
+      sessions: rollupSessionsFor(rows.filter(r => r.subtaskId === s.id), metas, costOf),
+    }),
+  }))
+  const direct = rows.filter(r => !r.subtaskId)
+  if (direct.length > 0) {
+    views.push({
+      id: null,
+      rollup: rollupAttempt({ sessions: rollupSessionsFor(direct, metas, costOf) }),
     })
   }
   return views
@@ -303,6 +347,7 @@ export function buildTaskDetail(o: {
     comments: [...(o.comments ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
     subtasks: [...(o.subtasks ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
     files: [...(o.files ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    subtaskRollups: subtaskViews(o.task, o.subtasks ?? [], mine, o.metas, o.costOf),
   }
 }
 
