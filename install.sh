@@ -19,32 +19,50 @@ fi
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
-if [[ "$OS" != "Linux" ]]; then
-  echo "Error: only Linux binaries are published at the moment (detected: $OS)."
-  exit 1
-fi
+case "$OS" in
+  Linux)
+    if [[ "$ARCH" != "x86_64" ]]; then
+      echo "Error: only x86_64 Linux binaries are published at the moment (detected: $ARCH)."
+      exit 1
+    fi
+    ;;
+  Darwin)
+    case "$ARCH" in
+      x86_64|arm64) ;;
+      *)
+        echo "Error: only x86_64 and arm64 macOS binaries are published at the moment (detected: $ARCH)."
+        exit 1
+        ;;
+    esac
+    ;;
+  *)
+    echo "Error: only Linux and macOS binaries are published at the moment (detected: $OS)."
+    exit 1
+    ;;
+esac
 
-if [[ "$ARCH" != "x86_64" ]]; then
-  echo "Error: only x86_64 binaries are published at the moment (detected: $ARCH)."
-  exit 1
-fi
-
-# ── libc: glibc vs musl ─────────────────────────────────────────────────────
+# ── libc: glibc vs musl (Linux only — macOS has no equivalent split) ────────
 #
-# Two binaries are published: `agentop` (glibc) and `agentop-musl` (Alpine and other musl-based
-# distros — glibc's dynamic linker does not exist there, so the glibc binary fails with a bare
-# "not found" that names no missing library). `ldd --version` prints "musl libc" on a musl system
-# regardless of its own exit code (busybox's `ldd` does not fully support `--version`) — and this
-# script runs under `set -o pipefail`, under which the PIPELINE fails if ANY stage does, not only
-# the last, so ldd's own non-zero exit would sink the `if` even when grep matches. The `|| true`
-# neutralises that: only grep's result decides.
+# Two Linux binaries are published: `agentop` (glibc) and `agentop-musl` (Alpine and other
+# musl-based distros — glibc's dynamic linker does not exist there, so the glibc binary fails with
+# a bare "not found" that names no missing library). `ldd --version` prints "musl libc" on a musl
+# system regardless of its own exit code (busybox's `ldd` does not fully support `--version`) —
+# and this script runs under `set -o pipefail`, under which the PIPELINE fails if ANY stage does,
+# not only the last, so ldd's own non-zero exit would sink the `if` even when grep matches. The
+# `|| true` neutralises that: only grep's result decides.
 IS_MUSL=0
-if (ldd --version 2>&1 || true) | grep -qi musl; then
+if [[ "$OS" == "Linux" ]] && (ldd --version 2>&1 || true) | grep -qi musl; then
   IS_MUSL=1
 fi
 
 BINARY_ASSET="$BINARY"
-if [[ "$IS_MUSL" -eq 1 ]]; then
+if [[ "$OS" == "Darwin" ]]; then
+  if [[ "$ARCH" == "arm64" ]]; then
+    BINARY_ASSET="${BINARY}-darwin-arm64"
+  else
+    BINARY_ASSET="${BINARY}-darwin-x64"
+  fi
+elif [[ "$IS_MUSL" -eq 1 ]]; then
   BINARY_ASSET="${BINARY}-musl"
 
   # Bun's own runtime links libstdc++/libgcc even in its musl build, and Alpine's base image ships
