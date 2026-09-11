@@ -22,7 +22,7 @@ import type { AsideCardColor } from './sessionsAsidePrefs'
 /** The color a state is said in, everywhere this feature draws one. `working` is its own token,
  *  never `success` (which reads teal on a terminal and sits within a hair of a harness color). */
 export const STATE_COLOR: Record<SessionState, string> = {
-  working: 'var(--accent-green)',
+  working: '#22c55e',
   waiting: 'var(--anthropic-orange)',
   'waiting-approval': 'var(--anthropic-orange)',
   exited: 'var(--text-tertiary)',

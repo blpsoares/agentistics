@@ -55,15 +55,24 @@ export function SessionsGroupMenu(p: SessionsGroupMenuProps) {
   const [at, setAt] = useState<{ left: number; top: number } | null>(null)
   const [drag, setDrag] = useState<string | null>(null)
   const trigger = useRef<HTMLButtonElement>(null)
+  const panel = useRef<HTMLDivElement>(null)
   const width = 240
 
   useEffect(() => {
     if (!open) return
+    // Capture-phase on `window` so scrolling the PAGE (or any ancestor) closes a panel that can no
+    // longer follow its trigger — but that also fires when the panel's OWN option list scrolls
+    // (e.g. reaching the Card Color section past the fold on a fleet with many groups), which
+    // closed the menu before that scroll could ever land. Only close for a scroll whose target is
+    // outside this panel's own DOM subtree — same fix as PickerMenu's, in settings/primitives.tsx.
+    const onScroll = (e: Event) => {
+      if (panel.current && !panel.current.contains(e.target as Node)) setOpen(false)
+    }
     const close = () => setOpen(false)
-    window.addEventListener('scroll', close, true)
+    window.addEventListener('scroll', onScroll, true)
     window.addEventListener('resize', close)
     return () => {
-      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('scroll', onScroll, true)
       window.removeEventListener('resize', close)
     }
   }, [open])
@@ -128,7 +137,7 @@ export function SessionsGroupMenu(p: SessionsGroupMenuProps) {
       {open && at && createPortal(
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 1199 }} />
-          <div style={{
+          <div ref={panel} style={{
             position: 'fixed', left: at.left, top: at.top, width, zIndex: 1200,
             borderRadius: 12, border: '1px solid var(--border-subtle)',
             background: 'var(--bg-elevated)', padding: 8, display: 'grid', gap: 2,
@@ -189,6 +198,12 @@ export function SessionsGroupMenu(p: SessionsGroupMenuProps) {
                     ><ChevronDown size={13} /></button>
                   </div>
                 ))}
+                <button
+                  onClick={() => p.onReorder([])}
+                  style={rowStyle(false)}
+                >
+                  {pt ? 'Automático' : 'Automatic'}
+                </button>
               </>
             )}
 
