@@ -836,7 +836,7 @@ function SessionBand({
                 <span style={{ marginLeft: 'auto', opacity: 0.7 }}>{g.sessions.length}</span>
               </button>
             )}
-            {!folded && g.sessions.map(s => (
+            {(!headings || !folded) && g.sessions.map(s => (
               <SessionRow
                 key={s.id}
                 session={s}
