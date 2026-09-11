@@ -1734,6 +1734,12 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             ...(Array.isArray(body.blockedBy)
               ? { blockedBy: body.blockedBy.filter((x): x is string => typeof x === 'string') }
               : {}),
+            // The rollup group (spec §B.5). `null` is the CLEAR and is therefore matched
+            // explicitly: it is a value the caller sent, not an absent field, and the two must not
+            // collapse — an omitted `groupId` leaves the column alone, a null removes it.
+            ...(typeof body.groupId === 'string'
+              ? { groupId: body.groupId }
+              : body.groupId === null ? { groupId: null } : {}),
           })
           return json(result, result.ok ? 200 : (result.message === 'done_needs_session' ? 422 : 404))
         }
