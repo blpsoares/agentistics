@@ -221,6 +221,11 @@ export function SubtaskTable(p: SubtaskTableProps) {
               <td style={{ ...cell, minWidth: 190 }}>
                 {subtaskSessions({
                   subtaskId: t.id,
+                  // The row's group siblings show the identical chip list — see
+                  // docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md §B.4.
+                  subtaskIds: t.groupId
+                    ? p.subtasks.filter(s => s.groupId === t.groupId).map(s => s.id)
+                    : [t.id],
                   sessions: p.sessions,
                   lang: p.lang,
                   mobile: isMobile,
