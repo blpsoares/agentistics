@@ -41,15 +41,16 @@
 
 import { Suspense, lazy, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import {
-  ChevronDown, ChevronUp, ChevronLeft, Loader2, RotateCcw, TerminalSquare, Trash2,
+  ChevronDown, ChevronUp, ChevronLeft, Loader2, Maximize2, RotateCcw, TerminalSquare, Trash2,
 } from 'lucide-react'
 import { useDocumentVisible } from '../../hooks/useDocumentVisible'
+import { keyStripShown } from '../../lib/terminalSurface'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useTerminalStream } from '../../hooks/useTerminalStream'
 import { useTerminalWrite } from '../../hooks/useTerminalWrite'
 import {
   BAND_MIN_PX, clampBandHeight, readBandPrefs, shellApiUrl, shellErrorText, shellWatching,
-  shellWhere, writeBandPrefs,
+  bandGeometry, shellWhere, writeBandGeometry, writeBandPrefs,
 } from '../../lib/shellBand'
 import {
   INITIAL_SHELL_BAND, shellBandReducer, shellResolveWanted, type OpenShell,
@@ -73,6 +74,7 @@ interface T {
   ctrlRefused: (c: string) => string
   resize: string
   retry: string
+  fullscreen: string
 }
 
 const TXT: Record<'pt' | 'en', T> = {
@@ -89,6 +91,7 @@ const TXT: Record<'pt' | 'en', T> = {
     ctrlRefused: c => `ctrl+${c} is not one of the keys this channel sends.`,
     resize: 'Drag to resize the shell',
     retry: 'Try again',
+    fullscreen: 'Open the shell full screen',
   },
   pt: {
     title: 'Shell',
@@ -103,6 +106,7 @@ const TXT: Record<'pt' | 'en', T> = {
     ctrlRefused: c => `ctrl+${c} não é uma das teclas que este canal envia.`,
     resize: 'Arraste para redimensionar o shell',
     retry: 'Tentar de novo',
+    fullscreen: 'Abrir o shell em tela cheia',
   },
 }
 
@@ -113,17 +117,34 @@ export interface ShellBandProps {
   cwd?: string
   lang: 'pt' | 'en'
   theme: 'dark' | 'light'
+  /**
+   * WHERE this shell is drawn. `docked` is the band under the composer — the placement whose whole
+   * point is SIMULTANEITY, reading the conversation while a build runs beside it. `dedicated` is
+   * the shell filling its own screen: no bar, no drag handle, no collapsed state, because you got
+   * here by asking for it and the way back is the screen's own control.
+   *
+   * The two share every rule that matters — one stream, one write channel, one emulator, the same
+   * unwatch discipline — which is the entire reason this is a prop and not a second component.
+   */
+  placement?: 'docked' | 'dedicated'
+  /** Offered only when there is somewhere to go: the band's "take the whole screen" control. */
+  onOpenFullscreen?: () => void
 }
 
-export function ShellBand({ sessionId, cwd, lang, theme }: ShellBandProps) {
+export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', onOpenFullscreen }: ShellBandProps) {
   const t = TXT[lang]
   const isMobile = useIsMobile()
   const documentVisible = useDocumentVisible()
 
+  const dedicated = placement === 'dedicated'
   const [prefs, setPrefs] = useState(() => readBandPrefs())
+  // A DEDICATED shell is open by definition — you navigated to a screen that is nothing else. The
+  // stored `open` is the DOCKED band's state and must not decide it, or arriving here with the band
+  // collapsed would show an empty screen with no way to fill it.
+  const bandOpen = dedicated || prefs.open
   // THE MACHINE, not a pile of flags. See `shellBandState.ts` for the rule it enforces.
   const [band, dispatch] = useReducer(shellBandReducer, INITIAL_SHELL_BAND, init =>
-    readBandPrefs().open ? shellBandReducer(init, { type: 'openBand' }) : init)
+    dedicated || readBandPrefs().open ? shellBandReducer(init, { type: 'openBand' }) : init)
   const shell = band.shell
   const [ctrlArmed, setCtrlArmed] = useState(false)
   const [ctrlNote, setCtrlNote] = useState<string | null>(null)
@@ -194,12 +215,14 @@ export function ShellBand({ sessionId, cwd, lang, theme }: ShellBandProps) {
   }, [band.attempt, sessionId, lang])
 
   const watching = shellWatching({
-    bandOpen: prefs.open,
+    bandOpen,
     sessionSelected: Boolean(sessionId),
     documentVisible,
   })
   // `null` is what DROPS the subscription — the client half of the unwatch discipline.
-  const { state } = useTerminalStream(watching && shell ? shell.id : null, 'shell')
+  // The remembered geometry rides the OPEN, so the pane is already this box's size on the first
+  // frame instead of arriving at whatever width the last viewer left it — see `shellBand.ts`.
+  const { state } = useTerminalStream(watching && shell ? shell.id : null, 'shell', bandGeometry(placement))
   const write = useTerminalWrite(shell?.id ?? '', watching && Boolean(shell), lang, 'shell')
   // `'shell'`: the honesty line must say whose screen this is. The default subject calls it "the
   // agent's current screen", which over a shell the person opened themselves is simply false.
@@ -210,6 +233,16 @@ export function ShellBand({ sessionId, cwd, lang, theme }: ShellBandProps) {
     [shell?.id],
   )
   useEffect(() => () => resizer.cancel(), [resizer])
+  /**
+   * One measurement, two consumers: the pane is resized NOW (debounced) and the number is kept for
+   * the NEXT open. Written straight to storage rather than through React state — the emulator
+   * reports on every layout change, and a re-render of the whole panel for a number nothing on
+   * screen shows would be a cost with no reader.
+   */
+  const onGeometry = useCallback((g: { cols: number; rows: number }) => {
+    writeBandGeometry(placement, g)
+    resizer.request(g)
+  }, [resizer, placement])
 
   /**
    * One send path for everything.
@@ -296,7 +329,7 @@ export function ShellBand({ sessionId, cwd, lang, theme }: ShellBandProps) {
           showCursor={status.showCursor}
           interactive={write.ready}
           onInput={send}
-          onGeometry={shell ? resizer.request : undefined}
+          onGeometry={shell ? onGeometry : undefined}
         />
       </Suspense>
     </div>
@@ -364,6 +397,22 @@ export function ShellBand({ sessionId, cwd, lang, theme }: ShellBandProps) {
       })}
     </div>
   )
+
+  // ---- dedicated: the shell IS the screen ------------------------------------------------------
+  // No bar, no drag handle, no collapsed state: you navigated here, and the way back belongs to the
+  // screen around it. The key strip follows `keyStripShown` — a phone has no ctrl key, and this is
+  // the placement a phone always gets.
+  if (dedicated) {
+    return (
+      <div style={{
+        flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 8,
+      }}>
+        {shell ? screen : <div style={{ flex: 1 }} />}
+        {notice}
+        {keyStripShown('dedicated', isMobile) && strip}
+      </div>
+    )
+  }
 
   // ---- mobile: a full-screen sheet over the session --------------------------------------------
   if (isMobile) {
@@ -496,6 +545,20 @@ export function ShellBand({ sessionId, cwd, lang, theme }: ShellBandProps) {
         }}>{where}</span>}
         {!where && <span style={{ flex: 1 }} />}
         {busy && <Loader2 size={13} className="ag-spin" style={{ color: 'var(--text-tertiary)' }} />}
+        {/* TAKE THE WHOLE SCREEN. Offered only with a shell open and somewhere to go, so the bar of
+            a band nobody has opened carries nothing that cannot act. It is the only way to the
+            shell's own screen — the route has accepted `?pane=shell` since phase 3b and nothing
+            linked there. */}
+        {prefs.open && shell && onOpenFullscreen && (
+          <button className="ag-tap-icon"
+            onClick={e => { e.stopPropagation(); onOpenFullscreen() }}
+            title={t.fullscreen}
+            aria-label={t.fullscreen}
+            style={iconBtn}
+          >
+            <Maximize2 size={13} />
+          </button>
+        )}
         {prefs.open && shell && (
           <button className="ag-tap-icon"
             /* A TRASH CAN, not an ✕. The ✕ read as "close this panel" next to a chevron that

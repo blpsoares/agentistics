@@ -13,6 +13,7 @@ import type { CliLang } from '../cli-lang'
 import { closeShells, listShells, openShell } from './shell-backend'
 import { openShellStream, shellStreamAtCapacity, shellStreamExists } from './shell-stream-web'
 import { createPaneResizer } from './pane-resize-web'
+import { readWantedGeometry } from './pane-resize'
 import { SHELL_CAP, type ShellRefusal } from './shell-spec'
 
 /** One sentence per refusal code. The module that decides never writes prose; this one never decides. */
@@ -68,6 +69,13 @@ export async function handleShellRoute(
     if (!id) return json({ error: 'bad_request' }, 400)
     if (!(await shellStreamExists(id))) return json({ error: 'not_found' }, 404)
     if (shellStreamAtCapacity()) return json({ error: 'too_many_streams' }, 503)
+    // BEFORE the first capture. A pane has one size and the last viewer to ask wins, so without
+    // this a shell last read on a phone hands a desktop frames hard-broken at 52 columns until the
+    // emulator has measured itself and the debounced resize lands. The reader states what its box
+    // holds on the way in and the first frame is already right. A resize that fails costs the
+    // width for a quarter-second and never the stream — the measurement corrects it either way.
+    const want = readWantedGeometry(url.searchParams)
+    if (want) await resizeShellPane('shell', id, want)
     return new Response(await openShellStream(id, req.signal), {
       status: 200,
       headers: {
