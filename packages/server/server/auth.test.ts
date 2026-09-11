@@ -191,4 +191,10 @@ describe('handleSession', () => {
     // property of `shellAllowed` and is pinned in `sessions/shell-gate.test.ts`, where it depends
     // on nothing but its arguments.
   })
+
+  it('reports editorEnabled the same way it reports shellEnabled', async () => {
+    const res = await handleSession(new Request('http://x/api/team/session'))
+    const body = await res.json() as Record<string, unknown>
+    expect(typeof body['editorEnabled']).toBe('boolean')
+  })
 })
