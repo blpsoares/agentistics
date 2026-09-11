@@ -152,6 +152,7 @@ import { readMemory, readRss } from './sessions/memory-probe'
 // The lock on the door: one conversation, one live session. See `conversation-claim.ts` for the
 // measurement that made it necessary, and `live-claims.ts` for the evidence it is allowed to use.
 import { conversationHeldBy } from './sessions/conversation-claim'
+import { withResumeLock } from './sessions/resume-lock'
 import { liveConversationHolders } from './sessions/live-claims'
 import type { ManagedSession, SpawnPlanError } from './sessions/types'
 import {
@@ -2180,6 +2181,112 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
     : mode === 'central' ? s.configCentral
     : s.configSolo
 
+  /**
+   * The actual body of `ControlHost.resumeSession`, run inside `withResumeLock` by its caller.
+   *
+   * Pulled out to a plain closure function (not a `StartHost` method) so the lock can wrap it
+   * without adding an undeclared property to the object literal below, which `StartHost` would
+   * reject as an excess property.
+   */
+  async function resumeSessionLocked(req: ResumeSessionRequest): Promise<SpawnSessionResult> {
+    const s = S()
+    // What the old row knew about this work — its task and its note — comes with it. A reopen
+    // that dropped them would file the recovered session nowhere and lose what someone wrote
+    // about it, which is most of the reason the row was worth keeping across the reboot.
+    const previous = req.replaces
+      ? (await readRegistry()).find(m => m.id === req.replaces)
+      : undefined
+    // THE LOCK ON THE DOOR — and, for one kind of holder, the door opening instead.
+    //
+    // Two assistants in one transcript and one working tree is the worst thing this feature has
+    // done, so nothing is spawned before asking who holds the conversation. But WHO holds it
+    // decides what the answer means:
+    //
+    //  - a MANAGED row is somewhere to go. It has a pane, `o` attaches to it, and "open it there"
+    //    is an instruction the user can follow. Still refused, unchanged.
+    //  - a PROCESS is not somewhere to go. An assistant started by hand has no pane to attach to,
+    //    and the refusal named its DIRECTORY — which is not a place. There was no verb that could
+    //    do anything with it either, so the row was a dead end: visible, and inert. Reported.
+    //
+    // For that second case the conversation is on DISK, so ending the process and reopening the
+    // same id under tmux costs the turn in flight and nothing else — and puts the work back under
+    // every verb this screen has. That is a takeover, and it is what `resume` now does rather
+    // than a verb of its own: the user already pressed the key that means "put this conversation
+    // in front of me".
+    // THE DECISION IS `planTakeover`, which already existed and which this code did not use.
+    //
+    // `cli-session.ts` had been taking a conversation over since the CLI gained the verb, through
+    // that pure planner. This method grew its own copy of the same gesture — the exact drift
+    // `task-reopen.ts` was extracted to end — and the copy was WORSE in a way that costs work: it
+    // killed the holder and then tried to resume, so a harness that cannot reopen by id would
+    // have had its assistant closed for nothing. The planner refuses `resume-unsupported` BEFORE
+    // anything is signalled, which is the whole reason it is a plan rather than an action.
+    const holder = conversationHeldBy(
+      await liveConversationHolders(await resolveBackend()),
+      req.sessionId,
+      req.replaces,
+    )
+    // A managed row is somewhere to go: it has a pane and `o` attaches to it, so "open it there"
+    // is an instruction the user can follow. It never becomes a takeover.
+    if (holder?.kind === 'managed') return { ok: false, message: s.sessResumeInUse(holder.label) }
+
+    const harness = req.harness as HarnessId
+    const plan = planTakeover({
+      conversationId: req.sessionId,
+      harness,
+      resumable: planSpawn({ harness, cwd: req.cwd, resumeId: req.sessionId }).ok,
+      ...(holder?.kind === 'process'
+        ? { holder: { ...(holder.pid !== undefined ? { pid: holder.pid } : {}), label: holder.label, cwd: req.cwd } }
+        : {}),
+      cwd: req.cwd,
+    })
+    if (plan.kind === 'refuse') return { ok: false, message: s.sessTakeoverRefused(plan.reason) }
+    if (plan.kind === 'takeover') {
+      // A pid is not an identity — see `isAssistantPid`. Confirmed against the live scan in the
+      // moment before signalling, or the takeover is abandoned: the cost of being wrong here is
+      // SIGKILL on somebody else's process. The planner cannot do this: it is pure, and this is a
+      // question only the machine can answer, in the instant before the signal.
+      if (plan.holder.pid === undefined || !await isAssistantPid(plan.holder.pid)) {
+        return { ok: false, message: s.sessResumeInUse(plan.holder.label ?? req.sessionId) }
+      }
+      const ended = await endProcess(plan.holder.pid)
+      if (!ended) return { ok: false, message: s.sessAdoptFailed(plan.holder.label ?? req.sessionId) }
+    }
+    const spawned = await spawnManaged({
+      harness: req.harness as HarnessId,
+      cwd: req.cwd,
+      resumeId: req.sessionId,
+      label: req.label,
+      attach: req.attach,
+      ...(previous?.task ? { task: previous.task } : {}),
+    }, s)
+    if (spawned.ok) {
+      // We handed this id to the CLI, so the new row KNOWS which conversation it drives — there
+      // is no guessing left for the next reopen. Without it the fallback matches on directory
+      // alone, and every session in one repository resolves to the same conversation.
+      if (spawned.id) await patchSession(spawned.id, { conversationId: req.sessionId })
+      if (previous?.note && spawned.id) await patchSession(spawned.id, { note: previous.note })
+      // The old row is RETIRED rather than deleted: it is still a thing that happened, and it
+      // stops standing beside its own continuation with the same name on it.
+      if (previous) await patchSession(previous.id, { endedAt: new Date().toISOString() })
+
+      const liveBackend = await (await resolveBackend()).list().catch(() => [])
+      const backendIds = new Set(liveBackend.map(b => b.id))
+      await retireFallenSessions({
+        newSessionId: spawned.id,
+        conversationId: req.sessionId,
+        cwd: req.cwd,
+        harness: req.harness,
+        backendIds,
+      })
+
+      // The store's view of what is running just changed, and the next poll must see it rather
+      // than waiting out the cache and showing the conversation as still closed.
+      forgetConversations()
+    }
+    return spawned
+  }
+
   return {
     get lang() { return lang },
 
@@ -3133,102 +3240,15 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
      * inherits the conversation's NAME, so the row keeps reading the same after the swap.
      */
     async resumeSession(req: ResumeSessionRequest): Promise<SpawnSessionResult> {
-      const s = S()
-      // What the old row knew about this work — its task and its note — comes with it. A reopen
-      // that dropped them would file the recovered session nowhere and lose what someone wrote
-      // about it, which is most of the reason the row was worth keeping across the reboot.
-      const previous = req.replaces
-        ? (await readRegistry()).find(m => m.id === req.replaces)
-        : undefined
-      // THE LOCK ON THE DOOR — and, for one kind of holder, the door opening instead.
-      //
-      // Two assistants in one transcript and one working tree is the worst thing this feature has
-      // done, so nothing is spawned before asking who holds the conversation. But WHO holds it
-      // decides what the answer means:
-      //
-      //  - a MANAGED row is somewhere to go. It has a pane, `o` attaches to it, and "open it there"
-      //    is an instruction the user can follow. Still refused, unchanged.
-      //  - a PROCESS is not somewhere to go. An assistant started by hand has no pane to attach to,
-      //    and the refusal named its DIRECTORY — which is not a place. There was no verb that could
-      //    do anything with it either, so the row was a dead end: visible, and inert. Reported.
-      //
-      // For that second case the conversation is on DISK, so ending the process and reopening the
-      // same id under tmux costs the turn in flight and nothing else — and puts the work back under
-      // every verb this screen has. That is a takeover, and it is what `resume` now does rather
-      // than a verb of its own: the user already pressed the key that means "put this conversation
-      // in front of me".
-      // THE DECISION IS `planTakeover`, which already existed and which this code did not use.
-      //
-      // `cli-session.ts` had been taking a conversation over since the CLI gained the verb, through
-      // that pure planner. This method grew its own copy of the same gesture — the exact drift
-      // `task-reopen.ts` was extracted to end — and the copy was WORSE in a way that costs work: it
-      // killed the holder and then tried to resume, so a harness that cannot reopen by id would
-      // have had its assistant closed for nothing. The planner refuses `resume-unsupported` BEFORE
-      // anything is signalled, which is the whole reason it is a plan rather than an action.
-      const holder = conversationHeldBy(
-        await liveConversationHolders(await resolveBackend()),
-        req.sessionId,
-        req.replaces,
-      )
-      // A managed row is somewhere to go: it has a pane and `o` attaches to it, so "open it there"
-      // is an instruction the user can follow. It never becomes a takeover.
-      if (holder?.kind === 'managed') return { ok: false, message: s.sessResumeInUse(holder.label) }
-
-      const harness = req.harness as HarnessId
-      const plan = planTakeover({
-        conversationId: req.sessionId,
-        harness,
-        resumable: planSpawn({ harness, cwd: req.cwd, resumeId: req.sessionId }).ok,
-        ...(holder?.kind === 'process'
-          ? { holder: { ...(holder.pid !== undefined ? { pid: holder.pid } : {}), label: holder.label, cwd: req.cwd } }
-          : {}),
-        cwd: req.cwd,
-      })
-      if (plan.kind === 'refuse') return { ok: false, message: s.sessTakeoverRefused(plan.reason) }
-      if (plan.kind === 'takeover') {
-        // A pid is not an identity — see `isAssistantPid`. Confirmed against the live scan in the
-        // moment before signalling, or the takeover is abandoned: the cost of being wrong here is
-        // SIGKILL on somebody else's process. The planner cannot do this: it is pure, and this is a
-        // question only the machine can answer, in the instant before the signal.
-        if (plan.holder.pid === undefined || !await isAssistantPid(plan.holder.pid)) {
-          return { ok: false, message: s.sessResumeInUse(plan.holder.label ?? req.sessionId) }
-        }
-        const ended = await endProcess(plan.holder.pid)
-        if (!ended) return { ok: false, message: s.sessAdoptFailed(plan.holder.label ?? req.sessionId) }
-      }
-      const spawned = await spawnManaged({
-        harness: req.harness as HarnessId,
-        cwd: req.cwd,
-        resumeId: req.sessionId,
-        label: req.label,
-        attach: req.attach,
-        ...(previous?.task ? { task: previous.task } : {}),
-      }, s)
-      if (spawned.ok) {
-        // We handed this id to the CLI, so the new row KNOWS which conversation it drives — there
-        // is no guessing left for the next reopen. Without it the fallback matches on directory
-        // alone, and every session in one repository resolves to the same conversation.
-        if (spawned.id) await patchSession(spawned.id, { conversationId: req.sessionId })
-        if (previous?.note && spawned.id) await patchSession(spawned.id, { note: previous.note })
-        // The old row is RETIRED rather than deleted: it is still a thing that happened, and it
-        // stops standing beside its own continuation with the same name on it.
-        if (previous) await patchSession(previous.id, { endedAt: new Date().toISOString() })
-
-        const liveBackend = await (await resolveBackend()).list().catch(() => [])
-        const backendIds = new Set(liveBackend.map(b => b.id))
-        await retireFallenSessions({
-          newSessionId: spawned.id,
-          conversationId: req.sessionId,
-          cwd: req.cwd,
-          harness: req.harness,
-          backendIds,
-        })
-
-        // The store's view of what is running just changed, and the next poll must see it rather
-        // than waiting out the cache and showing the conversation as still closed.
-        forgetConversations()
-      }
-      return spawned
+      // ONE RESUME AT A TIME PER CONVERSATION — see resume-lock.ts. The check inside
+      // `resumeSessionLocked` is a fresh live read, but a fresh read is not an exclusive one: two
+      // `resume` requests for the SAME conversation arriving within milliseconds of each other
+      // (two tabs, a phone and a desktop both reacting to a session that looked stuck at the same
+      // instant) could both read "nobody holds this" before either had spawned, and both would
+      // spawn. Measured on a real machine: two `claude --resume <same-id>` processes, 62ms apart,
+      // both writing into one transcript. The lock serialises the whole check-and-spawn sequence
+      // per conversation id, so the second caller's check only runs once the first has settled.
+      return withResumeLock(req.sessionId, () => resumeSessionLocked(req))
     },
 
     /*

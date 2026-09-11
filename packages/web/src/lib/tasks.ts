@@ -207,6 +207,14 @@ export interface TaskFile {
   kind?: string; author?: string; createdAt: string
 }
 
+/** One rollup for a subtask, or for the direct branch (`id: null`) — sessions filed on the task
+ *  itself, under no subtask. Mirror of the server's `SubtaskView` (`task-report.ts`); see the
+ *  2026-09-10 task-session-hierarchy spec §4.2/§4.3. */
+export interface SubtaskView {
+  id: string | null
+  rollup: AttemptRollup
+}
+
 export interface TaskDetail {
   task: TaskRecord
   attempts: AttemptView[]
@@ -216,6 +224,7 @@ export interface TaskDetail {
   comments: TaskComment[]
   subtasks: Subtask[]
   files: TaskFile[]
+  subtaskRollups: SubtaskView[]
 }
 
 /**

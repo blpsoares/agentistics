@@ -274,11 +274,17 @@ export interface TaskComment {
  * the thing people actually break a task into is smaller pieces of the SAME kind of work, and a
  * checkbox cannot say "this half is blocked and that half shipped on Tuesday".
  *
- * What it deliberately does NOT carry is its own attempts or its own rollup. Cost, rounds and
- * tokens are measured per SESSION and roll up to the task; giving a subtask a second, smaller
- * rollup would either double-count the same sessions or invent a split nobody recorded. `done`
- * survives beside `status` because a tick is still the fastest way to close one, and it stays in
- * step with it: `done` is true exactly when `status` is `done`.
+ * It carries no columns of its own for cost, rounds or tokens — those still live only on
+ * `ManagedSession`/`SessionMeta`, never duplicated here — but it DOES have a rollup: `task-report.ts`'s
+ * `subtaskViews()` sums the sessions filed under this subtask's id, the same way `attemptViews()`
+ * already sums an attempt's. That is a READ over the existing rows, never a second source of truth —
+ * the task's own total (`TaskDetail.rollup`) is computed once, over every row `rowsOfTask` returns,
+ * and a subtask's rollup is only ever a partition of that same set, filtered by `subtaskId`. Nothing
+ * here double-counts a session or invents a split the data does not support: a subtask with no
+ * sessions filed yet gets an honest empty rollup (`sessionsUsed: 0`, every other metric `null`)
+ * rather than being left out or shown as a zero. `done` survives beside `status` because a tick is
+ * still the fastest way to close one, and it stays in step with it: `done` is true exactly when
+ * `status` is `done`. See docs/superpowers/specs/2026-09-10-task-session-hierarchy-design.md §4.2.
  */
 export interface Subtask {
   id: string

@@ -9,12 +9,18 @@
 
 import { describe, expect, it } from 'bun:test'
 import type { SessionMeta } from '@agentistics/core'
-import { buildTaskDetail, buildTaskList, reposOfRows } from './task-report'
-import type { Task } from './task-model'
+import { buildTaskDetail, buildTaskList, reposOfRows, subtaskViews } from './task-report'
+import type { Subtask, Task } from './task-model'
 import type { ManagedSession } from './types'
 
 const task = (over: Partial<Task> = {}): Task => ({
   id: 't1', title: 'a delivery', status: 'in_progress',
+  createdAt: '2026-09-05T10:00:00.000Z', updatedAt: '2026-09-05T10:00:00.000Z',
+  ...over,
+})
+
+const subtask = (over: Partial<Subtask> = {}): Subtask => ({
+  id: 's1', taskId: 't1', title: 'a piece of work', done: false, status: 'todo',
   createdAt: '2026-09-05T10:00:00.000Z', updatedAt: '2026-09-05T10:00:00.000Z',
   ...over,
 })
@@ -201,5 +207,136 @@ describe('buildTaskDetail — one row per conversation', () => {
       row({ id: 'r2', conversationId: undefined }),
     ])
     expect(detail.sessions.map(s => s.id)).toEqual(['r1', 'r2'])
+  })
+})
+
+/**
+ * `subtaskViews` — a rollup per subtask, plus one `id: null` bucket for sessions filed directly on
+ * the delivery. See docs/superpowers/specs/2026-09-10-task-session-hierarchy-design.md §4.2.
+ *
+ * `rowsOfTask` never conditioned on `subtaskId`, so `TaskDetail.rollup` already summed both
+ * branches before this existed — these tests pin that the BREAKDOWN partitions the exact same rows
+ * exactly once each, across all three shapes the diagrams describe, rather than merely agreeing on
+ * a total two different bugs could still add up to.
+ */
+describe('subtaskViews — the three shapes, no session counted twice', () => {
+  // Distinct, deliberately non-round costs per conversation, so a duplication (double-counted row)
+  // or a drop (missing row) both move the sum away from the expected total instead of an accident
+  // of the numbers used cancelling it out.
+  const costs: Record<string, number> = { c1: 5, c2: 3, c3: 2, c4: 7, c5: 11 }
+  const costOf = (m: SessionMeta) => costs[m.session_id] ?? 0
+  const metasAll = metasOf(...Object.keys(costs).map(id => meta({ session_id: id })))
+
+  const detailOf = (rows: ManagedSession[], subtasks: Subtask[] = []) =>
+    buildTaskDetail({
+      task: task(), attempts: [], rows, metas: metasAll, costOf,
+      comments: [], subtasks, files: [],
+    })
+
+  it('shape #1 — two direct sessions, no subtasks: exactly one id:null bucket, equal to the total', () => {
+    const detail = detailOf([
+      row({ id: 'r1', conversationId: 'c1' }),
+      row({ id: 'r2', conversationId: 'c2' }),
+    ])
+    expect(detail.subtaskRollups).toHaveLength(1)
+    expect(detail.subtaskRollups[0]!.id).toBeNull()
+    // The whole rollup IS the direct bucket's rollup here — nothing else could have contributed.
+    expect(detail.subtaskRollups[0]!.rollup).toEqual(detail.rollup)
+    expect(detail.rollup.sessionsUsed).toBe(2)
+    expect(detail.rollup.costUSD).toBe(8)
+  })
+
+  it('shape #2 — three subtasks, each with a session, no direct ones: three buckets, no id:null', () => {
+    const subs = [subtask({ id: 's1' }), subtask({ id: 's2' }), subtask({ id: 's3' })]
+    const rows = [
+      row({ id: 'r1', conversationId: 'c1', subtaskId: 's1' }),
+      row({ id: 'r2', conversationId: 'c2', subtaskId: 's2' }),
+      row({ id: 'r3', conversationId: 'c3', subtaskId: 's3' }),
+    ]
+    const detail = detailOf(rows, subs)
+
+    expect(detail.subtaskRollups).toHaveLength(3)
+    expect(detail.subtaskRollups.map(v => v.id)).toEqual(['s1', 's2', 's3'])
+    expect(detail.subtaskRollups.some(v => v.id === null)).toBe(false)
+
+    // Each subtask's bucket carries exactly its own session — not zero, not more than one.
+    for (const v of detail.subtaskRollups) expect(v.rollup.sessionsUsed).toBe(1)
+
+    // The partition sums back to the task's own total, computed independently over ALL the rows —
+    // never by re-adding the partitions to derive the total (that would let a duplication that
+    // cancels out in the sum pass silently; checking counts per bucket rules that out here too).
+    const sumSessions = detail.subtaskRollups.reduce((a, v) => a + v.rollup.sessionsUsed, 0)
+    const sumCost = detail.subtaskRollups.reduce((a, v) => a + (v.rollup.costUSD ?? 0), 0)
+    expect(sumSessions).toBe(detail.rollup.sessionsUsed)
+    expect(detail.rollup.costUSD).toBe(sumCost)
+    expect(detail.rollup.costUSD).toBe(10) // 5 + 3 + 2
+  })
+
+  it('shape #3 — two direct + three subtasks with sessions: four buckets, union == the total, no overlap', () => {
+    const subs = [subtask({ id: 's1' }), subtask({ id: 's2' }), subtask({ id: 's3' })]
+    const rows = [
+      row({ id: 'r1', conversationId: 'c1' }), // direct
+      row({ id: 'r2', conversationId: 'c2' }), // direct
+      row({ id: 'r3', conversationId: 'c3', subtaskId: 's1' }),
+      row({ id: 'r4', conversationId: 'c4', subtaskId: 's2' }),
+      row({ id: 'r5', conversationId: 'c5', subtaskId: 's3' }),
+    ]
+    const detail = detailOf(rows, subs)
+
+    expect(detail.subtaskRollups).toHaveLength(4)
+    const byId = new Map(detail.subtaskRollups.map(v => [v.id, v]))
+    expect([...byId.keys()].sort()).toEqual([null, 's1', 's2', 's3'].sort())
+
+    // The direct bucket holds exactly the two direct rows — never the subtask ones, never zero.
+    expect(byId.get(null)!.rollup.sessionsUsed).toBe(2)
+    expect(byId.get(null)!.rollup.costUSD).toBe(8) // c1 + c2
+
+    // Each subtask bucket holds exactly its own row.
+    expect(byId.get('s1')!.rollup.sessionsUsed).toBe(1)
+    expect(byId.get('s1')!.rollup.costUSD).toBe(2) // c3
+    expect(byId.get('s2')!.rollup.sessionsUsed).toBe(1)
+    expect(byId.get('s2')!.rollup.costUSD).toBe(7) // c4
+    expect(byId.get('s3')!.rollup.sessionsUsed).toBe(1)
+    expect(byId.get('s3')!.rollup.costUSD).toBe(11) // c5
+
+    // No session counted in two buckets: the sum of per-bucket counts equals the total exactly —
+    // if a row leaked into two buckets this would read 6, not 5.
+    const sumSessions = [...byId.values()].reduce((a, v) => a + v.rollup.sessionsUsed, 0)
+    expect(sumSessions).toBe(5)
+    expect(sumSessions).toBe(detail.rollup.sessionsUsed)
+
+    const sumCost = [...byId.values()].reduce((a, v) => a + (v.rollup.costUSD ?? 0), 0)
+    expect(detail.rollup.costUSD).toBe(sumCost)
+    expect(detail.rollup.costUSD).toBe(28) // 5+3+2+7+11
+  })
+
+  it('gives a subtask with no sessions filed yet its own honest, empty bucket', () => {
+    // "Nothing filed here yet" is not a zero pretending to be a measurement — sessionsUsed is a
+    // real 0 (nothing IS filed), while cost/tokens/rounds stay null (nothing was MEASURED).
+    const subs = [subtask({ id: 's1' }), subtask({ id: 's2' })]
+    const rows = [row({ id: 'r1', conversationId: 'c1', subtaskId: 's1' })]
+    const detail = detailOf(rows, subs)
+
+    expect(detail.subtaskRollups).toHaveLength(2)
+    const empty = detail.subtaskRollups.find(v => v.id === 's2')!
+    expect(empty.rollup.sessionsUsed).toBe(0)
+    expect(empty.rollup.sessionsLinked).toBe(0)
+    expect(empty.rollup.costUSD).toBeNull()
+    expect(empty.rollup.tokens).toBeNull()
+    expect(empty.rollup.rounds).toBeNull()
+  })
+
+  it('is callable directly, on an already-scoped row set, matching attemptViews\'s own shape', () => {
+    // The exported function itself, not only through buildTaskDetail — it is meant to be composed
+    // the same way `attemptViews` is.
+    const subs = [subtask({ id: 's1' })]
+    const rows = [
+      row({ id: 'r1', conversationId: 'c1', subtaskId: 's1' }),
+      row({ id: 'r2', conversationId: 'c2' }),
+    ]
+    const views = subtaskViews(task(), subs, rows, metasAll, costOf)
+    expect(views).toHaveLength(2)
+    expect(views[0]).toEqual({ id: 's1', rollup: expect.objectContaining({ sessionsUsed: 1 }) })
+    expect(views[1]!.id).toBeNull()
   })
 })
