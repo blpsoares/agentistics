@@ -65,8 +65,19 @@ export interface DialogOption {
  * The cursor glyph is optional and is what marks the highlighted row. The label must start with a
  * non-space, so `1.` on its own is not an option — a bare number with no text is far more likely to
  * be an ordinal in prose than a menu entry.
+ *
+ * THREE GLYPHS, not the two this shipped with. `❯` (U+276F) is claude's; codex draws its own
+ * numbered menus (its directory-trust prompt, `1. Yes, continue` / `2. No, quit`) with `›`
+ * (U+203A) instead — measured live, codex 0.153.4, 2026-09-10. Missing it meant the cursor's own
+ * row — almost always option 1, the default — never matched `(\d{1,2})` at all, `1.` was never
+ * reached, and EVERY codex numbered dialog anchored on the row behind it and reported `unreadable`
+ * / `no-anchor` instead of `options`. That is not a cosmetic miss: `no-anchor`'s `top` still points
+ * at whatever WAS matched, which is what let `attentionOf`'s approval window widen over it anyway —
+ * so the dialog still blocked correctly, but no caller could ever read WHAT it was offering to
+ * choose between, on a menu this product ships and a first-time user meets on their very first
+ * message.
  */
-const OPTION = /^\s*(❯|>)?\s*(\d{1,2})\.\s+(\S.*?)\s*$/
+const OPTION = /^\s*(❯|›|>)?\s*(\d{1,2})\.\s+(\S.*?)\s*$/
 
 /**
  * How far up the frame to look for the dialog's LAST option row.
@@ -89,6 +100,28 @@ const LAST_OPTION_LINES = 40
  * own description, so the block extends as far as its options do and stops where prose begins.
  */
 const MAX_OPTION_GAP = 14
+
+/**
+ * How far a dialog's LAST option row may sit from where the frame's real content actually ends.
+ *
+ * A genuinely open dialog has almost nothing below its last option — its own confirm footer, or a
+ * queued message or two (the harness draws the input box under the dialog, one row per queued
+ * line; the report this bound must still pass has 9 lines below the last option while still
+ * blocked — see `attention.test.ts`'s "a QUEUED message pushes the dialog footer off the bottom").
+ * A STALE menu — the same numbered block still sitting on screen long after it was answered,
+ * because the harness never scrolled it away — has a whole new turn below it instead: a header, a
+ * reply, a fresh idle prompt. Measured on a real codex session (v0.153.4): 25 lines of genuine
+ * post-dialog content sat below the very "1. Yes, continue / 2. No, quit" trust prompt it had
+ * already answered, and the block was still being read as an open dialog. Every first-time codex
+ * user hits this on their very first prompt — codex's own directory-trust dialog is exactly this
+ * numbered block, it never scrolls out of `LAST_OPTION_LINES` on a short quiet reply, and reading
+ * it as still-open makes `attentionOf` report `waiting-approval` forever, degrading chat mode down
+ * to "attach to answer it there" for a session that has nothing left to answer.
+ *
+ * The bound sits between the two measurements — comfortably above the legitimate 9, comfortably
+ * below the stale 25.
+ */
+const MAX_TRAILING_GAP = 16
 
 /** Why a dialog that IS on screen could not be read. Each is a fact about the frame. */
 export type DialogUnreadable =
@@ -159,6 +192,7 @@ export function readDialog(
 ): DialogRead {
   const found: DialogOption[] = []
   let top = -1
+  let bottom = -1
   let anchored = false
 
   for (let i = frame.length - 1; i >= 0; i--) {
@@ -170,6 +204,7 @@ export function readDialog(
     // Too far above the previous option to be part of the same menu: this is prose that happens to
     // be numbered, and joining it to the block would invent a menu.
     if (found.length > 0 && top - i > MAX_OPTION_GAP) break
+    if (found.length === 0) bottom = i
     found.push({ number: Number(m[2]), label: m[3]!, selected: m[1] !== undefined })
     top = i
     if (Number(m[2]) === 1) { anchored = true; break }
@@ -183,6 +218,16 @@ export function readDialog(
   if (found.length === 0) return opts.marker ? readMarkerSelect(frame) : { kind: 'none', options: [], select: null, top: -1 }
   // Rows were found and `1.` never was. The block is real and its top is out of reach.
   if (!anchored) return { kind: 'unreadable', reason: 'no-anchor', options: [], select: null, top }
+
+  // The block is anchored — but is it still THERE, or is it the same lines sitting unscrolled long
+  // after somebody answered them? Trailing BLANK padding below the frame's real content is chrome
+  // (a fixed-height pane draws nothing into the rows it has not reached yet) and never counts; a
+  // whole subsequent turn does. See `MAX_TRAILING_GAP`.
+  let contentEnd = frame.length
+  while (contentEnd > bottom + 1 && (frame[contentEnd - 1] ?? '').trim() === '') contentEnd--
+  if (contentEnd - 1 - bottom > MAX_TRAILING_GAP) {
+    return { kind: 'none', options: [], select: null, top: -1 }
+  }
   // A menu is at least a choice. One option is a statement, and the caller confirms it instead.
   if (found.length < 2) return { kind: 'none', options: [], select: null, top }
   // Exactly `1..n`, in order. A gap, a repeat or a wrong start means this was not read correctly —
@@ -271,6 +316,16 @@ function readMarkerSelect(frame: readonly string[]): DialogRead {
   // One row is a statement, not a choice — and the caller may confirm it, which is exactly what
   // `none` grants and `unreadable` withholds.
   if (rows.length < 2) return { kind: 'none', options: [], select: null, top: at }
+
+  // Same staleness check the numbered path applies, and for the same reason: this marker menu is
+  // the trust-prompt shape, which is exactly the kind of dialog that sits unscrolled on a short,
+  // quiet session long after somebody already answered it. See `MAX_TRAILING_GAP`.
+  const bottomRow = rows[rows.length - 1]!.i
+  let contentEnd = frame.length
+  while (contentEnd > bottomRow + 1 && (frame[contentEnd - 1] ?? '').trim() === '') contentEnd--
+  if (contentEnd - 1 - bottomRow > MAX_TRAILING_GAP) {
+    return { kind: 'none', options: [], select: null, top: -1 }
+  }
 
   return {
     kind: 'options',
