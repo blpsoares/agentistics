@@ -9,20 +9,28 @@
  * (the blocking subtask was deleted) is not a live block — the same reconciliation `filedUnder`
  * already applies to a missing subtask.
  *
- * **A session is filed under a SUBTASK. Never a delivery directly, never two, never both.**
+ * **A session may be filed on the delivery directly, or on one of its subtasks, or both — see the
+ * 2026-09-10 spec for why holding both is safe** (`docs/superpowers/specs/
+ * 2026-09-10-task-session-hierarchy-design.md`). A delivery is the unit of DELIVERY; a subtask is
+ * the unit of WORK. The two are not mutually exclusive: a simple task can hold its sessions
+ * directly (no subtasks at all), a task broken into steps can file each session under the subtask
+ * it belongs to, and a task can do both at once — direct sessions for the part that was never
+ * broken out, plus subtasks for the part that was.
  *
- * A delivery is the unit of DELIVERY; a subtask is the unit of WORK, and work is what a session
- * does. Allowing both meant the same delivery could hold sessions at two levels with no rule for
- * reading them together — "did this cost include the subtasks or not" had no answer. So the
- * delivery is now a container: its cost is its subtasks' cost, and nothing else.
+ * This used to be refused outright ("a delivery does not take sessions, the caller must name a
+ * subtask"), on the reasoning that allowing both left "did this cost include the subtasks or not"
+ * without an answer. That reasoning stopped holding once `rowsOfTask` (`task-report.ts`) turned out
+ * to already sum every row by `taskId` regardless of `subtaskId` — the task-level total was never
+ * actually ambiguous. What had no answer was one level down: how much a given SUBTASK cost, because
+ * a subtask carried no rollup of its own. `task-report.ts`'s per-subtask views close that gap and
+ * give the un-broken-out, directly-filed part of a task its own answerable bucket
+ * (`subtaskId: null`) instead of a silent, unaccounted-for gap — which is what makes reopening
+ * direct filing safe rather than a regression back to the original ambiguity.
  *
- * Rows filed directly under a delivery before this rule existed are NOT migrated: inventing a
- * subtask to hold them would be inventing the one thing this module refuses to invent. They keep
- * their `taskId`, `filedUnder` still answers `task` for them, and the delivery's screen lists them
- * as work still to be PLACED — visible, countable, and one click from a subtask.
- * That is the whole point of this module: the exclusivity is one rule in one place, so a second
- * surface cannot invent a session that appears in the delivery's own list AND in a subtask's, where
- * a reader would count it twice and neither list would be the truth.
+ * That is still the whole point of this module: the exclusivity that matters is at the STORAGE
+ * level — a session's `subtaskId`/`taskId` pair names exactly one owner, decided in exactly one
+ * place — so a second surface cannot invent a session that appears in two lists at once, where a
+ * reader would count it twice and neither list would be the truth.
  *
  * The parent id is still STORED beside the subtask id, and that is not a contradiction — it is the
  * derived half of the same fact. A subtask belongs to a task, so a session filed under the subtask
@@ -62,10 +70,9 @@ export type AttachPlan =
   | {
     ok: false
     /**
-     * `needs_subtask`: the target was a delivery, and a delivery does not take sessions.
      * `blocked`: the target subtask is still waiting on work named in its own `blockedBy`.
      */
-    reason: 'no_such_task' | 'no_such_subtask' | 'needs_subtask' | 'blocked'
+    reason: 'no_such_task' | 'no_such_subtask' | 'blocked'
     /** Set only for `blocked` — the still-open blocker ids, so the caller can name them. */
     blockedBy?: readonly string[]
   }
@@ -80,10 +87,12 @@ export function planAttach(o: {
 
   if (o.target.kind === 'task') {
     if (!o.taskIds.includes(o.target.id)) return { ok: false, reason: 'no_such_task' }
-    // A DELIVERY DOES NOT TAKE SESSIONS. The caller has to name a subtask of it — creating one is
-    // a gesture the surfaces offer, and refusing here is what keeps "the delivery's cost is its
-    // subtasks' cost" true rather than aspirational.
-    return { ok: false, reason: 'needs_subtask' }
+    // A session may be filed straight on the delivery — see §2.2/§4.2 of
+    // docs/superpowers/specs/2026-09-10-task-session-hierarchy-design.md for why this is safe: the
+    // task's own rollup already sums every row by taskId regardless of subtaskId, and the
+    // subtask-rollup work (task-report.ts's per-subtask views) gives the "not broken out" part of a
+    // task its own answerable bucket instead of an unaccounted-for gap.
+    return { ok: true, taskId: o.target.id, subtaskId: null }
   }
 
   const wanted = o.target.id
