@@ -602,8 +602,9 @@ export async function attachSession(
   const row = w.rows.find(r => r.id === sessionId)
   if (!row) return { ok: false, reason: 'no_such_session' }
 
-  // A DELIVERY DOES NOT TAKE SESSIONS: without a subtask this refuses, and the surfaces offer
-  // "create one and move it here" rather than filing at the wrong level.
+  // Direct filing under the task is allowed too — `o.subtaskId` is optional. `planAttach` decides
+  // the pair either way, which is what makes this a MOVE rather than an add: filing under a
+  // subtask replaces a direct filing and filing under the task clears the subtask.
   const plan = planAttach({
     target: o.subtaskId ? { kind: 'subtask', id: o.subtaskId } : { kind: 'task', id: task.id },
     taskIds: w.book.tasks.map(t => t.id),
