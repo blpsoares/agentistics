@@ -136,6 +136,25 @@ export interface ArtifactsAsideProps {
   sessionId: string
   lang: 'pt' | 'en'
   /**
+   * May this machine serve the repository explorer at all — the RESOLVED answer (`CAPS.localShell`
+   * AND the user's own switch), combined on the server by `sessions/editor-gate.ts` and carried
+   * here through `AppContext.editorEnabled`. Never re-derived from a capability plus a preference
+   * on this side.
+   *
+   * When it is not `true` the Repository tab is ABSENT, never a greyed-out tab: a disabled control
+   * that explains nothing is indistinguishable from a broken one, and the server refuses the route
+   * regardless. Undefined reads as OFF — a read/write file editor is opt-in and absence is never
+   * consent, the same reading `shellEnabled` takes.
+   *
+   * Read by the Repository tab itself; the tab lands in a later task of this feature.
+   */
+  editorEnabled?: boolean
+  /**
+   * The user's autosave switch inside that editor. A convenience, not a gate — it can only ever
+   * narrow what `editorEnabled` has already gated, so no capability guards it. Absent reads as OFF.
+   */
+  editorAutosave?: boolean
+  /**
    * The session itself, for the TASKS tab — what it is called, which harness, and what it is filed
    * under right now. Absent on a surface that has the id and nothing else; the tab then offers
    * nothing rather than inventing a name.

@@ -146,6 +146,10 @@ interface TeamSessionState {
   chatEnabled?: boolean
   /** The same, for `/api/shell/*`. Undefined reads as OFF — see `AppContext.shellEnabled`. */
   shellEnabled?: boolean
+  /** The same, for the repository explorer's `/api/fleet/tree*`. Already RESOLVED by the server
+   *  (`sessions/editor-gate.ts`): the capability AND the switch. Undefined reads as OFF — see
+   *  `AppContext.editorEnabled`. */
+  editorEnabled?: boolean
 }
 
 export interface IamAccount { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: { teamId: string; role: 'manager' | 'user' }[]; mustChangePassword: boolean }
@@ -2055,6 +2059,9 @@ export default function AppLayout() {
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
   const [chatSoundId, setChatSoundId] = useState('ping')
+  // The repository explorer's autosave switch. A plain preference, loaded with the rest below and
+  // defaulting to OFF — it is not a capability, so it is never read off `/api/team/session`.
+  const [editorAutosave, setEditorAutosave] = useState(false)
 
   const [cardPrecision, setCardPrecisionState] = useState<Record<string, boolean>>({})
   const precisionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -2108,7 +2115,7 @@ export default function AppLayout() {
     // only a real 200 response with no archiveMode may set it. On failure we retry with
     // backoff and leave state at `undefined` (neutral loading bg) so nothing false-gates.
     let cancelled = false
-    const apply = (prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean; installDismissed?: boolean; team?: TeamConfig; billing?: unknown }) => {
+    const apply = (prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; editorAutosave?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean; installDismissed?: boolean; team?: TeamConfig; billing?: unknown }) => {
       if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
       // Total and never throws: a hand-edited preferences.json must not blank the dashboard.
       const nextBilling = normalizeBillingSettings(prefs.billing)
@@ -2125,6 +2132,9 @@ export default function AppLayout() {
       if (prefs.cardOrder) setCardOrder(migrateCardOrder(prefs.cardOrder))
       if (prefs.chatModel) setChatModel(prefs.chatModel as ChatModelId)
       if (prefs.chatSoundEnabled !== undefined) setChatSoundEnabled(prefs.chatSoundEnabled)
+      // Absent reads as OFF, so this is `=== true` rather than the `!== undefined` guard above —
+      // autosave was never on before it had a switch, and an upgrade must not turn it on.
+      setEditorAutosave(prefs.editorAutosave === true)
       setInstallDismissedPref(prefs.installDismissed === true)
       if ((prefs as Record<string, unknown>).chatSoundId) setChatSoundId((prefs as Record<string, unknown>).chatSoundId as string)
       // Resolve the archive mode (migrates the legacy archiveSessions boolean). Only reached on
@@ -3011,6 +3021,10 @@ export default function AppLayout() {
     isCentral,
     capabilities: teamSession?.capabilities,
     shellEnabled: teamSession?.shellEnabled === true,
+    // Already resolved by the server (capability AND switch) — never re-derived here. Undefined
+    // on an older server reads as OFF, so the Repository tab is simply absent there.
+    editorEnabled: teamSession?.editorEnabled === true,
+    editorAutosave, setEditorAutosave,
     me: iam?.account,
     teams: teamsList,
     machines: machinesList,

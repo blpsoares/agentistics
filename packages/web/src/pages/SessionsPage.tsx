@@ -127,6 +127,17 @@ export default function SessionsPage() {
   const dedicatedTerminal = useLocation().pathname.endsWith('/terminal')
   const dedicatedPane = readTerminalPane(useSearchParams()[0].get('pane'))
   const shellEnabled = ctx.shellEnabled === true
+  /**
+   * The repository explorer's two switches, both already resolved upstream.
+   *
+   * `editorEnabled` is the server's own answer — the capability AND the user's switch, combined by
+   * `sessions/editor-gate.ts` and reported on `GET /api/team/session`. It is never re-derived here
+   * from `capabilities.localShell` plus a preference, and when it is not `true` the Repository tab
+   * is ABSENT rather than a tab that refuses. `editorAutosave` is a plain preference, loaded with
+   * the rest in `App.tsx`; absent reads as OFF for both.
+   */
+  const editorEnabled = ctx.editorEnabled === true
+  const editorAutosave = ctx.editorAutosave
 
   /**
    * WHERE A REOPEN LANDS — one place, for all three controls on this page that can perform one.
@@ -516,6 +527,10 @@ export default function SessionsPage() {
       {...(artifactsOlder ? { older: artifactsOlder } : {})}
       unlistedWrites={artifactsUnlisted}
       turns={artifactTurns}
+      // The repository explorer's gate and its autosave switch. The gate decides whether the tab
+      // exists at all — see `ArtifactsAsideProps`.
+      editorEnabled={editorEnabled}
+      editorAutosave={editorAutosave}
       tabRequest={art.tabRequest}
       // The session itself, for the TASKS tab: what it is filed under, and the composer that files
       // it somewhere new without leaving the session you are sitting in.

@@ -22,17 +22,36 @@ export default function SessionsSettings() {
   // had no capability model — read as permitted, the same reading the rest of the app uses.
   const shellCapable = ctx.capabilities?.localShell !== false
 
+  // The repository explorer's own switch, shaped exactly like the shell's above and read the same
+  // way. It rides the SAME capability — `sessions/editor-gate.ts` records why there is no separate
+  // `localEditor` flag — but it is a SEPARATE preference: wanting a shell is not the same ask as
+  // wanting a read/write file editor.
+  const [editorEnabled, setEditorEnabled] = useState<boolean | null>(null)
+  const [editorSaving, setEditorSaving] = useState(false)
+  const editorCapable = ctx.capabilities?.localShell !== false
+  // Autosave is a CONVENIENCE, not a gate: no capability guards it, because it can only ever
+  // narrow what `editorEnabled` already gates. So it lives in the app context like
+  // `chatSoundEnabled` — the Repository tab reads the change without a reload — rather than in a
+  // second local copy of a preference this page would then have to keep in sync.
+  const [autosaveSaving, setAutosaveSaving] = useState(false)
+  const editorAutosave = ctx.editorAutosave
+
   useEffect(() => {
     fetch('/api/preferences')
       .then(r => (r.ok ? r.json() : null))
-      .then((p: { archiveMode?: ArchiveMode; archiveSessions?: boolean; shellEnabled?: boolean } | null) => {
+      .then((p: {
+        archiveMode?: ArchiveMode; archiveSessions?: boolean
+        shellEnabled?: boolean; editorEnabled?: boolean
+      } | null) => {
         const m: ArchiveMode =
           p?.archiveMode ?? (p?.archiveSessions === true ? 'full' : p?.archiveSessions === false ? 'off' : 'off')
         setMode(m)
         // ABSENT READS AS OFF. Nobody acquires a browser shell by having upgraded.
         setShellEnabled(p?.shellEnabled === true)
+        // Nor a read/write file editor — same reading, same reason.
+        setEditorEnabled(p?.editorEnabled === true)
       })
-      .catch(() => { setMode('off'); setShellEnabled(false) })
+      .catch(() => { setMode('off'); setShellEnabled(false); setEditorEnabled(false) })
   }, [])
 
   const toggleShell = () => {
@@ -48,6 +67,37 @@ export default function SessionsSettings() {
       .then(r => { if (!r.ok) throw new Error('save failed') })
       .catch(() => setShellEnabled(!next))  // put the switch back; nothing was saved
       .finally(() => setShellSaving(false))
+  }
+
+  const toggleEditor = () => {
+    if (editorEnabled === null || !editorCapable || editorSaving) return
+    const next = !editorEnabled
+    setEditorSaving(true)
+    setEditorEnabled(next)
+    fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ editorEnabled: next }),
+    })
+      .then(r => { if (!r.ok) throw new Error('save failed') })
+      .catch(() => setEditorEnabled(!next))  // put the switch back; nothing was saved
+      .finally(() => setEditorSaving(false))
+  }
+
+  const toggleAutosave = () => {
+    // Meaningless while the editor itself is off, and while its own read has not landed yet.
+    if (editorEnabled !== true || autosaveSaving) return
+    const next = !editorAutosave
+    setAutosaveSaving(true)
+    ctx.setEditorAutosave(next)
+    fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ editorAutosave: next }),
+    })
+      .then(r => { if (!r.ok) throw new Error('save failed') })
+      .catch(() => ctx.setEditorAutosave(!next))  // put the switch back; nothing was saved
+      .finally(() => setAutosaveSaving(false))
   }
 
   const choose = (m: ArchiveMode) => {
@@ -134,6 +184,57 @@ export default function SessionsSettings() {
             : (pt
               ? 'Seu perfil permite isso, e você está com isso DESLIGADO. Com o shell desligado, /api/shell/* responde 403 — o servidor é quem decide.'
               : 'Your profile allows this, and you have it OFF. With the shell off, /api/shell/* answers 403 — the server is what decides.')}
+      </div>
+
+      <Divider />
+
+      <SectionHeader label={pt ? 'Explorador de repositório' : 'Repository explorer'} />
+
+      <PrefRow
+        label={pt ? 'Habilitar o explorador de repositório' : 'Enable the repository explorer'}
+        sub={editorCapable
+          ? (pt
+            ? 'Desligado por padrão. Ligar mostra a aba "Repositório" com a árvore de arquivos e um editor de verdade, direto no painel.'
+            : 'Off by default. Turning it on shows the "Repository" tab with the file tree and a real editor, from the dashboard.')
+          : (pt
+            ? 'Indisponível: o perfil de exposição desta instância não permite ler nem escrever arquivos do host — o interruptor só pode restringir, nunca reabrir.'
+            : 'Unavailable: this instance’s exposure profile does not allow reading or writing host files — the switch can only narrow, never re-open.')}
+      >
+        <Toggle
+          on={editorEnabled === true}
+          onToggle={toggleEditor}
+          disabled={!editorCapable || editorEnabled === null || editorSaving}
+        />
+      </PrefRow>
+
+      <PrefRow
+        label={pt ? 'Salvar automaticamente' : 'Autosave'}
+        sub={pt
+          ? 'Desligado por padrão. Ligar salva sozinho ~1–2s depois da última tecla — o custo é uma janela maior pra colidir com uma escrita do agente no mesmo arquivo.'
+          : 'Off by default. Turning it on saves on its own ~1–2s after the last keystroke — the cost is a wider window to collide with an agent’s own write to the same file.'}
+      >
+        <Toggle
+          on={editorAutosave}
+          onToggle={toggleAutosave}
+          disabled={editorEnabled !== true || autosaveSaving}
+        />
+      </PrefRow>
+
+      <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.6 }}>
+        {/* The same three-way sentence the shell's switch carries above, and for the same reason:
+            "your profile denies this" and "your profile allows it, you have it off" are one
+            disabled toggle apart and mean different things. */}
+        {!editorCapable
+          ? (pt
+            ? 'O perfil desta instância já nega o acesso a arquivos do host; nada aqui pode reabri-lo.'
+            : 'This instance’s profile already denies host file access; nothing here can re-open it.')
+          : editorEnabled
+            ? (pt
+              ? 'Seu perfil permite e você está com isso LIGADO. Cada sessão ganha uma aba "Repositório" no painel lateral, com leitura e escrita na pasta da própria sessão.'
+              : 'Your profile allows this and you have it ON. Each session gets a "Repository" tab in the side panel, reading and writing inside that session’s own folder.')
+            : (pt
+              ? 'Seu perfil permite isso, e você está com isso DESLIGADO. Com o explorador desligado a aba nem aparece, e /api/fleet/tree* responde 403 — o servidor é quem decide.'
+              : 'Your profile allows this, and you have it OFF. With the explorer off the tab is absent entirely, and /api/fleet/tree* answers 403 — the server is what decides.')}
       </div>
 
       <Divider />
