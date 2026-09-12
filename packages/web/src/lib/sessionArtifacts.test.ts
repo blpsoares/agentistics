@@ -171,6 +171,21 @@ describe('why the count is short', () => {
     expect(pt[0]).toContain('não dá para ler')
   })
 
+  /**
+   * IT STANDS ALONE. The header's count is drawn only when there is at least one artifact, and this
+   * flag's primary case is a session whose every write was opaque — so the sentence is routinely
+   * read with NO count beside it. "…not in this count" pointed at a number that was not on screen.
+   */
+  it('the unlistable-writes sentence points at no count', () => {
+    const en = artifactShortfall({ unlisted: true, lang: 'en' })[0] ?? ''
+    const pt = artifactShortfall({ unlisted: true, lang: 'pt' })[0] ?? ''
+    expect(en).not.toMatch(/this count|that count/i)
+    expect(pt).not.toMatch(/nesta contagem|dessa contagem|desta contagem/i)
+    // It still says what it is for: those files are missing from what this panel shows.
+    expect(en).toMatch(/counted/i)
+    expect(pt).toMatch(/contados/i)
+  })
+
   it('says BOTH when both hold, the unnameable ones first', () => {
     const out = artifactShortfall({ unlisted: true, outside: OUTSIDE_EN, lang: 'en' })
     expect(out).toHaveLength(2)

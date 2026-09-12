@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, normalize, relative } from 'node:path'
+import { stripComments } from './stripComments'
 
 /**
  * `monacoEntry.ts` IS A LIST, AND A LIST ROTS. This test is the thing that notices.
@@ -98,10 +99,9 @@ const EXCLUDED = [
 ]
 const excluded = (p: string) => EXCLUDED.some(e => p === e || p.startsWith(`${e}/`))
 
-/** Comments are stripped before a source is searched — a doc comment may NAME what code may not do. */
-function code(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
-}
+/** Comments are stripped before a source is searched — a doc comment may NAME what code may not do.
+ *  The third copy of this rule; `lib/stripComments.ts` is the only one now. */
+const code = stripComments
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const e of readdirSync(dir, { withFileTypes: true })) {

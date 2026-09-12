@@ -194,8 +194,10 @@ export interface AppContext {
    *  resolved by the server (`sessions/editor-gate.ts`) and reported by `GET /api/team/session`.
    *  The UI may NEVER re-derive it from `capabilities.localShell` + a preference — the resolved
    *  flag is the one answer, exactly as `shellEnabled` is for the shell. Undefined reads as OFF,
-   *  for that same reason: a read/write file editor is opt-in and absence is never consent. When
-   *  this is not `true` the Repository tab is ABSENT, never a greyed-out tab. */
+   *  for that same reason: a read/write file editor is opt-in and absence is never consent. It also
+   *  has a CENTRAL subtracted from it before it is published (`lib/editorGate.ts`) — the whole
+   *  `/api/fleet` prefix is refused there, and a consumer must not have to know that. When this is
+   *  not `true` the Studio is ABSENT, never a greyed-out entry. */
   editorEnabled?: boolean
 
   /** The user's own autosave switch INSIDE the repository explorer's editor. A convenience, not a

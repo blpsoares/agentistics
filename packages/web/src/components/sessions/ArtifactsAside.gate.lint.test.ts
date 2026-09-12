@@ -36,13 +36,17 @@
 import { describe, expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { stripComments } from '../../lib/stripComments'
 
 const ASIDE = join(import.meta.dir, 'ArtifactsAside.tsx')
 
-/** Comments out — a doc comment may NAME what the code may not do. Same helper, same reason. */
-function code(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
-}
+/**
+ * Comments out — a doc comment may NAME what the code may not do.
+ *
+ * This was the stronger of the two copies that shipped in one wave (`sessionsPage.lint.test.ts` had
+ * the weaker), and `lib/stripComments.ts` is now the only one: one job, one strength, no hole.
+ */
+const code = stripComments
 
 const raw = readFileSync(ASIDE, 'utf8')
 const src = code(raw)

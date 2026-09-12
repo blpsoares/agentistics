@@ -137,17 +137,17 @@ export default function SessionsPage() {
    * ABSENT rather than an entry that refuses. `editorAutosave` is a plain preference, loaded with
    * the rest in `App.tsx`; absent reads as OFF for both.
    *
-   * **`!isCentral` IS PART OF THE GATE, AND THIS IS THE ONE PLACE IT IS APPLIED.** The whole
-   * `/api/fleet` prefix is refused on a central, so every request the Studio makes is refused there
-   * — while `editor-gate.ts` carries no central term at all, so a central on a `local` profile with
-   * the preference on reports `true`. The desktop button in `App.tsx` has always spelled the term
-   * out; the two entries on this page did not, and a phone got a Studio row that could only fail.
-   * Folding it in HERE rather than at each entry is what makes that impossible to forget again: this
-   * value is the aside's `editorEnabled` prop as well, so the strip entry and the layer mount inside
-   * `ArtifactsAside` — which has no notion of a central and must not grow one — are closed by the
-   * same term.
+   * **THE CENTRAL TERM IS ALREADY IN IT, AND IS NOT RE-APPLIED HERE.** The whole `/api/fleet`
+   * prefix is refused on a central, so every request the Studio makes is refused there — while
+   * `editor-gate.ts` carries no central term at all, so a central on a `local` profile with the
+   * preference on reports `true`. That subtraction happens where the value is PUBLISHED
+   * (`lib/editorGate.ts`, spent in `App.tsx`'s `appCtx`), which is what closes every consumer at
+   * once: this page's two entries, the desktop button beside them, and the `editorEnabled` prop
+   * `ArtifactsAside` gates its strip entry and its Studio layer on — that component has no notion of
+   * a central and must not grow one. Re-subtracting it here would be harmless arithmetic and a
+   * harmful statement: that the published value is not to be trusted.
    */
-  const editorEnabled = ctx.editorEnabled === true && !isCentral
+  const editorEnabled = ctx.editorEnabled === true
   const editorAutosave = ctx.editorAutosave
 
   /**
@@ -1055,9 +1055,10 @@ export default function SessionsPage() {
                      machine-wide chrome and the Studio is about the SESSION you have open, which
                      only this menu has.
                      ABSENT when the gate is closed, never greyed — the same `editorEnabled` the
-                     aside reads, the server's own already-resolved answer NARROWED BY `!isCentral`
-                     where it is declared above: the `/api/fleet` prefix is refused on a central, and
-                     this row used to be the one entry that offered the Studio there. The `new` badge is the
+                     aside reads, the server's own already-resolved answer with a CENTRAL already
+                     subtracted where the app publishes it (`lib/editorGate.ts`): the `/api/fleet`
+                     prefix is refused on a central, and this row used to be the one entry that
+                     offered the Studio there. The `new` badge is the
                      pair to the desktop button's two marks, as far as one row of a 240px menu can
                      carry: the beta caveat is on the Studio's own top bar, one tap away. */
                   ...(editorEnabled ? [{

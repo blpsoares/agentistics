@@ -18,6 +18,7 @@ import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_
 import { usePlanBasis } from './hooks/usePlanBasis'
 import { planScopeHarnesses, planScopeNote, sessionPlanFactor } from './lib/costBasis'
 import { bootLoading } from './lib/bootPhase'
+import { editorEnabledFor } from './lib/editorGate'
 import { DEFAULT_CARD_ORDER, migrateCardOrder, type CardId } from './lib/cardOrder'
 import { BillingIntroModal } from './components/BillingIntroModal'
 import type { LoadProgress } from './hooks/useData'
@@ -3022,9 +3023,12 @@ export default function AppLayout() {
     isCentral,
     capabilities: teamSession?.capabilities,
     shellEnabled: teamSession?.shellEnabled === true,
-    // Already resolved by the server (capability AND switch) — never re-derived here. Undefined
-    // on an older server reads as OFF, so the Repository tab is simply absent there.
-    editorEnabled: teamSession?.editorEnabled === true,
+    // Already resolved by the server (capability AND switch) — never re-derived here. Undefined on
+    // an older server reads as OFF, so the Studio is simply absent there. `editorEnabledFor` also
+    // subtracts a CENTRAL, and this is the only place that happens: `editor-gate.ts` carries no
+    // central term, so the server says `true` there while the whole `/api/fleet` prefix is refused.
+    // Publishing the narrowed value closes every consumer at once — see `lib/editorGate.ts`.
+    editorEnabled: editorEnabledFor(teamSession?.editorEnabled, isCentral),
     editorAutosave, setEditorAutosave,
     me: iam?.account,
     teams: teamsList,
@@ -3268,15 +3272,16 @@ export default function AppLayout() {
           answer — `CAPS.localShell` AND the user's switch, combined by `sessions/editor-gate.ts` —
           and it is read here rather than re-derived from a capability plus a preference, which is the
           one rule this feature's wiring has. A greyed button would explain nothing and the route
-          refuses anyway. `!isCentral` for the same reason the panel beside it is: the whole
-          `/api/fleet` prefix is refused there.
+          refuses anyway. It needs no `!isCentral` of its own: `appCtx.editorEnabled` is already
+          narrowed by one where it is published, because the whole `/api/fleet` prefix is refused on
+          a central and a term each surface has to remember is a term the next one forgets.
 
           It carries BOTH marks. `beta` is the caveat every other entry to this feature wears, and
           `new` is why a reader should look at a button that was not on this row yesterday — two
           different statements, so two marks (see `NewTag`). The same pair is on the mobile entry in
           `SessionsPage`'s session menu: a feature marked on one nav and not the other teaches the
           reader that the unmarked one is something else. */}
-      {selectedFleetSession && !isCentral && appCtx.editorEnabled && (
+      {selectedFleetSession && appCtx.editorEnabled && (
         <button
           onClick={() => openArtifacts('studio')}
           title={lang === 'pt'

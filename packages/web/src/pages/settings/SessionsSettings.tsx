@@ -35,7 +35,16 @@ export default function SessionsSettings() {
   // a repository, which is what they read.
   const [editorEnabled, setEditorEnabled] = useState<boolean | null>(null)
   const [editorSaving, setEditorSaving] = useState(false)
-  const editorCapable = ctx.capabilities?.localShell !== false
+  // A CENTRAL CAN NEVER RUN THE STUDIO, and this screen is the one place a user turns it on — so it
+  // is the one place a false sentence about it is expensive. `CAPS.localShell` carries no central
+  // term, so a central on a `local` profile reported "your profile allows this and you have it ON.
+  // Each session gets the Studio in the side panel" over a deployment that refuses the whole
+  // `/api/fleet` prefix — every request the Studio makes. It joins the capability rather than
+  // becoming a fourth state: "this instance cannot do this, and nothing here can change that" is
+  // exactly what the unavailable branch already means. Only the REASON differs, so only the reason
+  // is worded apart — the three-way shape the shell's switch above keeps is untouched.
+  const editorCentral = ctx.isCentral
+  const editorCapable = ctx.capabilities?.localShell !== false && !editorCentral
   // Autosave is a CONVENIENCE, not a gate: no capability guards it, because it can only ever
   // narrow what `editorEnabled` already gates. It still has to reach the Studio without a
   // reload, so the change is MIRRORED into the app context — but the switch is RENDERED from this
@@ -219,9 +228,13 @@ export default function SessionsSettings() {
           ? (pt
             ? 'Desligado por padrão. Ligar dá a cada sessão um botão "Studio": a árvore de arquivos e um editor de verdade, ocupando o painel lateral inteiro.'
             : 'Off by default. Turning it on gives each session a "Studio" button: the file tree and a real editor, taking over the whole side panel.')
-          : (pt
-            ? 'Indisponível: o perfil de exposição desta instância não permite ler nem escrever arquivos do host — o interruptor só pode restringir, nunca reabrir.'
-            : 'Unavailable: this instance’s exposure profile does not allow reading or writing host files — the switch can only narrow, never re-open.')}
+          : editorCentral
+            ? (pt
+              ? 'Indisponível neste central: ele agrega métricas de outras máquinas e recusa /api/fleet/* por inteiro — não há arquivos daqui para abrir. Ligue o Studio na máquina onde a sessão roda.'
+              : 'Unavailable on a central: it aggregates other machines’ metrics and refuses the whole of /api/fleet/* — there are no files here to open. Turn the Studio on over on the machine the session runs on.')
+            : (pt
+              ? 'Indisponível: o perfil de exposição desta instância não permite ler nem escrever arquivos do host — o interruptor só pode restringir, nunca reabrir.'
+              : 'Unavailable: this instance’s exposure profile does not allow reading or writing host files — the switch can only narrow, never re-open.')}
       >
         <Toggle
           on={editorEnabled === true}
@@ -248,9 +261,13 @@ export default function SessionsSettings() {
             "your profile denies this" and "your profile allows it, you have it off" are one
             disabled toggle apart and mean different things. */}
         {!editorCapable
-          ? (pt
-            ? 'O perfil desta instância já nega o acesso a arquivos do host; nada aqui pode reabri-lo.'
-            : 'This instance’s profile already denies host file access; nothing here can re-open it.')
+          ? editorCentral
+            ? (pt
+              ? 'Este central recusa /api/fleet/* por inteiro, então o Studio não tem o que abrir aqui — o interruptor está inerte nesta tela, e nem o botão aparece. É uma configuração de máquina, não de central.'
+              : 'This central refuses the whole of /api/fleet/*, so the Studio has nothing to open here — the switch is inert on this screen, and not even the button appears. It is a machine’s setting rather than a central’s.')
+            : (pt
+              ? 'O perfil desta instância já nega o acesso a arquivos do host; nada aqui pode reabri-lo.'
+              : 'This instance’s profile already denies host file access; nothing here can re-open it.')
           : editorEnabled
             ? (pt
               ? 'Seu perfil permite e você está com isso LIGADO. Cada sessão ganha o Studio no painel lateral, com leitura e escrita na pasta da própria sessão.'

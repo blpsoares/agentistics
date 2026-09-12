@@ -84,7 +84,11 @@ export function hasUnlistedWrites(turns: readonly Turnish[]): boolean {
  *  - **`unlisted`** — the session wrote through commands whose paths cannot be read AT ALL (an
  *    interpreter fed a heredoc), so those files are in no count. Composed here, in this panel's own
  *    words, because nothing server-side words it: `hasUnlistedWrites` above is the browser's own
- *    reading of turns it already has.
+ *    reading of turns it already has. **It may not point at the count**, and said "not in this
+ *    count" for a release: the header's `N files` span is drawn only when `artifacts.length > 0`,
+ *    and this flag's PRIMARY case is a session that wrote through opaque commands ALONE — exactly
+ *    when there is no count beside it and the sentence names something the reader cannot see. The
+ *    fact was right and the deixis was wrong, so the sentence now stands on its own.
  *  - **`outside`** — files that ARE counted elsewhere but sit outside the session's own folder, so
  *    the read route refuses them. Passed through **VERBATIM**: the server already worded it
  *    (`fleet-web.ts`'s `listSessionArtifacts`), it holds a COUNT and never the paths, and composing
@@ -102,8 +106,8 @@ export function artifactShortfall(
   const out: string[] = []
   if (unlisted === true) {
     out.push(lang === 'pt'
-      ? 'A sessão também escreveu por comandos cujos caminhos não dá para ler; esses arquivos não entram nesta contagem.'
-      : 'The session also wrote through commands whose paths cannot be read; those files are not in this count.')
+      ? 'A sessão também escreveu por comandos cujos caminhos não dá para ler; esses arquivos não aparecem aqui, nem contados nem listados.'
+      : 'The session also wrote through commands whose paths cannot be read; those files are neither counted nor listed here.')
   }
   // VERBATIM, never reworded — see above.
   if (outside) out.push(outside)

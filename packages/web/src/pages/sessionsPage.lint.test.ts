@@ -15,6 +15,7 @@
 import { test, expect } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { stripComments } from '../lib/stripComments'
 
 const RAW = readFileSync(join(import.meta.dir, 'SessionsPage.tsx'), 'utf-8')
 
@@ -25,15 +26,13 @@ const RAW = readFileSync(join(import.meta.dir, 'SessionsPage.tsx'), 'utf-8')
  * text matches the explanation and fails on a file that is correct. Same trap `attention-rules.ts`
  * records for footer markers: a source that discusses a pattern contains that pattern.
  *
- * Line comments alone were enough while the only assertions were NEGATIVE — a leftover `/* … *\/`
- * could not make `not.toMatch` pass. The central-gate test below is POSITIVE, and its expression is
- * named in the doc comment sitting directly above the line that holds it, so a block comment would
- * satisfy it on a file that had dropped the term. Same `code()` shape as
- * `ArtifactsAside.gate.lint.test.ts`, for the same reason.
+ * **The stripper is `lib/stripComments.ts`, and it is shared on purpose.** This file used to keep
+ * its own, which dropped only lines whose trim STARTS with `//` — so a needle planted as a TRAILING
+ * comment after real code survived it, and a reviewer proved exactly that against the positive
+ * assertion that used to live below. Two strippers of different strength for one job is one
+ * stripper and one hole.
  */
-const SRC = RAW
-  .replace(/\/\*[\s\S]*?\*\//g, '')
-  .split('\n').filter(l => !l.trim().startsWith('//')).join('\n')
+const SRC = stripComments(RAW)
 
 test('the centre is not swapped between `panel` and a wrapper around it', () => {
   // Any ternary whose branches are "the panel" and "something containing the panel" is this bug.
@@ -56,20 +55,24 @@ test('the names this pins still exist in the file', () => {
 })
 
 /**
- * THE STUDIO'S GATE CARRIES `!isCentral`, AND THIS PAGE IS WHERE IT IS APPLIED.
+ * THE STUDIO'S GATE IS READ HERE AND NARROWED NOWHERE.
  *
  * `/api/fleet` is refused WHOLE on a central, and `editor-gate.ts` carries no central term — so a
- * central on a `local` profile with the preference on reports `editorEnabled: true`. The desktop
- * button in `App.tsx` spells the term out; the two entries this page owns did not, and a phone got a
- * Studio row whose every request is refused. The one value both entries read is this one, and it is
- * also the `editorEnabled` prop `ArtifactsAside` gates its strip entry and its Studio layer on — so
- * the term belongs here and nowhere else.
+ * central on a `local` profile with the preference on reports `editorEnabled: true`. That term used
+ * to be subtracted on this line, which was correct for the two entries this page owns and said
+ * nothing about the next surface to read `ctx.editorEnabled`. It is now subtracted where the value
+ * is PUBLISHED (`lib/editorGate.ts`, spent in `App.tsx`'s `appCtx`), and the property — a central
+ * never publishes a true `editorEnabled` — is asserted app-wide in `lib/editorGate.test.ts`.
+ *
+ * What is left for THIS page is narrower and still worth pinning: it reads the published value ONCE
+ * and adds nothing to it. A second reading is a second gate, which is how the mobile entry came to
+ * disagree with the desktop one in the first place.
  *
  * Not reachable by rendering: the page needs a fleet host and `packages/web` has no jsdom. The
  * expression is what went wrong, so the expression is what is asserted — over comment-free source,
  * with the defect planted below to prove the scan can still see it.
  */
-const GATE = 'const editorEnabled = ctx.editorEnabled === true && !isCentral'
+const GATE = 'const editorEnabled = ctx.editorEnabled === true'
 
 /**
  * A needle, as a BOOLEAN — the lesson `ArtifactsAside.gate.lint.test.ts` records.
@@ -80,7 +83,7 @@ const GATE = 'const editorEnabled = ctx.editorEnabled === true && !isCentral'
  */
 const has = (needle: string) => SRC.includes(needle)
 
-test('the Studio gate is narrowed by `!isCentral`', () => {
+test('the Studio gate is the published value, read as written', () => {
   expect(has(GATE)).toBe(true)
 })
 
@@ -97,16 +100,15 @@ test('both Studio entries on this page are gated on that one value', () => {
 })
 
 test('the scan still sees the defect it exists to catch', () => {
-  const strip = (s: string) => s
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .split('\n').filter(l => !l.trim().startsWith('//')).join('\n')
-  const bare = 'const editorEnabled = ctx.editorEnabled === true\n'
-  expect(strip(bare).includes(GATE)).toBe(false)
-  // And the doc comment that NAMES the term cannot stand in for it — the reason block comments are
-  // stripped at all. With line comments only, this case passed on a file that had dropped the term.
-  expect(strip(`/**\n * ${GATE}\n */\n${bare}`).includes(GATE)).toBe(false)
-  // A line comment cannot either.
-  expect(strip(`// ${GATE}\n${bare}`).includes(GATE)).toBe(false)
+  // The line gone, and then each of the three ways it can be present as PROSE rather than as code.
+  const gone = 'const editorEnabled = somethingElse\n'
+  expect(stripComments(gone).includes(GATE)).toBe(false)
+  expect(stripComments(`/**\n * ${GATE}\n */\n${gone}`).includes(GATE)).toBe(false)
+  expect(stripComments(`// ${GATE}\n${gone}`).includes(GATE)).toBe(false)
+  // THE PLANT THIS FILE SHIPPED WITHOUT. A needle written after real code is not code, and the
+  // stripper that used to live here — lines whose trim STARTS with `//` — let exactly this through;
+  // a reviewer proved it, and only a sibling assertion noticed.
+  expect(stripComments(`const x = 1 // ${GATE}\n${gone}`).includes(GATE)).toBe(false)
 })
 
 /**
@@ -131,11 +133,10 @@ test('the route\'s `outside` sentence is read and handed to the aside', () => {
 })
 
 test('the scan still sees either of those going dead', () => {
-  const strip = (s: string) => s
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .split('\n').filter(l => !l.trim().startsWith('//')).join('\n')
-  // A prop passed in a comment is not a prop passed.
-  expect(strip('/* unlistedWrites={artifactsUnlisted} */').includes('unlistedWrites={artifactsUnlisted}'))
+  // A prop passed in a comment is not a prop passed — in any of the three comment shapes.
+  expect(stripComments('/* unlistedWrites={artifactsUnlisted} */').includes('unlistedWrites={artifactsUnlisted}'))
     .toBe(false)
-  expect(strip('// setOutsideNote(d.outside)').includes('setOutsideNote(d.outside)')).toBe(false)
+  expect(stripComments('// setOutsideNote(d.outside)').includes('setOutsideNote(d.outside)')).toBe(false)
+  expect(stripComments('const x = 1 // setOutsideNote(d.outside)').includes('setOutsideNote(d.outside)'))
+    .toBe(false)
 })

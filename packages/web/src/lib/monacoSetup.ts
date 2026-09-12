@@ -1,14 +1,14 @@
 /// <reference types="vite/client" />
 /**
- * monacoSetup.ts — self-hosted Monaco, no CDN, loaded only when the Repository tab is opened.
+ * monacoSetup.ts — self-hosted Monaco, no CDN, loaded only when the Studio is opened.
  *
  * TWO GUARANTEES, and both are structural rather than a matter of care:
  *
  * 1. **No CDN.** Every worker below is a Vite `?worker` import, so it is bundled out of
  *    `node_modules` and served from this origin like every other asset.
  * 2. **Lazy.** Monaco is reached ONLY through the dynamic `import('./monacoEntry')` in
- *    `loadMonaco()`, so it lands in its own chunk and a user who never opens the Repository tab
- *    never downloads it. **This module must itself only ever be imported dynamically**: Vite hoists
+ *    `loadMonaco()`, so it lands in its own chunk and a user who never opens the Studio never
+ *    downloads it. **This module must itself only ever be imported dynamically**: Vite hoists
  *    the `?worker` wrappers below into the Monaco chunk, so a STATIC `import { loadMonaco }` would
  *    drag ~4.4 MB into whatever chunk wrote it.
  *
