@@ -593,8 +593,9 @@ export default function SessionsPage() {
    * The guard holds every drop that has a moment to be held: the close (`closeArtifacts` asks through
    * `unsavedBuffers.ts`), every router navigation that leaves this session's page — another session,
    * the dedicated terminal, `SideNav`, and on a phone the arrival of a new session, which is a
-   * navigation first — the browser's own Back/Forward (a capture-phase `popstate`, see
-   * `lib/unsavedLeave.ts`), and a reload or closed tab (`beforeunload`). It keeps nothing mounted:
+   * navigation first — the browser's own Back/Forward (a `popstate` listener
+   * registered in `main.tsx` BEFORE the first render, because in Chromium window listeners run in
+   * insertion order whatever their phase — see `lib/historyPopGuard.ts`), and a reload or closed tab (`beforeunload`). It keeps nothing mounted:
    * the answer "discard" drops the pane exactly as before. STATED LIMITS: a REOPEN of this session
    * is deliberately not held — the server has already retired the row, so "keep editing" could keep
    * nothing (`navigationRetiresStudio`) — and a selected row that vanishes from the fleet with no
