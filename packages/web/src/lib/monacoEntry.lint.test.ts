@@ -118,7 +118,7 @@ describe('monacoEntry composes Monaco from subpaths', () => {
 
   /** `esm/vs/index.js`'s own imports — the definition of "everything the barrel registers". */
   function barrelImports(vs: string): Set<string> {
-    return new Set(specifiersOf(readFileSync(join(vs, 'index.js'), 'utf8')).map(s => underVs(s, '.')))
+    return new Set(specifiersOf(code(readFileSync(join(vs, 'index.js'), 'utf8'))).map(s => underVs(s, '.')))
   }
 
   /**
@@ -128,14 +128,14 @@ describe('monacoEntry composes Monaco from subpaths', () => {
    */
   function entryImports(vs: string): Set<string> {
     const out = new Set<string>()
-    for (const spec of specifiersOf(entry)) {
+    for (const spec of specifiersOf(code(entry))) {
       const p = spec.replace(/^monaco-editor\//, '')
       if (p !== 'features/register.all') {
         out.add(p)
         continue
       }
       const rollup = readFileSync(join(vs, 'features/register.all.js'), 'utf8')
-      for (const r of specifiersOf(rollup)) out.add(underVs(r, 'features'))
+      for (const r of specifiersOf(code(rollup))) out.add(underVs(r, 'features'))
     }
     return out
   }
@@ -204,7 +204,7 @@ describe('monacoEntry composes Monaco from subpaths', () => {
   it('never imports the TypeScript language service, in either file', () => {
     // The 6.9 MB. A comment may name it; an import may not.
     for (const [name, src] of [['monacoEntry.ts', entry], ['monacoSetup.ts', setup]] as const) {
-      for (const spec of specifiersOf(src)) {
+      for (const spec of specifiersOf(code(src))) {
         expect(`${name}: ${spec}`).not.toContain('features/typescript')
         expect(`${name}: ${spec}`).not.toContain('ts.worker')
       }
@@ -214,8 +214,8 @@ describe('monacoEntry composes Monaco from subpaths', () => {
   it('never imports the monaco-editor barrel for a VALUE', () => {
     // A real import would put the whole barrel — ts.worker included — back. Both files now take
     // their TYPES from `monacoEntry` itself, so neither should name the barrel at all.
-    expect(specifiersOf(setup)).not.toContain('monaco-editor')
-    expect(specifiersOf(entry)).not.toContain('monaco-editor')
+    expect(specifiersOf(code(setup))).not.toContain('monaco-editor')
+    expect(specifiersOf(code(entry))).not.toContain('monaco-editor')
   })
 
   /**

@@ -17,9 +17,9 @@ import { describe, expect, test } from 'bun:test'
 import {
   AGENTISTICS_THEME_NAME, MIN_CODE_CONTRAST, MIN_UI_CONTRAST,
   TOKENS_DARK, TOKENS_LIGHT, TOKEN_PROPERTY,
-  agentisticsThemeData, alpha, buildPalette, codeThemeName, contrastRatio,
+  agentisticsThemeData, alpha, buildHighlightColors, buildPalette, codeThemeName, contrastRatio,
   defineAgentisticsThemes, flatten, parseCssColor, readable,
-  type CodePalette, type CodeThemeVariant, type ThemeTokens,
+  type CodeHighlightColors, type CodePalette, type CodeThemeVariant, type ThemeTokens,
 } from './monacoTheme'
 
 const INDEX_CSS = join(import.meta.dir, '..', 'index.css')
@@ -336,5 +336,56 @@ describe('registration', () => {
     expect(codeThemeName('dark')).toBe(AGENTISTICS_THEME_NAME.dark)
     expect(codeThemeName(null)).toBe(AGENTISTICS_THEME_NAME.dark)
     expect(codeThemeName('')).toBe(AGENTISTICS_THEME_NAME.dark)
+  })
+})
+
+describe('buildHighlightColors — the code highlighter palette', () => {
+  const getBgColor = (variant: CodeThemeVariant): string => {
+    const tokens = variant === 'light' ? TOKENS_LIGHT : TOKENS_DARK
+    const palette = buildPalette(tokens)
+    return palette.bg
+  }
+
+  test('dark: all highlighted token kinds clear the contrast floor', () => {
+    const bg = getBgColor('dark')
+    const colors = buildHighlightColors('dark')
+    expect(contrastRatio(colors.plain, bg)).toBeGreaterThanOrEqual(MIN_CODE_CONTRAST)
+    expect(contrastRatio(colors.comment, bg)).toBeGreaterThanOrEqual(MIN_CODE_CONTRAST)
+    expect(contrastRatio(colors.string, bg)).toBeGreaterThanOrEqual(MIN_CODE_CONTRAST)
+    expect(contrastRatio(colors.number, bg)).toBeGreaterThanOrEqual(MIN_CODE_CONTRAST)
+    expect(contrastRatio(colors.keyword, bg)).toBeGreaterThanOrEqual(MIN_CODE_CONTRAST)
+    expect(contrastRatio(colors.punct, bg)).toBeGreaterThanOrEqual(MIN_CODE_CONTRAST)
+  })
+
+  test('light: all highlighted token kinds clear the contrast floor', () => {
+    const bg = getBgColor('light')
+    const colors = buildHighlightColors('light')
+    expect(contrastRatio(colors.plain, bg)).toBeGreaterThanOrEqual(MIN_CODE_CONTRAST)
+    expect(contrastRatio(colors.comment, bg)).toBeGreaterThanOrEqual(MIN_CODE_CONTRAST)
+    expect(contrastRatio(colors.string, bg)).toBeGreaterThanOrEqual(MIN_CODE_CONTRAST)
+    expect(contrastRatio(colors.number, bg)).toBeGreaterThanOrEqual(MIN_CODE_CONTRAST)
+    expect(contrastRatio(colors.keyword, bg)).toBeGreaterThanOrEqual(MIN_CODE_CONTRAST)
+    expect(contrastRatio(colors.punct, bg)).toBeGreaterThanOrEqual(MIN_CODE_CONTRAST)
+  })
+
+  test('derived from the same palette as the editor', () => {
+    // The colours should come from the palette, not be hardcoded
+    const darkPalette = buildPalette(TOKENS_DARK)
+    const darkColors = buildHighlightColors('dark')
+    expect(darkColors.plain).toBe(darkPalette.fg)
+    expect(darkColors.comment).toBe(darkPalette.muted)
+    expect(darkColors.string).toBe(darkPalette.string)
+    expect(darkColors.number).toBe(darkPalette.number)
+    expect(darkColors.keyword).toBe(darkPalette.keyword)
+    expect(darkColors.punct).toBe(darkPalette.muted)
+
+    const lightPalette = buildPalette(TOKENS_LIGHT)
+    const lightColors = buildHighlightColors('light')
+    expect(lightColors.plain).toBe(lightPalette.fg)
+    expect(lightColors.comment).toBe(lightPalette.muted)
+    expect(lightColors.string).toBe(lightPalette.string)
+    expect(lightColors.number).toBe(lightPalette.number)
+    expect(lightColors.keyword).toBe(lightPalette.keyword)
+    expect(lightColors.punct).toBe(lightPalette.muted)
   })
 })

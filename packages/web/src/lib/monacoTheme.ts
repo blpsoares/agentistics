@@ -620,6 +620,41 @@ export function codeThemeName(attr: string | null): string {
   return attr === 'light' ? AGENTISTICS_THEME_NAME.light : AGENTISTICS_THEME_NAME.dark
 }
 
+/** Colours for syntax-highlighting views like `ArtifactDoc`'s CodeView, mapped from lexer token kinds. */
+export interface CodeHighlightColors {
+  plain: string
+  comment: string
+  string: string
+  number: string
+  keyword: string
+  punct: string
+}
+
+/**
+ * Build a color map for the code highlighter, using the derived palette.
+ * This ensures the reading view has the same contrast-compliant colours as the editor.
+ *
+ * Token mapping:
+ * - `plain` → `fg` (the main foreground colour)
+ * - `comment` → `muted` (prose the author wrote, lifted for readability)
+ * - `string` → `string` (string literals, lifted)
+ * - `number` → `number` (numeric literals, lifted)
+ * - `keyword` → `keyword` (keywords, lifted)
+ * - `punct` → `muted` (punctuation, lifted above code floor but dimmer than identifiers)
+ */
+export function buildHighlightColors(variant: CodeThemeVariant): CodeHighlightColors {
+  const tokens = variant === 'light' ? TOKENS_LIGHT : TOKENS_DARK
+  const palette = buildPalette(tokens)
+  return {
+    plain: palette.fg,
+    comment: palette.muted,
+    string: palette.string,
+    number: palette.number,
+    keyword: palette.keyword,
+    punct: palette.muted,
+  }
+}
+
 /**
  * The narrowest thing this module needs of Monaco: somewhere to define a theme. Structural on
  * purpose — it is what lets the registration be driven by a test without loading the editor.
