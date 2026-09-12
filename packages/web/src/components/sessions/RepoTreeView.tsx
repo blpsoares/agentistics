@@ -36,12 +36,19 @@
  * listing rather than one of its items. Depth rides on the item as `aria-level`, which `listitem`
  * supports and the `button` role does not; `aria-expanded` stays on the button, which does.
  *
+ * THE MARK BESIDE A NAME IS `fileIcon.tsx`'s, and this component decides nothing about it. It passes
+ * the row's own name and kind and sets only the colour the FALLBACK glyphs inherit — the brand orange
+ * for a folder, `--text-tertiary` for a file nothing recognises. A drawn mark carries the language's
+ * own hue and ignores that colour, which is why an unmapped file still looks exactly as it did before
+ * that module existed.
+ *
  * `onTreeChange` takes an UPDATER, never a finished `TreeNode`: the state lives in the parent
  * (`Studio`), which passes its `setTree` straight in, so every model call runs against the
  * LATEST tree rather than one a closure captured before an `await`.
  */
 
-import { AlertTriangle, ChevronDown, ChevronRight, File, Folder, FolderOpen, Loader } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, Folder, Loader } from 'lucide-react'
+import { FileIcon } from './fileIcon'
 import {
   applyChildren, applyError, flattenVisible, setLoading, toggleExpanded,
   type FlatRow, type TreeNode,
@@ -232,6 +239,11 @@ function Row({ row, indent, isMobile, onActivate }: {
 }) {
   const isDir = row.kind === 'dir'
   const glyph = 13
+  // The MARK is a notch bigger than the chevron beside it. It is the thing a reader scans a tree
+  // with, and a two-letter badge or a whale at 13px is a smudge; the chevron is a direction and has
+  // nothing to lose at 13. Verified at both widths — the row's height is set by its text and its
+  // 44px touch floor on a phone, so neither size moves it.
+  const mark = isMobile ? 17 : 15
   return (
     <button
       type="button"
@@ -258,10 +270,11 @@ function Row({ row, indent, isMobile, onActivate }: {
           ? <Loader size={glyph} className="ag-working-spin" />
           : row.expanded ? <ChevronDown size={glyph} /> : <ChevronRight size={glyph} />)}
       </span>
+      {/* The mark for this row, from `fileIcon.tsx`. The colour set here is the one the DELEGATED
+          glyphs inherit — a folder's orange, and `--text-tertiary` for a file nothing recognises;
+          every drawn mark carries the language's own hue and ignores it. */}
       <span style={{ flexShrink: 0, display: 'inline-flex', color: isDir ? 'var(--anthropic-orange)' : 'var(--text-tertiary)' }}>
-        {isDir
-          ? (row.expanded ? <FolderOpen size={glyph} /> : <Folder size={glyph} />)
-          : <File size={glyph} />}
+        <FileIcon name={row.name} kind={row.kind} expanded={row.expanded} size={mark} />
       </span>
       <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {row.name}

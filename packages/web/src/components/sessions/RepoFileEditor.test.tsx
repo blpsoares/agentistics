@@ -32,6 +32,7 @@ import {
   type SaveEvent, type SaveState,
 } from './RepoFileEditor'
 import type { ReadFileResult, WriteFileResult } from '../../lib/repoApi'
+import { AGENTISTICS_THEME_NAME } from '../../lib/monacoTheme'
 
 function noop() { /* these renders press nothing */ }
 
@@ -619,20 +620,23 @@ describe('saveButtonState', () => {
 // --- Monaco’s own decisions ----------------------------------------------------------------------
 
 describe('monacoThemeFor', () => {
-  test('reads the one place the app records its theme', () => {
-    expect(monacoThemeFor('light')).toBe('vs')
-    expect(monacoThemeFor('dark')).toBe('vs-dark')
+  test('reads the one place the app records its theme — and it is THIS product\u2019s theme', () => {
+    // Not `vs` / `vs-dark`: the editor wears `lib/monacoTheme.ts`, derived from this dashboard\u2019s
+    // own tokens. `monacoTheme.test.ts` owns the theme itself; what is asserted here is the wiring.
+    expect(monacoThemeFor('light')).toBe(AGENTISTICS_THEME_NAME.light)
+    expect(monacoThemeFor('dark')).toBe(AGENTISTICS_THEME_NAME.dark)
+    expect(monacoThemeFor('dark')).not.toBe('vs-dark')
   })
 
   test('an absent attribute is the theme this app ships with, not a light editor on a dark page', () => {
-    expect(monacoThemeFor(null)).toBe('vs-dark')
-    expect(monacoThemeFor('')).toBe('vs-dark')
+    expect(monacoThemeFor(null)).toBe(AGENTISTICS_THEME_NAME.dark)
+    expect(monacoThemeFor('')).toBe(AGENTISTICS_THEME_NAME.dark)
   })
 })
 
 describe('monacoOptions — the narrow-column decisions, pinned', () => {
-  const phone = monacoOptions({ isMobile: true, theme: 'vs-dark' })
-  const desk = monacoOptions({ isMobile: false, theme: 'vs' })
+  const phone = monacoOptions({ isMobile: true, theme: AGENTISTICS_THEME_NAME.dark })
+  const desk = monacoOptions({ isMobile: false, theme: AGENTISTICS_THEME_NAME.light })
 
   test('word wrap is on at EVERY width — this editor never gets a window’s width', () => {
     expect(phone.wordWrap).toBe('on')
@@ -657,8 +661,8 @@ describe('monacoOptions — the narrow-column decisions, pinned', () => {
   test('no minimap anywhere, and the theme is the one it was given', () => {
     expect(phone.minimap?.enabled).toBe(false)
     expect(desk.minimap?.enabled).toBe(false)
-    expect(desk.theme).toBe('vs')
-    expect(phone.theme).toBe('vs-dark')
+    expect(desk.theme).toBe(AGENTISTICS_THEME_NAME.light)
+    expect(phone.theme).toBe(AGENTISTICS_THEME_NAME.dark)
   })
 })
 

@@ -82,6 +82,7 @@ import {
 import { AlertTriangle, Check, File, Loader, RotateCcw, Save } from 'lucide-react'
 import type * as Monaco from 'monaco-editor'
 import { languageForPath } from '../../lib/monacoLanguage'
+import { codeThemeName, defineAgentisticsThemes } from '../../lib/monacoTheme'
 import {
   isWriteConflict, readRepoFile, writeRepoFile,
   type ReadFileResult, type RepoLang, type WriteFileResult,
@@ -499,9 +500,21 @@ export function saveButtonState(state: SaveState, lang: RepoLang, isMobile: bool
   }
 }
 
-/** `vs` or `vs-dark`, from the one place the app records the theme: `<html data-theme>`. */
-export function monacoThemeFor(attr: string | null): 'vs' | 'vs-dark' {
-  return attr === 'light' ? 'vs' : 'vs-dark'
+/**
+ * The editor's theme, from the one place the app records which one is on: `<html data-theme>`.
+ *
+ * It is `agentistics-dark` / `agentistics-light` — this product's OWN theme (`lib/monacoTheme.ts`),
+ * derived from `index.css`'s design tokens — and no longer Visual Studio's `vs` / `vs-dark`. A file
+ * read here and the same file read in `ArtifactDoc`'s code view or echoed in the terminal are the
+ * same three colours now instead of three products.
+ *
+ * **The themes must be DEFINED before the first `editor.create`.** Monaco answers an unknown theme
+ * name by falling back to plain `vs`, silently, so an editor created one tick early comes up in the
+ * light Visual Studio theme on a dark page. `defineAgentisticsThemes` is therefore called in the
+ * mount effect below, between `loadMonaco()` resolving and `create`.
+ */
+export function monacoThemeFor(attr: string | null): string {
+  return codeThemeName(attr)
 }
 
 /**
@@ -521,7 +534,7 @@ export function monacoThemeFor(attr: string | null): 'vs' | 'vs-dark' {
  *   real, and a read-only fallback would make the Studio a different feature on a phone —
  *   what a phone genuinely cannot do is Ctrl+S, which is why the Save button exists beside it.
  */
-export function monacoOptions({ isMobile, theme }: { isMobile: boolean; theme: 'vs' | 'vs-dark' }):
+export function monacoOptions({ isMobile, theme }: { isMobile: boolean; theme: string }):
 Monaco.editor.IEditorOptions & Monaco.editor.IGlobalEditorOptions {
   return {
     theme,
@@ -675,6 +688,9 @@ export function RepoFileEditor({
       .then(mod => mod.loadMonaco())
       .then((monaco: MonacoModule) => {
         if (disposed) return
+        // BEFORE `create`, always: a theme name monaco does not know yet resolves to plain `vs` and
+        // says nothing about it. Idempotent, so paying for it on every mount costs nothing.
+        defineAgentisticsThemes(monaco)
         model = monaco.editor.createModel(contentRef.current, languageForPath(path))
         editor = monaco.editor.create(host, { ...optionsRef.current, model })
         editorRef.current = editor

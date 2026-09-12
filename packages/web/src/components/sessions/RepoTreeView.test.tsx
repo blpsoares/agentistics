@@ -105,6 +105,35 @@ describe('the empty states', () => {
   })
 })
 
+// --- the marks -----------------------------------------------------------------------------------
+
+/**
+ * `fileIcon.test.tsx` owns which glyph a name earns; what is asserted here is that the tree actually
+ * ASKS — a row drawing the old generic page for every file would pass every test in that file.
+ */
+describe('each row wears its own mark', () => {
+  test('a file gets its language\u2019s mark and a folder keeps the brand orange', () => {
+    const html = render(applyChildren(makeRootNode(), '', [
+      { name: 'src', kind: 'dir' },
+      { name: 'index.ts', kind: 'file' },
+      { name: '.env', kind: 'file' },
+    ]))
+    // TypeScript blue, from `fileIcon.tsx`'s own HUE table, and the letters it draws.
+    expect(html).toContain('#3178c6')
+    expect(html).toContain('TS')
+    // `.env` is the key, in its own hue — the file whose icon matters most to spot.
+    expect(html).toContain('#d1a02a')
+    // The folder's colour is still the row's, which the delegated glyph inherits.
+    expect(html).toContain('var(--anthropic-orange)')
+  })
+
+  test('a file nothing recognises keeps the NEUTRAL glyph, and no language hue', () => {
+    const html = render(applyChildren(makeRootNode(), '', [{ name: 'data.xyz123', kind: 'file' }]))
+    expect(html).toContain('var(--text-tertiary)')
+    expect(html).not.toContain('#3178c6')
+  })
+})
+
 // --- the rows ------------------------------------------------------------------------------------
 
 describe('the rows it draws', () => {
