@@ -152,23 +152,11 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
           </p>
         </div>
 
-        {/* The toggle. Only rendered when there are two views to choose between — a segmented
-            control with one segment is a label pretending to be a control. */}
-        {chattable && (
-          <div role="tablist" style={{
-            display: 'flex', gap: 3, padding: 3, borderRadius: 10, flexShrink: 0,
-            background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-          }}>
-            <Segment
-              on={active === 'chat'} onClick={() => setView('chat')}
-              icon={<MessagesSquare size={14} />} label={pt ? 'Conversa' : 'Chat'}
-            />
-            <Segment
-              on={active === 'terminal'} onClick={() => setView('terminal')}
-              icon={<TerminalSquare size={14} />} label={pt ? 'Terminal' : 'Terminal'}
-            />
-          </div>
-        )}
+        {/* THE `Conversa | Terminal` TOGGLE IS GONE, and its absence is the design.
+            A session opens on its CONVERSATION — that is what a session is — and the terminals are
+            reached from the BAND at the foot of the panel, which names both of them. Two controls
+            for one decision, in two places, with different words ("Terminal" here, "Assistente"
+            there) was the ambiguity phase 1 set out to avoid and this header reintroduced. */}
 
         {/* The row's verbs. Every one of them, its label and whether it is enabled arrive already
             decided by `sessionActions` — the same answer the terminal cockpit resolves against. */}
@@ -246,6 +234,7 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
           sessionId={session.id}
           {...(session.cwd ? { cwd: session.cwd } : {})}
           {...(onOpenShellFullscreen ? { onOpenFullscreen: onOpenShellFullscreen } : {})}
+          {...(session.harness ? { harness: session.harness } : {})}
           lang={lang}
           theme={theme}
         />

@@ -139,3 +139,21 @@ describe('the refusal keeps its CODE, not only its sentence', () => {
     expect(s.reason).toBeNull()
   })
 })
+
+describe('switching target asks for what the new target needs', () => {
+  // MEASURED in the browser: the band was opened on the CLI pane (which needs no resolving), then
+  // switched to the shell — and nothing happened. The resolve effect keys on `attempt`, which a
+  // target switch does not move, so the request that had been skipped while the CLI was showing was
+  // never made. `retry` is the action that says "ask again", and the switch is a person asking.
+  test('a band left WANTING is still wanting after the switch', () => {
+    const opened = shellBandReducer(INITIAL_SHELL_BAND, { type: 'openBand' })
+    expect(shellResolveWanted(opened)).toBe(true)
+  })
+
+  test('and a retry advances the attempt, which is what re-runs the effect', () => {
+    const opened = shellBandReducer(INITIAL_SHELL_BAND, { type: 'openBand' })
+    const again = shellBandReducer(opened, { type: 'retry' })
+    expect(again.attempt).toBe(opened.attempt + 1)
+    expect(shellResolveWanted(again)).toBe(true)
+  })
+})

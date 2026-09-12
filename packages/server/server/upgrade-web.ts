@@ -77,7 +77,13 @@ export async function handleUpgradeRoute(
 ): Promise<Response | null> {
   if (url.pathname !== '/api/upgrade' || req.method !== 'POST') return null
 
-  const info = await getVersionInfo().catch(() => null)
+  // FORCE. `getVersionInfo` caches for hours, and somebody pressing this button is acting on an
+  // update they are looking at RIGHT NOW — a cached "you are up to date" refuses the press with a
+  // sentence that contradicts the modal above it. Measured: a machine on 2.31.0 with 2.32.0
+  // published answered `up-to-date` from a cache minted before the release existed. It is one
+  // round trip per press, on a press, which is exactly what `agentop upgrade` already does for the
+  // same reason (`force live GitHub release check during manual upgrade`).
+  const info = await getVersionInfo({ force: true }).catch(() => null)
   const decision = upgradeFromUiDecision({
     capable: CAPS.localShell,
     central: TEAM_CENTRAL,

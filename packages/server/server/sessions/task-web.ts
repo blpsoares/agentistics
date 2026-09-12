@@ -400,6 +400,16 @@ export async function patchSubtask(subtaskId: string, patch: {
   notes?: string
   /** Sanitized against this subtask's OWN siblings — see `sanitizeSubtaskBlockedBy`. */
   blockedBy?: string[]
+  /**
+   * The group this subtask shares its rollup bucket with (`Subtask.groupId`, spec
+   * 2026-09-11-alm-session-linking-ux.md §B.5). **`null` CLEARS it** — deliberately not the empty
+   * string the free-text columns above use: a group id is an identity, not prose, so removing it
+   * is a distinct act rather than "set it to nothing". An empty or whitespace-only string is read
+   * as the same clear rather than written through, because `subtaskViews`'s bucket key is
+   * `groupId ?? id` — `''` passes that `??` and would silently merge every subtask carrying it
+   * into one bucket, which is the cost-multiplying bug the group key exists to avoid.
+   */
+  groupId?: string | null
 }): Promise<{ ok: true } | { ok: false; message: 'no_such_subtask' | 'done_needs_session' }> {
   const w = await loadTaskWorld()
   const found = w.book.subtasks.find(t => t.id === subtaskId)
@@ -426,6 +436,11 @@ export async function patchSubtask(subtaskId: string, patch: {
         subtaskId: found.id, taskId: found.taskId, ids: patch.blockedBy, siblings: w.book.subtasks,
       }),
     } : {}),
+    // `undefined` is what the store writes as "absent": `JSON.stringify` drops the key, so the
+    // subtask reads back as its own group of one — the pre-group behaviour, exactly.
+    ...(patch.groupId !== undefined
+      ? { groupId: patch.groupId?.trim() ? patch.groupId.trim() : undefined }
+      : {}),
     updatedAt: new Date().toISOString(),
   })
   return { ok: true }
@@ -602,8 +617,9 @@ export async function attachSession(
   const row = w.rows.find(r => r.id === sessionId)
   if (!row) return { ok: false, reason: 'no_such_session' }
 
-  // A DELIVERY DOES NOT TAKE SESSIONS: without a subtask this refuses, and the surfaces offer
-  // "create one and move it here" rather than filing at the wrong level.
+  // Direct filing under the task is allowed too — `o.subtaskId` is optional. `planAttach` decides
+  // the pair either way, which is what makes this a MOVE rather than an add: filing under a
+  // subtask replaces a direct filing and filing under the task clears the subtask.
   const plan = planAttach({
     target: o.subtaskId ? { kind: 'subtask', id: o.subtaskId } : { kind: 'task', id: task.id },
     taskIds: w.book.tasks.map(t => t.id),
