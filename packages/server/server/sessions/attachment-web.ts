@@ -21,47 +21,122 @@ import { join, resolve, sep } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { AGENTISTICS_DATA_DIR } from '../config'
 import { storedAttachmentName } from './attachment-name'
-import type { AttachmentSend } from '@agentistics/core'
+import { splitImageAttachments } from '@agentistics/core'
+import type { AttachmentMessage, AttachmentSend } from '@agentistics/core'
 
 /** Where uploads land. Inside agentop's own directory, never beside the user's project. */
 export const ATTACHMENT_DIR = join(AGENTISTICS_DATA_DIR, 'attachments')
 
 /**
- * What was sent, and into which session — the record that lets a `[Image #4]` marker find its file.
+ * What was sent, and where to — the record that lets a `[Image #4]` marker find its file.
  *
  * A harness that is mid-turn queues an arriving message and substitutes markers for its images, so
  * the PATH that normally survives into the transcript is gone and the chat can only draw a chip.
  * The file is still here; the link was what was missing. The RULE that reads it back lives beside the marker
  * parsing it serves, in the web's `attachmentPreview.ts` — one file owns markers end to end.
  *
- * APPEND-ONLY JSONL, one line per file. A line that cannot be parsed is skipped rather than
- * discarding the log: this is a convenience for drawing a thumbnail, and no part of the product may
- * fail because of it.
+ * APPEND-ONLY JSONL. TWO KINDS OF LINE, and the second one is the one that answers the question:
+ *
+ * - `AttachmentSend` — one UPLOAD, stamped when the file was written. That is the moment a person
+ *   attached it, not the moment they sent it, so a turn's markers could only ever be paired with it
+ *   by guessing a time window, and the guess was measurably wrong: seven uploads recorded in the
+ *   hour before a message carrying four markers, three of them belonging to a message forty minutes
+ *   earlier. Kept for the records already on disk and for uploads no message ever claimed.
+ * - `AttachmentMessage` — one MESSAGE, stamped when it was handed to the session, carrying the very
+ *   paths it named. No inference left: a marker is paired against the files of the message it came
+ *   in, or against nothing.
+ *
+ * A line that cannot be parsed — or that is of the kind a reader does not know — is SKIPPED rather
+ * than discarding the log: this is a convenience for drawing a thumbnail, and no part of the
+ * product may fail because of it. That is also what makes the second kind safe to add to a file an
+ * older build is still reading: it has no `path`, so that build ignores it.
  */
 export const ATTACHMENT_LOG = join(AGENTISTICS_DATA_DIR, 'attachment-sends.jsonl')
 
-/** Records one sent file. Never throws: a thumbnail is not worth failing an upload over. */
-export async function recordAttachmentSend(sessionId: string, path: string): Promise<void> {
-  if (sessionId === '') return
-  const line = JSON.stringify({ sessionId, atMs: Date.now(), path } satisfies AttachmentSend)
+async function appendLog(line: string): Promise<void> {
   await mkdir(AGENTISTICS_DATA_DIR, { recursive: true }).catch(() => {})
   await appendFile(ATTACHMENT_LOG, `${line}\n`, { mode: 0o600 }).catch(() => {})
 }
 
-/** Every send recorded for one session. Unreadable lines are skipped, never fatal. */
-export async function readAttachmentSends(sessionId: string): Promise<AttachmentSend[]> {
-  const raw = await readFile(ATTACHMENT_LOG, 'utf-8').catch(() => '')
-  const out: AttachmentSend[] = []
+/** Records one stored file. Never throws: a thumbnail is not worth failing an upload over. */
+export async function recordAttachmentSend(sessionId: string, path: string): Promise<void> {
+  if (sessionId === '') return
+  await appendLog(JSON.stringify({ sessionId, atMs: Date.now(), path } satisfies AttachmentSend))
+}
+
+/**
+ * What ONE delivered message carried — PURE, and the whole correction.
+ *
+ * The text is what agentop is typing into the pane, so the attachment lines in it ARE the message's
+ * attachments; `splitImageAttachments` is the same rule the browser reads them back with, shared
+ * through `@agentistics/core` rather than written twice.
+ *
+ * `paths` holds only what this machine STORED and can serve back (`resolveAttachmentRead`), because
+ * a path we cannot serve would resolve a marker to a broken image — worse than the chip it
+ * replaced. `images` counts them ALL, so a message this record cannot account for exactly is
+ * visibly short rather than silently pairing the markers it can name against the wrong files.
+ *
+ * `null` when the message named no image at all: an ordinary message writes no line.
+ */
+export function attachmentMessageOf(
+  conversationId: string,
+  atMs: number,
+  text: string,
+): AttachmentMessage | null {
+  if (conversationId === '') return null
+  const { images } = splitImageAttachments(text)
+  if (images.length === 0) return null
+  const paths = images.filter(p => resolveAttachmentRead(p) !== null)
+  return { conversationId, atMs, paths, images: images.length }
+}
+
+/** Records one delivered message's attachments. Never throws, for the reason above. */
+export async function recordAttachmentMessage(msg: AttachmentMessage): Promise<void> {
+  await appendLog(JSON.stringify(msg satisfies AttachmentMessage))
+}
+
+/**
+ * Everything recorded for one conversation, in ONE pass over the file.
+ *
+ * The two kinds are keyed differently ON PURPOSE. An upload names the managed SESSION it was
+ * attached to, because that is all the upload route knows; a message names the CONVERSATION,
+ * because a reopen mints a new managed row while the harness's image numbering runs on. Asking for
+ * both at once is what keeps that a one-line difference rather than two reads of the same file.
+ */
+export async function readAttachmentLog(
+  key: { sessionId: string; conversationId: string },
+): Promise<{ sends: AttachmentSend[]; messages: AttachmentMessage[] }> {
+  return parseAttachmentLog(await readFile(ATTACHMENT_LOG, 'utf-8').catch(() => ''), key)
+}
+
+/** The parse behind `readAttachmentLog` — PURE, so the keying is testable without a data dir. */
+export function parseAttachmentLog(
+  raw: string,
+  key: { sessionId: string; conversationId: string },
+): { sends: AttachmentSend[]; messages: AttachmentMessage[] } {
+  const sends: AttachmentSend[] = []
+  const messages: AttachmentMessage[] = []
   for (const line of raw.split('\n')) {
     if (line.trim() === '') continue
     try {
-      const d = JSON.parse(line) as Partial<AttachmentSend>
-      if (d.sessionId === sessionId && typeof d.atMs === 'number' && typeof d.path === 'string') {
-        out.push({ sessionId: d.sessionId, atMs: d.atMs, path: d.path })
+      const d = JSON.parse(line) as Partial<AttachmentSend & AttachmentMessage>
+      if (typeof d.atMs !== 'number') continue
+      if (d.sessionId === key.sessionId && d.sessionId !== '' && typeof d.path === 'string') {
+        sends.push({ sessionId: d.sessionId, atMs: d.atMs, path: d.path })
+      } else if (
+        d.conversationId === key.conversationId && d.conversationId !== ''
+        && Array.isArray(d.paths) && typeof d.images === 'number'
+      ) {
+        messages.push({
+          conversationId: d.conversationId,
+          atMs: d.atMs,
+          paths: d.paths.filter((p): p is string => typeof p === 'string'),
+          images: d.images,
+        })
       }
     } catch { /* one bad line is not a reason to lose the rest */ }
   }
-  return out
+  return { sends, messages }
 }
 
 /**

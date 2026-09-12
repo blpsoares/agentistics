@@ -32,7 +32,7 @@ import { openArtifacts } from '../../lib/artifactsStore'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { splitSlashLine } from '../../lib/slashLine'
 import { resolveMarkerPaths, splitImageAttachments, splitImageMarkers } from '../../lib/attachmentPreview'
-import type { AttachmentSend } from '@agentistics/core'
+import type { AttachmentMessage, AttachmentSend } from '@agentistics/core'
 import { copyText } from '../../lib/clipboard'
 import { echoStatus } from '../../lib/echoStatus'
 import { messageTime } from '../../lib/messageTime'
@@ -87,6 +87,13 @@ export interface ChatBubbleProps {
   turn: ChatTurn
   /** What agentop typed into this session's pane, so a `[Image #N]` marker can find its file. */
   attachmentSends?: readonly AttachmentSend[]
+  /** What each delivered message carried, for this conversation — see `AttachmentMessage`. */
+  attachmentMessages?: readonly AttachmentMessage[]
+  /**
+   * When the previous PERSON's turn was recorded (`previousPersonTurnMs`) — the lower bound of the
+   * messages this turn's markers may be made of. Only the list knows it; a bubble sees one turn.
+   */
+  markerSinceMs?: number | null
   lang: 'pt' | 'en'
   /** Which assistant said it, for the mark beside an assistant turn. */
   harness: string
@@ -215,7 +222,7 @@ function SystemNote({ note, noteRef, pt }: { note: string; noteRef?: string; pt:
   )
 }
 
-export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provisional, awaiting, awaitingWorking, awaitingSinceMs, onReply, onReplyExcerpt, anchorId, attachmentSends }: ChatBubbleProps) {
+export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provisional, awaiting, awaitingWorking, awaitingSinceMs, onReply, onReplyExcerpt, anchorId, attachmentSends, attachmentMessages, markerSinceMs }: ChatBubbleProps) {
   const isMobile = useIsMobile()
   const pt = lang === 'pt'
   const mine = turn.role === 'user'
@@ -335,6 +342,8 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
     markers,
     turnAtMs: turn.at ? Date.parse(turn.at) || 0 : 0,
     sends: attachmentSends ?? [],
+    ...(attachmentMessages ? { messages: attachmentMessages } : {}),
+    ...(markerSinceMs !== undefined ? { sinceMs: markerSinceMs } : {}),
   })
   const shownImages = markerImages ? [...images, ...markerImages] : images
 

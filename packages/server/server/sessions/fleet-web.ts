@@ -21,6 +21,7 @@ import type { StartHost } from '../cli-start'
 import type { CliLang } from '../cli-lang'
 import { recordPrompt } from './pending-prompts'
 import { conversationOfRow } from './row-conversation'
+import { attachmentMessageOf, recordAttachmentMessage } from './attachment-web'
 import { controlStrings } from '@agentistics/tui/control/i18n'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import type { ProjectSearchResult } from '@agentistics/tui/control'
@@ -230,6 +231,24 @@ export async function readFleet(lang: CliLang, view?: FleetViewRequest): Promise
 }
 
 /**
+ * Record what a delivered ANSWER carried, keyed by its conversation — off the reply path.
+ *
+ * The prompt case does the same inside its own deferred block, which already resolves the row for
+ * the pending queue. An answer has no queue, so it gets this; both end in `attachmentMessageOf`.
+ * Deferred for the reason that block states: the row lookup is a fleet read, and the person is
+ * watching the send.
+ */
+function noteDeliveredAttachments(host: StartHost, id: string, atMs: number, text: string): void {
+  void (async () => {
+    try {
+      const row = (await host.sessions?.())?.sessions.find(r => r.id === id || r.conversationId === id)
+      const carried = attachmentMessageOf((row ? conversationOfRow(row) : null) ?? '', atMs, text)
+      if (carried) await recordAttachmentMessage(carried)
+    } catch { /* the answer went; a thumbnail is not worth failing it over */ }
+  })()
+}
+
+/**
  * Perform one verb on one row — through the host, so every refusal the cockpit makes is made here.
  *
  * `resume` is the exception in shape rather than in principle: the host's reopen takes the
@@ -259,13 +278,24 @@ export async function runFleetAction(
     : undefined
 
   switch (req.action) {
-    case 'approve':
+    case 'approve': {
       if (!host.answerSession) return { ok: false, message: s.sessionsNoHost }
+      // Taken BEFORE the answer is typed — see `AttachmentMessage.atMs`.
+      const sentAtMs = Date.now()
       // `text` rides along for the FREE-TEXT option, where picking is only the first of three
       // steps — see `answerSession`. Every other option ignores it.
-      return await host.answerSession(req.id, req.choice, text)
+      const out = await host.answerSession(req.id, req.choice, text)
+      // The composer's attachments ride an answer too (see `SessionChat`'s `send`), so an answer
+      // that carried images is recorded exactly like a prompt that did.
+      if (out.ok && text !== '') noteDeliveredAttachments(host, req.id, sentAtMs, text)
+      return out
+    }
     case 'prompt': {
       if (!host.promptSession) return { ok: false, message: s.sessionsNoHost }
+      // Taken BEFORE the message is typed, so the record can never be stamped later than the turn
+      // the harness writes for it — the resolver refuses a record from after the turn it is asked
+      // about, and a submit that waits on the pane takes hundreds of milliseconds.
+      const sentAtMs = Date.now()
       const out = await host.promptSession(req.id, text)
       // RECORDED ONLY ON A CONFIRMED DELIVERY, and recorded HERE rather than in the browser: a
       // queue held by the tab that sent it is a queue no other device can see, which is the whole
@@ -287,6 +317,10 @@ export async function runFleetAction(
             const row = (await host.sessions?.())?.sessions.find(r => r.id === req.id || r.conversationId === req.id)
             const conv = row ? conversationOfRow(row) : ''
             if (conv) recordPrompt(conv, text)
+            // What this message CARRIED, off the text that was just typed — see
+            // `attachmentMessageOf`. The same row lookup serves both, so it costs nothing more.
+            const carried = attachmentMessageOf(conv ?? '', sentAtMs, text)
+            if (carried) await recordAttachmentMessage(carried)
           } catch { /* the message went; the queue is a view of it, not the record */ }
         })()
       }
