@@ -6,21 +6,27 @@
  *
  * 1. **No CDN.** Every worker below is a Vite `?worker` import, so it is bundled out of
  *    `node_modules` and served from this origin like every other asset.
- * 2. **Lazy.** Monaco is reached ONLY through the dynamic `import('monaco-editor')` in
+ * 2. **Lazy.** Monaco is reached ONLY through the dynamic `import('./monacoEntry')` in
  *    `loadMonaco()`, so it lands in its own chunk and a user who never opens the Repository tab
  *    never downloads it. **This module must itself only ever be imported dynamically**: Vite hoists
  *    the `?worker` wrappers below into the Monaco chunk, so a STATIC `import { loadMonaco }` would
  *    drag ~4.4 MB into whatever chunk wrote it.
  *
- * **The import specifiers are `monaco-editor/<path-under-esm/vs>`, NOT `monaco-editor/esm/vs/...`.**
- * monaco-editor 0.56 ships an `exports` map whose subpath pattern is `"./*": "./esm/vs/*.js"`, so
- * the `esm/vs/` prefix every pre-0.5x recipe still uses now resolves to `esm/vs/esm/vs/...` and
- * fails outright. Verified against the installed package.
+ * **The editor is composed in `monacoEntry.ts`, not imported from the `monaco-editor` barrel.** Read
+ * that file's header for why: the barrel's TypeScript LANGUAGE SERVICE emits a 6.9 MB
+ * `ts.worker.js` at build time whether a browser ever asks for it or not, and this feature has the
+ * service switched off by design. Everything the barrel registers except that one language service
+ * is registered there, grammars included — `.ts` and `.js` keep their syntax highlighting.
+ *
+ * **The import specifiers there are `monaco-editor/<path-under-esm/vs>`, NOT
+ * `monaco-editor/esm/vs/...`.** monaco-editor 0.56 ships an `exports` map whose subpath pattern is
+ * `"./*": "./esm/vs/*.js"`, so the `esm/vs/` prefix every pre-0.5x recipe still uses now resolves
+ * to `esm/vs/esm/vs/...` and fails outright. Verified against the installed package.
  *
  * **WHY THIS FILE STILL HAS TO EXIST ON 0.56, and why it must answer EVERY label.** Measured
  * against a real production build, not assumed:
  *
- * - The four LANGUAGE workers (json, css, html, typescript) carry their own
+ * - The LANGUAGE workers (json, css, html) carry their own
  *   `createWorker: () => new Worker(new URL('./x.worker.js', import.meta.url), { type: 'module' })`
  *   inside monaco's own `workerManager.js`, which Vite recognises and self-hosts unaided. They are
  *   emitted into `dist/assets/` whether this file names them or not.
@@ -31,32 +37,39 @@
  *   cannot resolve against a `data:` URL, so without the `EditorWorker` below the base worker is
  *   dead on arrival — this file's reason for existing, now demonstrated rather than believed.
  * - And `MonacoEnvironment.getWorker` is consulted BEFORE a descriptor's own `createWorker`. So
- *   defining it at all takes over for EVERY label, including the four that worked by themselves:
+ *   defining it at all takes over for EVERY label, including the three that worked by themselves:
  *   a label `workerFor` declines is a language broken by this file, not one left alone. That is why
- *   all five are wired even though only one of them is strictly ours.
- *
- * **TypeScript is wired but switched OFF, and those are two different decisions.** The 6.9 MB
- * `ts.worker` asset is emitted by the rule above no matter what this file does, so declining the
- * label would cost the same bytes and buy a broken language. What the design spec defers is the
- * FEATURE — single-file type-checking reports confident errors for every import it cannot resolve —
- * so `disableTypeScriptServices` unregisters the providers, which is also what stops that worker
- * ever being fetched at runtime. TS/JS keep their syntax highlighting: that comes from the Monarch
- * grammar in `languages/definitions/typescript`, not from the worker. Re-enabling later is one call
- * removed from `disableTypeScriptServices`, with no build change at all.
+ *   all four are wired even though only one of them is strictly ours.
  */
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker'
 import JsonWorker from 'monaco-editor/languages/features/json/json.worker?worker'
 import CssWorker from 'monaco-editor/languages/features/css/css.worker?worker'
 import HtmlWorker from 'monaco-editor/languages/features/html/html.worker?worker'
-import TsWorker from 'monaco-editor/languages/features/typescript/ts.worker?worker'
 
+/**
+ * **`loadMonaco()`'s PUBLIC TYPE IS THE BARREL'S, AND THAT IS DELIBERATE.** `RepoFileEditor.tsx`
+ * annotates the resolved value as `typeof import('monaco-editor')` and this contract may not change
+ * under it. What actually resolves is `monacoEntry`, which is that module minus two members —
+ * `typescript` (the language service this change removes on purpose) and `lsp` (unreachable through
+ * the package's `exports` map). Both are therefore `undefined` at RUNTIME while the type says
+ * otherwise: the single narrow lie in this file, stated here rather than discovered.
+ *
+ * Nothing in the app touches either member — there is no other reader, which is what makes the
+ * trade safe today. **If you reach for `monaco.typescript`, it is not there**: re-register the
+ * feature in `monacoEntry.ts` (and with it 6.9 MB) rather than trusting this type.
+ */
 type Monaco = typeof import('monaco-editor')
 
 /**
  * The labels Monaco actually asks for, read off the package rather than guessed:
  * `editorWorkerService` from `editor/browser/services/editorWorkerService.js`, and each language
  * feature's own `workerManager.js`, which passes the LANGUAGE ID — so one worker answers to several
- * labels (css/less/scss, html/handlebars/razor, typescript/javascript).
+ * labels (css/less/scss, html/handlebars/razor).
+ *
+ * **`typescript` and `javascript` are deliberately NOT here**, and they cannot be asked for: their
+ * language service is not registered at all (see `monacoEntry.ts`), so nothing constructs a worker
+ * manager for those labels. If one ever appears in the thrown error below, the TypeScript feature
+ * has been imported again and its 6.9 MB worker is back in the bundle.
  */
 function workerFor(label: string): Worker {
   switch (label) {
@@ -70,9 +83,6 @@ function workerFor(label: string): Worker {
     case 'handlebars':
     case 'razor':
       return new HtmlWorker()
-    case 'typescript':
-    case 'javascript':
-      return new TsWorker()
     case 'editorWorkerService':
       return new EditorWorker()
     default:
@@ -88,49 +98,31 @@ function workerFor(label: string): Worker {
 }
 
 type MonacoEnvironmentHost = {
-  MonacoEnvironment?: { getWorker(workerId: string, label: string): Worker }
+  MonacoEnvironment?: {
+    getWorker?(workerId: string, label: string): Worker
+    [key: string]: unknown
+  }
 }
 
 /**
- * Must be set BEFORE the first editor is created. Idempotent, and it never overwrites an existing
- * `MonacoEnvironment`: silently replacing a global somebody else installed is the kind of write
- * that is found months later.
+ * Must be set BEFORE the first editor is created. Idempotent.
+ *
+ * **IT MERGES, AND THE GUARD IS ON `getWorker` ALONE.** `MonacoEnvironment` is not one setting, it
+ * is a bag of several: monaco reads `globalThis.MonacoEnvironment?.createTrustedTypesPolicy`
+ * (`internal/common/workers.js`) and `?.globalAPI` (`editor/editor.api.js`) independently of
+ * `getWorker`. Testing the whole OBJECT therefore disarmed us for the exact deployment most likely
+ * to have one: a CSP-hardened host that sets only `createTrustedTypesPolicy`. We would then leave
+ * `getWorker` unset, and the base editor worker — which has no `createWorker` of its own, only an
+ * inlined `data:` URL that cannot resolve its relative imports — would be dead on arrival. So an
+ * existing object is EXTENDED, its own keys untouched, and only a `getWorker` somebody else
+ * installed is left alone.
  */
 function armWorkers() {
   const host = self as unknown as MonacoEnvironmentHost
-  if (host.MonacoEnvironment) return
-  host.MonacoEnvironment = { getWorker: (_workerId, label) => workerFor(label) }
-}
-
-/**
- * Turn off every TypeScript/JavaScript language feature. With `modeConfiguration` all-false,
- * `tsMode.setupMode` registers no providers at all, so the worker is never even requested — the
- * diagnostics options beside it are belt-and-braces for anything that reads them directly.
- */
-function disableTypeScriptServices(monaco: Monaco) {
-  const off = {
-    completionItems: false,
-    hovers: false,
-    documentSymbols: false,
-    definitions: false,
-    references: false,
-    documentHighlights: false,
-    rename: false,
-    diagnostics: false,
-    documentRangeFormattingEdits: false,
-    signatureHelp: false,
-    onTypeFormattingEdits: false,
-    codeActions: false,
-    inlayHints: false,
-  }
-  const noDiagnostics = {
-    noSemanticValidation: true,
-    noSyntaxValidation: true,
-    noSuggestionDiagnostics: true,
-  }
-  for (const defaults of [monaco.typescript.typescriptDefaults, monaco.typescript.javascriptDefaults]) {
-    defaults.setModeConfiguration(off)
-    defaults.setDiagnosticsOptions(noDiagnostics)
+  if (host.MonacoEnvironment?.getWorker) return
+  host.MonacoEnvironment = {
+    ...host.MonacoEnvironment,
+    getWorker: (_workerId: string, label: string) => workerFor(label),
   }
 }
 
@@ -140,16 +132,23 @@ let pending: Promise<Monaco> | null = null
  * Load Monaco, once. Call before the first `monaco.editor.create`.
  *
  * The PROMISE is memoized rather than the module: a second editor mounting while the first chunk is
- * still in flight must join that fetch rather than start a second one, and `disableTypeScript-
- * Services` must run exactly once, before any model exists — `languages.onLanguage('typescript')`
- * fires on the first TS model and reads `modeConfiguration` as it stands at that moment.
+ * still in flight must join that fetch rather than start a second one.
+ *
+ * **A FAILURE IS NOT MEMOIZED.** A rejected promise left in `pending` poisons `loadMonaco()` for the
+ * life of the page, and the page has exactly one other line of defence: `main.tsx`'s
+ * `vite:preloadError` handler reloads once and then explicitly declines to reload again. So the
+ * SECOND failed chunk fetch used to land here permanently — the editor could never open again
+ * without the user reloading by hand, with nothing on screen saying so. Clearing `pending` costs a
+ * retry on the next open and is the only thing that makes that recoverable.
  */
 export function loadMonaco(): Promise<Monaco> {
   if (pending) return pending
   armWorkers()
-  pending = import('monaco-editor').then(monaco => {
-    disableTypeScriptServices(monaco)
-    return monaco
+  // The cast is the one documented on `Monaco` above: a real `monacoEntry` presented under the
+  // barrel's type, because that is the contract `RepoFileEditor.tsx` already depends on.
+  pending = (import('./monacoEntry') as unknown as Promise<Monaco>).catch(e => {
+    pending = null
+    throw e
   })
   return pending
 }
