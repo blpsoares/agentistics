@@ -190,6 +190,24 @@ export interface AppContext {
    *  flag and deliberately so: chat was on before it had a switch, and this never was. */
   shellEnabled?: boolean
 
+  /** What `/api/fleet/tree*` will ACTUALLY answer: `CAPS.localShell` AND the user's own switch,
+   *  resolved by the server (`sessions/editor-gate.ts`) and reported by `GET /api/team/session`.
+   *  The UI may NEVER re-derive it from `capabilities.localShell` + a preference — the resolved
+   *  flag is the one answer, exactly as `shellEnabled` is for the shell. Undefined reads as OFF,
+   *  for that same reason: a read/write file editor is opt-in and absence is never consent. It also
+   *  has a CENTRAL subtracted from it before it is published (`lib/editorGate.ts`) — the whole
+   *  `/api/fleet` prefix is refused there, and a consumer must not have to know that. When this is
+   *  not `true` the Studio is ABSENT, never a greyed-out entry. */
+  editorEnabled?: boolean
+
+  /** The user's own autosave switch INSIDE the repository explorer's editor. A convenience, not a
+   *  gate: it is a plain preference read from `/api/preferences` like `chatSoundEnabled`, and it
+   *  is deliberately NOT coupled to `editorEnabled` — that one is a security gate riding a
+   *  capability, this one only widens the window in which a save can race an agent's own write.
+   *  Absent reads as OFF for both, but only one of them is a capability's business. */
+  editorAutosave: boolean
+  setEditorAutosave: (v: boolean) => void
+
   /** The tag definitions `useDerivedStats` resolves a tag filter against.
    *
    *  Exposed because a page that derives a SECOND scope (the compare page's B side) must pass the

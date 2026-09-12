@@ -93,6 +93,17 @@ export interface Preferences {
    *  only ever narrow `CAPS.localShell`; see sessions/shell-gate.ts. Separate from `chatEnabled`
    *  because they are different powers: the chat runs a named assistant CLI, this runs anything. */
   shellEnabled?: boolean
+  /** Opt-in for the repository explorer's read+write routes (`/api/fleet/tree*`). Absent reads as
+   *  OFF, and it can only ever narrow `CAPS.localShell` — the same capability the utility shell
+   *  rides; see `sessions/editor-gate.ts`. Separate from `shellEnabled`: wanting a shell is not
+   *  the same ask as wanting a file editor. */
+  editorEnabled?: boolean
+  /** Opt-in autosave inside the repository explorer's editor. Absent reads as OFF — autosave adds
+   *  no real performance cost but does raise the window in which this editor's write could race
+   *  an agent's own write to the same file, so a person opts in deliberately. Meaningless while
+   *  `editorEnabled` is off; not itself security-gated because it can only ever narrow what is
+   *  already gated by `editorEnabled`. */
+  editorAutosave?: boolean
   /** true once the user dismissed the install prompt with "don't show again".
    *  Persisted server-side (not localStorage) so it survives incognito windows. */
   installDismissed?: boolean

@@ -17,9 +17,9 @@
  * a session's state by one poll interval — which is a bug people report as flicker.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
-import { ChevronLeft, FileText, MessagesSquare, Plus, TerminalSquare } from 'lucide-react'
+import { ChevronLeft, FileText, FolderTree, MessagesSquare, Plus, TerminalSquare } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import { useFleet, useFleetIndex, type FleetActionId } from '../lib/fleet'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -128,6 +128,27 @@ export default function SessionsPage() {
   const dedicatedTerminal = useLocation().pathname.endsWith('/terminal')
   const dedicatedPane = readTerminalPane(useSearchParams()[0].get('pane'))
   const shellEnabled = ctx.shellEnabled === true
+  /**
+   * The repository explorer's two switches, both already resolved upstream.
+   *
+   * `editorEnabled` is the server's own answer — the capability AND the user's switch, combined by
+   * `sessions/editor-gate.ts` and reported on `GET /api/team/session`. It is never re-derived here
+   * from `capabilities.localShell` plus a preference, and when it is not `true` the Studio is
+   * ABSENT rather than an entry that refuses. `editorAutosave` is a plain preference, loaded with
+   * the rest in `App.tsx`; absent reads as OFF for both.
+   *
+   * **THE CENTRAL TERM IS ALREADY IN IT, AND IS NOT RE-APPLIED HERE.** The whole `/api/fleet`
+   * prefix is refused on a central, so every request the Studio makes is refused there — while
+   * `editor-gate.ts` carries no central term at all, so a central on a `local` profile with the
+   * preference on reports `true`. That subtraction happens where the value is PUBLISHED
+   * (`lib/editorGate.ts`, spent in `App.tsx`'s `appCtx`), which is what closes every consumer at
+   * once: this page's two entries, the desktop button beside them, and the `editorEnabled` prop
+   * `ArtifactsAside` gates its strip entry and its Studio layer on — that component has no notion of
+   * a central and must not grow one. Re-subtracting it here would be harmless arithmetic and a
+   * harmful statement: that the published value is not to be trusted.
+   */
+  const editorEnabled = ctx.editorEnabled === true
+  const editorAutosave = ctx.editorAutosave
 
   /**
    * WHERE A REOPEN LANDS — one place, for all three controls on this page that can perform one.
@@ -254,9 +275,18 @@ export default function SessionsPage() {
   const [artifactsUnavailable, setArtifactsUnavailable] = useState<string | undefined>(undefined)
   /** The conversation behind these lists is the END of a longer one — see `chat-web.ts`'s `older`. */
   const [artifactsOlder, setArtifactsOlder] = useState<string | undefined>(undefined)
-  const [artifactsUnlisted, setArtifactsUnlisted] = useState(false)
   /** The conversation's turns, for the LIVE tab — the same ones the chat renders. */
   const [artifactTurns, setArtifactTurns] = useState<readonly LiveTurn[]>([])
+  /**
+   * The session wrote through commands whose paths cannot be read AT ALL, so those files are in no
+   * count anywhere.
+   *
+   * `SessionChat` has always computed it (`hasUnlistedWrites`) and for one release nothing read it:
+   * its two surfaces went with the Files tab, and a computed-and-discarded honesty flag is worse
+   * than either keeping it or deleting the producer. Re-homed beside the aside's header count, which
+   * is the thing it qualifies — see `artifactShortfall`.
+   */
+  const [artifactsUnlisted, setArtifactsUnlisted] = useState(false)
 
   /**
    * WHICH of the recorded paths are still readable files with content — the server's answer, because
@@ -268,19 +298,29 @@ export default function SessionsPage() {
    */
   const [onDisk, setOnDisk] = useState<Map<string, { bytes: number; scope: 'project' | 'temp' }>>(new Map())
   /**
-   * Already-localized: files this session wrote OUTSIDE its own folder, which the list cannot offer.
+   * The route's `outside` sentence, already localized and carrying a COUNT rather than the paths.
    *
-   * Reported as the panel missing a file the session had just written. It had not missed it — the
-   * list drops what the read route would refuse, because a row whose only outcome is a refusal is
-   * worse than no row. What was wrong is that the drop was SILENT, and a silent drop reads as a bug
-   * in the panel. A count and a sentence say the list is complete for what it can serve, and that
-   * something else was written elsewhere; the paths themselves stay off the screen, or explaining
-   * the guard would undo it.
+   * IT QUALIFIES OPENING, NOT LISTING, and a previous pass dropped it on the opposite reading. The
+   * server's own words are `N file(s) this session wrote are outside its own folder and cannot be
+   * OPENED here` (`fleet-web.ts`), and opening is still live in the aside: the gallery's produced
+   * block, and a WROTE row in the live feed whose path was dropped — which renders as plain text
+   * with nothing else to explain it, the exact report that made this sentence exist. The aside's
+   * header count is short for the same reason. So it is re-homed beside that count, VERBATIM: the
+   * server worded it and a second wording here would be a second answer to one question.
    */
-  const [outsideNote, setOutsideNote] = useState<string | null>(null)
+  const [outsideNote, setOutsideNote] = useState<string | undefined>(undefined)
+  /**
+   * `onDisk` is now a FILTER and nothing else — what the aside drew as a per-row size and scope went
+   * with the Files and Docs tabs. The read stays because the filter does: the aside's gallery and its
+   * live feed both link to paths, and a link whose only outcome is a refusal is worse than no link.
+   */
   useEffect(() => {
-    if (!selected) { setOnDisk(new Map()); setOutsideNote(null); return }
+    if (!selected) { setOnDisk(new Map()); setOutsideNote(undefined); return }
     let alive = true
+    // The sentence holds a count about ONE session, so it is cleared the moment the session changes
+    // — unlike `onDisk`, which is deliberately kept so the list is never empty for the length of a
+    // request. A count carried over from the previous session is a wrong claim, not a stale one.
+    setOutsideNote(undefined)
     const read = async () => {
       try {
         const r = await fetch(`/api/fleet/artifacts?id=${encodeURIComponent(selected.id)}&lang=${pt ? 'pt' : 'en'}`)
@@ -290,7 +330,7 @@ export default function SessionsPage() {
           outside?: string
         }
         setOnDisk(new Map((d.files ?? []).map(f => [f.raw, { bytes: f.bytes, scope: f.scope }])))
-        setOutsideNote(d.outside ?? null)
+        setOutsideNote(d.outside)
       } catch { /* the list simply stays as it was */ }
     }
     void read()
@@ -336,11 +376,11 @@ export default function SessionsPage() {
   const art = useArtifacts()
   const onArtifacts = useCallback((a: { artifacts: Artifact[]; loading: boolean; unavailable?: string; older?: string; unlisted: boolean; turns: readonly LiveTurn[] }) => {
     setArtifacts(a.artifacts)
-    setArtifactsUnlisted(a.unlisted)
     setArtifactTurns(a.turns)
     setArtifactsLoading(a.loading)
     setArtifactsUnavailable(a.unavailable)
     setArtifactsOlder(a.older)
+    setArtifactsUnlisted(a.unlisted)
     if (selected) setArtifactCount(selected.id, a.artifacts.length)
   }, [selected])
 
@@ -510,13 +550,18 @@ export default function SessionsPage() {
       // Only what the server confirmed is still a file with content. Until it has answered the
       // list is shown as recorded, so the panel is never empty for the length of a request.
       artifacts={onDisk.size === 0 ? artifacts : artifacts.filter(a => onDisk.has(a.path))}
-      facts={onDisk}
-      {...(outsideNote ? { outsideNote } : {})}
       loading={artifactsLoading}
       {...(artifactsUnavailable ? { unavailable: artifactsUnavailable } : {})}
       {...(artifactsOlder ? { older: artifactsOlder } : {})}
+      // WHY THE HEADER COUNT IS SHORT — the two facts, each to the surface that qualifies the
+      // claim. `outsideNote` is the server's sentence, passed through untouched.
       unlistedWrites={artifactsUnlisted}
+      {...(outsideNote ? { outsideNote } : {})}
       turns={artifactTurns}
+      // The repository explorer's gate and its autosave switch. The gate decides whether the tab
+      // exists at all — see `ArtifactsAsideProps`.
+      editorEnabled={editorEnabled}
+      editorAutosave={editorAutosave}
       tabRequest={art.tabRequest}
       // The session itself, for the TASKS tab: what it is filed under, and the composer that files
       // it somewhere new without leaving the session you are sitting in.
@@ -818,14 +863,119 @@ export default function SessionsPage() {
   }
 
   // ---------------------------------------------------------------------------
-  // Mobile: one column at a time.
+  // ONE PANE, POSITIONED BY THE LAYOUT — never one pane per layout.
+  //
+  // `artifactsPane` used to be written into FOUR separate `return`s, one per `ArtifactLayout`, and
+  // React reconciles by POSITION: four positions are four different elements, so crossing a
+  // breakpoint unmounted the whole aside and mounted a new one. That is not a flicker. The Studio's
+  // entire composition — `Layer`, `mountedEditors`, `StudioBody`'s one DOM shape — exists to make
+  // sure an unsaved buffer survives every move a reader can make inside it, and the surface holding
+  // it was throwing the lot away the moment the WINDOW changed size. On a phone the window changes
+  // size when you turn it over, or when the keyboard opens.
+  //
+  // Measured at 390x844 on a live session, before this: two files open in the Studio, the second
+  // one edited and the strip reading `artifactLayout.test.ts — não salvo`, 1 Monaco instance. One
+  // resize to 1600x900 and the same reads gave `openTabs: []`, `monaco: 0`, and a re-fetched tree.
+  // The typed text was gone, with nothing on screen having said so.
+  //
+  // So the pane is ONE element in ONE slot and the LAYOUT is a style. Everything that differed
+  // between the four branches — fixed over the phone, absolute over the conversation, a column in a
+  // flex row — is `artOuter`/`artInner` below, and every other slot in this return is always
+  // present (`null` when it draws nothing) so no sibling can shift the pane's index either.
+  //
+  // WHAT THIS DOES NOT FIX, stated rather than discovered: the CENTRE still changes shape across
+  // 768px (a phone has a back bar and a title; a desktop has the edge strip), so `SessionPanel`
+  // remounts on that crossing exactly as it always has. The conversation is re-read from the
+  // server and a half-typed prompt is held by `composerStore`, so nothing is lost there — which is
+  // precisely what was NOT true of the Studio, whose buffers live nowhere but in its own DOM.
   // ---------------------------------------------------------------------------
-  if (isMobile) {
-    // A session that is on its way owns the whole surface — before the panel branch, because
-  // `finishing` is the one moment BOTH are true, and before the overview branch, which is the
-  // metrics screen this replaced. One rule, both layouts: the loader is the same on a phone.
-  if (creating || finishing) {
-    return (
+
+  /**
+   * Which box the pane sits in, or `none` when it is not on screen at all.
+   *
+   * `asideAlive` is the mount gate and it is deliberately the same one on every layout. The mobile
+   * branch used to render the pane whenever a session was selected — mounted and hidden behind
+   * `translateX(100%)` forever — which kept the whole aside, Monaco and all, alive on the weakest
+   * device in the product: measured at 390px with the Studio CLOSED, the live feed's own scroller
+   * reported `scrollHeight: 32942` for a column nobody could see. It bought one thing, that the
+   * first open could slide in from a box that already existed, and `asideIn` (two frames, see
+   * above) is what buys that on the desktop without keeping anything mounted. So mobile uses
+   * `asideIn` too and pays the same price as everything else: closing the panel really does close
+   * it, and reopening reads the tree again.
+   */
+  const artShell: 'fullscreen' | 'overlay' | 'split' | 'none' =
+    artifactsPane === null || !asideAlive || !panel || (isMobile && (creating || finishing))
+      ? 'none'
+      : isMobile
+        ? 'fullscreen'
+        // WHICH exit to play when it is on its way out — `closingAs` holds the layout it was in, so
+        // a panel closed after the window narrowed does not slide out as the shape it is no longer.
+        : (artLayout.layout === 'closed' ? closingAs.current : artLayout.layout) === 'overlay'
+          ? 'overlay'
+          : 'split'
+  /** The split is the only shape that lays the pane out BESIDE something; everything else covers. */
+  const split = artShell === 'split'
+
+  /**
+   * THE PANE'S OWN BOX, per shape. The three rules that were spread over three branches:
+   *
+   * - `fullscreen` (a phone) is `fixed` over everything, above the bottom nav, and carries the
+   *   status-bar band itself because it is the topmost thing on the screen. The way out is the
+   *   panel's own close, which `ArtifactsAside` draws — the bar's back arrow would leave the
+   *   session. It slides on `transform`, from `asideIn` rather than from its own mount, and is
+   *   `pointer-events: none` on the way out so a closing panel cannot take a tap.
+   * - `overlay` covers the conversation but leaves its edge visible, which is the only affordance
+   *   saying what closing returns you to. It slides ACROSS rather than growing: `transform` is the
+   *   one property that animates without laying the page out again every frame.
+   * - `split` animates its WIDTH and clips, while `artInner` holds the contents at full width the
+   *   whole time — text rewrapping mid-animation is what makes a collapse look like a stutter.
+   */
+  const artOuter: CSSProperties = artShell === 'fullscreen'
+    ? {
+      position: 'fixed', inset: 0, zIndex: 70,
+      display: 'flex', flexDirection: 'column',
+      paddingTop: 'var(--safe-top)',
+      background: 'var(--bg-surface)',
+      transform: asideIn ? 'translateX(0)' : 'translateX(100%)',
+      transition: `transform ${ASIDE_ANIM_MS}ms ${ASIDE_EASE}`,
+      // `ASIDE_ANIM_MS` and not a second duration of its own: that constant IS the unmount delay,
+      // so a longer transition here would be cut off mid-slide by the element going away.
+      pointerEvents: asideIn ? undefined : 'none',
+      willChange: 'transform',
+    }
+    : artShell === 'overlay'
+      ? {
+        position: 'absolute', top: 0, right: 0, bottom: 0, width: 'min(440px, 88%)', zIndex: 20,
+        background: 'var(--bg-surface)', borderLeft: '1px solid var(--border)',
+        boxShadow: '-12px 0 32px rgba(0,0,0,0.45)',
+        display: 'flex', flexDirection: 'column', minHeight: 0,
+        transform: asideIn ? 'translateX(0)' : 'translateX(100%)',
+        transition: `transform ${ASIDE_ANIM_MS}ms ${ASIDE_EASE}`,
+        willChange: 'transform',
+      }
+      : {
+        display: 'flex', flexDirection: 'column', width: asideIn ? shownArtWidth : 0,
+        flexShrink: 0, minHeight: 0, background: 'var(--bg-surface)',
+        overflow: 'hidden',
+        transition: asideMotion,
+      }
+  const artInner: CSSProperties = split
+    ? {
+      display: 'flex', flexDirection: 'column', width: shownArtWidth, flexShrink: 0,
+      height: '100%', minHeight: 0,
+    }
+    : { display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }
+
+  /**
+   * What the pane sits beside or under. A VALUE, never a `return`: the moment one of these is
+   * returned on its own, the pane it was meant to share a parent with is at a different index.
+   */
+  let centre: ReactNode
+  if (isMobile && (creating || finishing)) {
+    // A session that is on its way owns the whole surface — before the panel case, because
+    // `finishing` is the one moment BOTH are true, and before the list, which is the metrics screen
+    // this replaced. One rule, both layouts: the loader is the same on a phone.
+    centre = (
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
         <SessionCreating
           lang={pt ? 'pt' : 'en'}
@@ -835,423 +985,322 @@ export default function SessionsPage() {
         />
       </div>
     )
-  }
+  } else if (isMobile && panel && selected) {
+    centre = (
+      <>
+      {/* ONE bar. It used to be two: this back row, and SessionPanel's own header directly
+          under it carrying the title, the tabs and the verbs. On a 390px screen that spent
+          ~100px of a 664px viewport on chrome before a single message — and the back arrow
+          already says where you are, so the word beside it was the least useful thing there.
+          The arrow keeps its own 44px target; the title takes the room the label gave up. */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        minHeight: 44, padding: '0 10px', flexShrink: 0,
+        // Installed as a PWA this is the topmost thing on the screen, so it carries the
+        // status-bar band itself — without it the arrow and the tabs sat under the clock and
+        // the taps went to the status bar. See `--safe-top`.
+        paddingTop: 'var(--safe-top)',
+        borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)',
+      }}>
+        <button
+          onClick={() => navigate('/sessions')}
+          aria-label={pt ? 'Voltar para as sessões' : 'Back to sessions'}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            // 44px is the mobile figure, and this is the only way back from this screen.
+            width: 44, height: 44, flexShrink: 0, marginLeft: -6,
+            border: 'none', background: 'transparent', color: 'var(--text-secondary)',
+            cursor: 'pointer',
+          }}
+        >
+          <ChevronLeft size={20} />
+        </button>
 
-  if (panel && selected) {
-      return (
-        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-          {/* ONE bar. It used to be two: this back row, and SessionPanel's own header directly
-              under it carrying the title, the tabs and the verbs. On a 390px screen that spent
-              ~100px of a 664px viewport on chrome before a single message — and the back arrow
-              already says where you are, so the word beside it was the least useful thing there.
-              The arrow keeps its own 44px target; the title takes the room the label gave up. */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            minHeight: 44, padding: '0 10px', flexShrink: 0,
-            // Installed as a PWA this is the topmost thing on the screen, so it carries the
-            // status-bar band itself — without it the arrow and the tabs sat under the clock and
-            // the taps went to the status bar. See `--safe-top`.
-            paddingTop: 'var(--safe-top)',
-            borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)',
-          }}>
-            <button
-              onClick={() => navigate('/sessions')}
-              aria-label={pt ? 'Voltar para as sessões' : 'Back to sessions'}
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                // 44px is the mobile figure, and this is the only way back from this screen.
-                width: 44, height: 44, flexShrink: 0, marginLeft: -6,
-                border: 'none', background: 'transparent', color: 'var(--text-secondary)',
-                cursor: 'pointer',
+        <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+            <span style={{
+              fontSize: 13, fontWeight: 650, color: 'var(--text-primary)', minWidth: 0,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
+              {selected.title}
+            </span>
+            <SessionTitleFlag
+              session={{
+                id: selected.id, title: selected.title,
+                ...(selected.harness ? { harness: selected.harness } : {}),
+                ...(selected.task ? { task: selected.task } : {}),
               }}
-            >
-              <ChevronLeft size={20} />
-            </button>
-
-            <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                <span style={{
-                  fontSize: 13, fontWeight: 650, color: 'var(--text-primary)', minWidth: 0,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}>
-                  {selected.title}
-                </span>
-                <SessionTitleFlag
-                  session={{
-                    id: selected.id, title: selected.title,
-                    ...(selected.harness ? { harness: selected.harness } : {}),
-                    ...(selected.task ? { task: selected.task } : {}),
-                  }}
-                  lang={pt ? 'pt' : 'en'}
-                  onLinked={refresh}
-                />
-              </span>
-              {/* The state stays, on its own line: it is the one fact that changes while you read,
-                  and the row below is a conversation that does not repeat it. */}
-              <span style={{
-                fontSize: 10.5, color: 'var(--text-tertiary)',
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              }}>
-                {selected.stateLabel}
-                {selected.project ? ` · ${selected.project}` : ''}
-              </span>
-            </div>
-
-            {/* ONLY THE TITLE AND THE METRICS, and that is the whole of this bar's rule.
-                It carried the back arrow, `+ Filtro` with its word and badge, the view toggle, the
-                metrics with their percentage, the panel button and the verbs — about 382px of a
-                390px screen. The title block is `flex: 1, minWidth: 0`, so it was squeezed to
-                nothing and the one thing saying WHICH session you are looking at was not on screen.
-
-                Everything that is not the title or the metrics moved into the verbs' OWN menu —
-                not a second popover beside it, which would be the same accumulation rearranged.
-                The METRICS stay out here because the context percentage is read at a GLANCE and
-                changes what you do next: a conversation near its window is one to finish rather
-                than extend, and a figure you have to open a menu for is a figure nobody watches.
-                The view toggle went in with the rest: asked for directly, after it had been left
-                out here on the argument that two taps per switch was too many. */}
-            {magnifierButton}
-            {/* THE ONE CONTROL THAT STAYS BESIDE THE TITLE. Its own button, its own percentage —
-                the figure is the reason it is out here rather than in the menu. */}
-            {selected.conversationId !== undefined && (
-              <SessionStatsMenu
-                harness={selected.harness}
-                sessionId={selected.conversationId}
-                meta={selectedMeta}
-                lang={pt ? 'pt' : 'en'}
-                currency={currency}
-                brlRate={brlRate}
-                costBasis={ctx.costBasis}
-                planFactor={sessionPlanFactor(ctx.planBasis.basis, selected.harness)}
-                touch
-                // THE DELIVERY, one tap away. The name IS the ref the board resolves, so this
-                // costs no id lookup — see `lib/sessionTaskLink.ts`.
-                {...(selected.task ? { task: selected.task } : {})}
-                onOpenTask={ref => navigate(`/tasks/${encodeURIComponent(ref)}`)}
-                // The full reading is a TAB in the aside, not a second dialog over the session —
-                // withheld when there is no record, exactly as the tab is.
-                {...(sessionMetrics ? { onOpenFull: () => openArtifacts('metrics') } : {})}
-                {...(selected.model ? { startedModel: selected.model } : {})}
-                {...(selected.effort ? { startedEffort: selected.effort } : {})}
-              />
-            )}
-
-            {rowIndex.get(selected.id) && (
-              <SessionActions
-                row={rowIndex.get(selected.id)!}
-                lang={pt ? 'pt' : 'en'}
-                act={act}
-                onGone={() => navigate('/sessions')}
-                onOpened={goToReopened}
-                /* THE VIEW SWITCH, AS THE SWITCH IT IS. It came off the bar and was briefly two
-                   rows in this list, which is a different statement: two rows read as two things
-                   you could pick, while a segmented control says they are ALTERNATIVES and which
-                   one you are in. It is the same control the bar carried, with its labels back —
-                   there is room for words in a 240px menu and there was none in a 390px bar.
-                   Absent for a harness that can never name its conversation, exactly as before. */
-                /* `!isCentral` is dev's gate, kept: on a central the conversation is not relayed, so a
-                   Chat tab there cannot do what it says. It moves with the control. */
-                {...(!isCentral && selected.conversationBlind === undefined ? {
-                  extraTop: (close: () => void) => (
-                    <div role="tablist" style={{
-                      display: 'flex', gap: 3, padding: 3, borderRadius: 10,
-                      background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-                    }}>
-                      {([
-                        ['chat', pt ? 'Conversa' : 'Chat', <MessagesSquare key="c" size={15} />],
-                        ['terminal', 'Terminal', <TerminalSquare key="t" size={15} />],
-                      ] as const).map(([id, label, icon]) => (
-                        <button
-                          key={id}
-                          role="tab"
-                          aria-selected={sessionView === id}
-                          onClick={() => { setSessionView(id); close() }}
-                          style={{
-                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                            // 44px, the figure this repo holds every mobile target to — and this
-                            // menu is opened with a thumb.
-                            flex: 1, minHeight: 44, borderRadius: 8, border: 'none',
-                            cursor: 'pointer', minWidth: 0,
-                            background: sessionView === id ? 'var(--bg-surface)' : 'transparent',
-                            color: sessionView === id ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-                            fontFamily: 'inherit', fontSize: 12.5,
-                            fontWeight: sessionView === id ? 650 : 400,
-                          }}
-                        >
-                          {icon}
-                          <span style={{
-                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                          }}>{label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  ),
-                } : {})}
-                extra={[
-                  {
-                    id: 'filters',
-                    label: pt ? 'Filtros' : 'Filters',
-                    icon: <Plus size={15} />,
-                    ...(filterCount > 0 ? { badge: String(filterCount) } : {}),
-                    on: filterCount > 0,
-                    onSelect: () => setSheetOpen(true),
-                  },
-                  {
-                    id: 'artifacts',
-                    label: pt ? 'Conteúdos da sessão' : 'Session contents',
-                    icon: <FileText size={15} />,
-                    on: art.open,
-                    onSelect: () => (art.open ? closeArtifacts() : openArtifacts()),
-                  },
-                ]}
-              />
-            )}
-          </div>
-          {/* `display: flex` is the load-bearing part, not `flex: 1`.
-              This div had `flex: 1, minHeight: 0` and no display, so it was a BLOCK. Its child —
-              SessionPanel's own `flex: 1 1 0%` column — was therefore not a flex item at all, and
-              a block child ignores its parent's height and grows to its content. Measured on an
-              iPhone 12 viewport: this div sat at the correct 620px while the panel inside it was
-              40.319px tall, which put the composer 40.305px down the page. The input was not
-              hidden — it was rendered far below the fold, and the conversation could not scroll
-              because the box that was supposed to scroll had no bounded height to scroll within.
-              `flex: 1` on a child means nothing until its PARENT is a flex container. */}
-          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>{panel}</div>
-
-          {/* FULLSCREEN, over everything, with its own close.
-              A phone has one column: the panel and the conversation cannot share 390px, and
-              `resolveArtifactLayout` already says so. It sits above the bar too — the bar's back
-              arrow would leave the session entirely, and the way out of the panel is the panel's
-              own close, which `ArtifactsAside` draws. */}
-          {/* IT SLIDES, and that needs it MOUNTED while it moves — a conditional render returns a
-              different tree and there is nothing left to animate, which is why it appeared instantly
-              and the desktop's does not. Same easing and duration as the "more" sheet, so the two
-              surfaces on this layout move alike. `visibility` is what keeps a closed panel out of
-              the tab order without taking the transition with it. */}
-          {artifactsPane && (
-            <div style={{
-              position: 'fixed', inset: 0, zIndex: 70,
-              display: 'flex', flexDirection: 'column',
-              paddingTop: 'var(--safe-top)',
-              background: 'var(--bg-surface)',
-              transform: artLayout.layout === 'fullscreen' ? 'translateX(0)' : 'translateX(100%)',
-              visibility: artLayout.layout === 'fullscreen' ? 'visible' : 'hidden',
-              transition: 'transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), visibility 0.28s',
-            }}>{artifactsPane}</div>
-          )}
-          {filtersSheet}
-        </div>
-      )
-    }
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-        {/* ONE bar, matching the open-session one above it. The filters used to be a fixed band
-            here — two or three rows of controls that are consulted occasionally and read never,
-            out of a 664px viewport — so they moved into a sheet that costs nothing until it is
-            asked for and has the whole screen once it is. */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8,
-          minHeight: 44, padding: '0 10px', flexShrink: 0,
-          // Same reason as the open-session bar: the shared header is hidden on this layout, so
-          // this row IS the top of the screen and owns the status-bar band.
-          paddingTop: 'var(--safe-top)',
-          borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)',
-        }}>
-          <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 650, color: 'var(--text-primary)' }}>
-            {pt ? 'Sessões' : 'Sessions'}
-          </span>
-          {filterButton}
-          {magnifierButton}
-        </div>
-        {/* `display: flex` again, and for the third time in this file's history the SAME rule:
-            `flex: 1` on a child means nothing until its PARENT is a flex container. This div had
-            `flex: 1, minHeight: 0` and no display, so `SessionsAside`'s own `flex: 1 1 0%` column
-            was an ordinary block that grew to its content — and with it the scrolling box inside.
-            Measured on an iPhone 12 with "Active only" off: the scroller reported
-            clientHeight 16.567px against a 664px viewport, `scrollTop` could not move, and the 306
-            inactive rows sat below the fold with no way to reach them. The band heading counted
-            them correctly the whole time, which is what made it read as "the rows are missing"
-            rather than "the list cannot scroll". */}
-        {/* TWO SCREENS, one bar. The list is what a phone opens on — it is why you came — and the
-            OVERVIEW is the same cards the desktop draws in the centre when nothing is selected.
-            Asked for: "a tela inicial de quando n tem sessao selecionada que mostra as metricas,
-            quero isso tbm na versao mobile".
-
-            A segmented control rather than a scroll: the cards are tall, and putting them above 300
-            rows would make the list unreachable on the screen whose whole problem is height. Both
-            read the SAME `overviewRows` the desktop uses, so the two layouts can never count
-            different sets — the defect this page has already hit twice. */}
-        <div role="tablist" style={{
-          display: 'flex', gap: 2, padding: '6px 12px 0', flexShrink: 0,
-        }}>
-          {([
-            ['list', pt ? 'Sessões' : 'Sessions'],
-            ['overview', pt ? 'Métricas' : 'Metrics'],
-          ] as const).map(([id, label]) => (
-            <button
-              key={id}
-              role="tab"
-              aria-selected={mobileTab === id}
-              onClick={() => setMobileTab(id)}
-              style={{
-                flex: 1, minHeight: 40, borderRadius: 9, border: 'none', cursor: 'pointer',
-                background: mobileTab === id ? 'var(--bg-elevated)' : 'transparent',
-                color: mobileTab === id ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-                fontFamily: 'inherit', fontSize: 13,
-                fontWeight: mobileTab === id ? 650 : 400,
-              }}
-            >{label}</button>
-          ))}
-        </div>
-
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '10px 12px' }}>
-          {mobileTab === 'overview' ? (
-            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain' }}>
-              <FleetOverview
-                lang={pt ? 'pt' : 'en'}
-                rows={overviewRows}
-                loading={loading}
-                unsupported={unsupported}
-                heatmap={derived.heatmapData}
-                heatmapByHarness={derived.heatmapByHarness}
-                baseline={fleet.baseline}
-                {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
-              />
-            </div>
-          ) : (
-            <SessionsAside
               lang={pt ? 'pt' : 'en'}
-              rows={fleet.rows}
-              finishedTasks={fleet.finishedTasks}
+              onLinked={refresh}
+            />
+          </span>
+          {/* The state stays, on its own line: it is the one fact that changes while you read,
+              and the row below is a conversation that does not repeat it. */}
+          <span style={{
+            fontSize: 10.5, color: 'var(--text-tertiary)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {selected.stateLabel}
+            {selected.project ? ` · ${selected.project}` : ''}
+          </span>
+        </div>
+
+        {/* ONLY THE TITLE AND THE METRICS, and that is the whole of this bar's rule.
+            It carried the back arrow, `+ Filtro` with its word and badge, the view toggle, the
+            metrics with their percentage, the panel button and the verbs — about 382px of a
+            390px screen. The title block is `flex: 1, minWidth: 0`, so it was squeezed to
+            nothing and the one thing saying WHICH session you are looking at was not on screen.
+
+            Everything that is not the title or the metrics moved into the verbs' OWN menu —
+            not a second popover beside it, which would be the same accumulation rearranged.
+            The METRICS stay out here because the context percentage is read at a GLANCE and
+            changes what you do next: a conversation near its window is one to finish rather
+            than extend, and a figure you have to open a menu for is a figure nobody watches.
+            The view toggle went in with the rest: asked for directly, after it had been left
+            out here on the argument that two taps per switch was too many. */}
+        {magnifierButton}
+        {/* THE ONE CONTROL THAT STAYS BESIDE THE TITLE. Its own button, its own percentage —
+            the figure is the reason it is out here rather than in the menu. */}
+        {selected.conversationId !== undefined && (
+          <SessionStatsMenu
+            harness={selected.harness}
+            sessionId={selected.conversationId}
+            meta={selectedMeta}
+            lang={pt ? 'pt' : 'en'}
+            currency={currency}
+            brlRate={brlRate}
+            costBasis={ctx.costBasis}
+            planFactor={sessionPlanFactor(ctx.planBasis.basis, selected.harness)}
+            touch
+            // THE DELIVERY, one tap away. The name IS the ref the board resolves, so this
+            // costs no id lookup — see `lib/sessionTaskLink.ts`.
+            {...(selected.task ? { task: selected.task } : {})}
+            onOpenTask={ref => navigate(`/tasks/${encodeURIComponent(ref)}`)}
+            // The full reading is a TAB in the aside, not a second dialog over the session —
+            // withheld when there is no record, exactly as the tab is.
+            {...(sessionMetrics ? { onOpenFull: () => openArtifacts('metrics') } : {})}
+            {...(selected.model ? { startedModel: selected.model } : {})}
+            {...(selected.effort ? { startedEffort: selected.effort } : {})}
+          />
+        )}
+
+        {rowIndex.get(selected.id) && (
+          <SessionActions
+            row={rowIndex.get(selected.id)!}
+            lang={pt ? 'pt' : 'en'}
+            act={act}
+            onGone={() => navigate('/sessions')}
+            onOpened={goToReopened}
+            /* THE VIEW SWITCH, AS THE SWITCH IT IS. It came off the bar and was briefly two
+               rows in this list, which is a different statement: two rows read as two things
+               you could pick, while a segmented control says they are ALTERNATIVES and which
+               one you are in. It is the same control the bar carried, with its labels back —
+               there is room for words in a 240px menu and there was none in a 390px bar.
+               Absent for a harness that can never name its conversation, exactly as before. */
+            /* `!isCentral` is dev's gate, kept: on a central the conversation is not relayed, so a
+               Chat tab there cannot do what it says. It moves with the control. */
+            {...(!isCentral && selected.conversationBlind === undefined ? {
+              extraTop: (close: () => void) => (
+                <div role="tablist" style={{
+                  display: 'flex', gap: 3, padding: 3, borderRadius: 10,
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                }}>
+                  {([
+                    ['chat', pt ? 'Conversa' : 'Chat', <MessagesSquare key="c" size={15} />],
+                    ['terminal', 'Terminal', <TerminalSquare key="t" size={15} />],
+                  ] as const).map(([id, label, icon]) => (
+                    <button
+                      key={id}
+                      role="tab"
+                      aria-selected={sessionView === id}
+                      onClick={() => { setSessionView(id); close() }}
+                      style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                        // 44px, the figure this repo holds every mobile target to — and this
+                        // menu is opened with a thumb.
+                        flex: 1, minHeight: 44, borderRadius: 8, border: 'none',
+                        cursor: 'pointer', minWidth: 0,
+                        background: sessionView === id ? 'var(--bg-surface)' : 'transparent',
+                        color: sessionView === id ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                        fontFamily: 'inherit', fontSize: 12.5,
+                        fontWeight: sessionView === id ? 650 : 400,
+                      }}
+                    >
+                      {icon}
+                      <span style={{
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}>{label}</span>
+                    </button>
+                  ))}
+                </div>
+              ),
+            } : {})}
+            extra={[
+              {
+                id: 'filters',
+                label: pt ? 'Filtros' : 'Filters',
+                icon: <Plus size={15} />,
+                ...(filterCount > 0 ? { badge: String(filterCount) } : {}),
+                on: filterCount > 0,
+                onSelect: () => setSheetOpen(true),
+              },
+              {
+                id: 'artifacts',
+                label: pt ? 'Conteúdos da sessão' : 'Session contents',
+                icon: <FileText size={15} />,
+                on: art.open,
+                onSelect: () => (art.open ? closeArtifacts() : openArtifacts()),
+              },
+              /* AGENTISTICS STUDIO, on a phone. The desktop entry is a button on the sessions
+                 strip (`App.tsx`), which this layout does not render — the actions live in this
+                 menu instead, which is where the panel's own entry already is. A tile in the
+                 bottom nav's "More" sheet was the other candidate and is wrong: that sheet is
+                 machine-wide chrome and the Studio is about the SESSION you have open, which
+                 only this menu has.
+                 ABSENT when the gate is closed, never greyed — the same `editorEnabled` the
+                 aside reads, the server's own already-resolved answer with a CENTRAL already
+                 subtracted where the app publishes it (`lib/editorGate.ts`): the `/api/fleet`
+                 prefix is refused on a central, and this row used to be the one entry that
+                 offered the Studio there. The `new` badge is the
+                 pair to the desktop button's two marks, as far as one row of a 240px menu can
+                 carry: the beta caveat is on the Studio's own top bar, one tap away. */
+              ...(editorEnabled ? [{
+                id: 'studio',
+                label: 'Studio',
+                icon: <FolderTree size={15} />,
+                badge: pt ? 'novo' : 'new',
+                onSelect: () => openArtifacts('studio'),
+              }] : []),
+            ]}
+          />
+        )}
+      </div>
+      {/* `display: flex` is the load-bearing part, not `flex: 1`.
+          This div had `flex: 1, minHeight: 0` and no display, so it was a BLOCK. Its child —
+          SessionPanel's own `flex: 1 1 0%` column — was therefore not a flex item at all, and
+          a block child ignores its parent's height and grows to its content. Measured on an
+          iPhone 12 viewport: this div sat at the correct 620px while the panel inside it was
+          40.319px tall, which put the composer 40.305px down the page. The input was not
+          hidden — it was rendered far below the fold, and the conversation could not scroll
+          because the box that was supposed to scroll had no bounded height to scroll within.
+          `flex: 1` on a child means nothing until its PARENT is a flex container. */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>{panel}</div>
+      </>
+    )
+  } else if (isMobile) {
+    centre = (
+      <>
+      {/* ONE bar, matching the open-session one above it. The filters used to be a fixed band
+          here — two or three rows of controls that are consulted occasionally and read never,
+          out of a 664px viewport — so they moved into a sheet that costs nothing until it is
+          asked for and has the whole screen once it is. */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        minHeight: 44, padding: '0 10px', flexShrink: 0,
+        // Same reason as the open-session bar: the shared header is hidden on this layout, so
+        // this row IS the top of the screen and owns the status-bar band.
+        paddingTop: 'var(--safe-top)',
+        borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)',
+      }}>
+        <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 650, color: 'var(--text-primary)' }}>
+          {pt ? 'Sessões' : 'Sessions'}
+        </span>
+        {filterButton}
+        {magnifierButton}
+      </div>
+      {/* `display: flex` again, and for the third time in this file's history the SAME rule:
+          `flex: 1` on a child means nothing until its PARENT is a flex container. This div had
+          `flex: 1, minHeight: 0` and no display, so `SessionsAside`'s own `flex: 1 1 0%` column
+          was an ordinary block that grew to its content — and with it the scrolling box inside.
+          Measured on an iPhone 12 with "Active only" off: the scroller reported
+          clientHeight 16.567px against a 664px viewport, `scrollTop` could not move, and the 306
+          inactive rows sat below the fold with no way to reach them. The band heading counted
+          them correctly the whole time, which is what made it read as "the rows are missing"
+          rather than "the list cannot scroll". */}
+      {/* TWO SCREENS, one bar. The list is what a phone opens on — it is why you came — and the
+          OVERVIEW is the same cards the desktop draws in the centre when nothing is selected.
+          Asked for: "a tela inicial de quando n tem sessao selecionada que mostra as metricas,
+          quero isso tbm na versao mobile".
+
+          A segmented control rather than a scroll: the cards are tall, and putting them above 300
+          rows would make the list unreachable on the screen whose whole problem is height. Both
+          read the SAME `overviewRows` the desktop uses, so the two layouts can never count
+          different sets — the defect this page has already hit twice. */}
+      <div role="tablist" style={{
+        display: 'flex', gap: 2, padding: '6px 12px 0', flexShrink: 0,
+      }}>
+        {([
+          ['list', pt ? 'Sessões' : 'Sessions'],
+          ['overview', pt ? 'Métricas' : 'Metrics'],
+        ] as const).map(([id, label]) => (
+          <button
+            key={id}
+            role="tab"
+            aria-selected={mobileTab === id}
+            onClick={() => setMobileTab(id)}
+            style={{
+              flex: 1, minHeight: 40, borderRadius: 9, border: 'none', cursor: 'pointer',
+              background: mobileTab === id ? 'var(--bg-elevated)' : 'transparent',
+              color: mobileTab === id ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+              fontFamily: 'inherit', fontSize: 13,
+              fontWeight: mobileTab === id ? 650 : 400,
+            }}
+          >{label}</button>
+        ))}
+      </div>
+
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '10px 12px' }}>
+        {mobileTab === 'overview' ? (
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain' }}>
+            <FleetOverview
+              lang={pt ? 'pt' : 'en'}
+              rows={overviewRows}
               loading={loading}
               unsupported={unsupported}
-              filters={filters}
-              activeOnly={activeOnly}
+              heatmap={derived.heatmapData}
+              heatmapByHarness={derived.heatmapByHarness}
+              baseline={fleet.baseline}
               {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
-              stale={stale}
-              rowsById={rowIndex}
-              act={req => act({ ...req, action: req.action as FleetActionId })}
             />
-          )}
-        </div>
-        {filtersSheet}
-      </div>
-    )
-  }
-
-  // ---------------------------------------------------------------------------
-  // Desktop: the aside holds the list; this is the centre.
-  // ---------------------------------------------------------------------------
-  if (panel) {
-    // A panel that is closing is still a panel: while `asideAlive` holds it, the branch below keeps
-    // drawing it so the width can run down to zero. The edge marker waits for it to finish — the
-    // control and the thing it opens live in the same place, and both being there at once reads as
-    // two panels.
-    if ((artLayout.layout === 'closed' && !asideAlive) || !artifactsPane) {
-      // The panel is shut. The marker rides the right edge of the session, which is where the panel
-      // it opens will appear — so the control and its result are in the same place.
-      // THE WRAPPER IS UNCONDITIONAL, and that is a focus bug rather than a style.
-      //
-      // It used to be `edgeMarker === null ? panel : <div>{edgeMarker}{panel}</div>`. React
-      // reconciles by POSITION: swapping the root between `panel` and a div CONTAINING it changes
-      // the shape of the tree, so the whole panel is unmounted and a new one mounted — every DOM
-      // node recreated, the composer's textarea among them. Typing while a session worked lost the
-      // caret the moment the strip appeared, and lost it AGAIN when it went away, which is exactly
-      // how it was reported: "quando essa barra aparece ele desfoca e quando ela some o input
-      // tambem desfoca".
-      //
-      // Rendering the wrapper always keeps `panel` at the same position under the same parent, so it
-      // survives the strip coming and going. `{null}` occupies the slot without drawing anything,
-      // which is what makes the two cases the same SHAPE.
-      return (
-        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-          {edgeMarker}
-          {panel}
-        </div>
-      )
-    }
-    // FULLSCREEN and OVERLAY both cover the conversation; the difference is that the overlay leaves
-    // the page under it visible at its edge, which is the only affordance saying what closing
-    // returns you to.
-    const exiting = artLayout.layout === 'closed'
-    const shape = exiting ? closingAs.current : artLayout.layout
-    // `split-rail` is a SPLIT — it differs only in the fleet list collapsing to a rail — so it
-    // falls through to the resizable branch below, which is the one that animates. Routing it here
-    // made the panel appear full-bleed with no tween, which is how this was caught.
-    if (shape === 'fullscreen') {
-      return (
-        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-          {artifactsPane}
-        </div>
-      )
-    }
-    if (shape === 'overlay') {
-      return (
-        <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-          {panel}
-          <div style={{
-            position: 'absolute', top: 0, right: 0, bottom: 0, width: 'min(440px, 88%)', zIndex: 20,
-            background: 'var(--bg-surface)', borderLeft: '1px solid var(--border)',
-            boxShadow: '-12px 0 32px rgba(0,0,0,0.45)',
-            display: 'flex', flexDirection: 'column', minHeight: 0,
-            // It covers the page, so it slides ACROSS rather than growing: `transform` is the one
-            // property that animates without laying the page out again on every frame, which is
-            // what a width tween on a floating panel costs.
-            transform: asideIn ? 'translateX(0)' : 'translateX(100%)',
-            transition: `transform ${ASIDE_ANIM_MS}ms ${ASIDE_EASE}`,
-            willChange: 'transform',
-          }}>
-            {artifactsPane}
           </div>
-        </div>
-      )
-    }
-    // The split. BOTH wrappers keep `display: flex; flexDirection: column` — this file has recorded
-    // the same bug twice: `flex: 1` on a child means nothing until its PARENT is a flex container.
-    return (
-      <div ref={splitRef} style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
-          {panel}
-        </div>
-        {/* The handle. Four pixels of hit area over a one-pixel rule — the rule is what you see,
-            the area is what you can grab, and matching them makes a divider people miss.
-            It goes with the panel: a grab handle for something that is halfway out of the room is
-            a control that resizes nothing. */}
-        {asideIn && <div
-          onMouseDown={e => {
-            // From the width on screen, not the remembered one: a clamped panel would otherwise
-            // jump to its stored width the moment the handle is touched.
-            dragArt.current = { x: e.clientX, w: shownArtWidth }
-            setArtDragging(true)
-            document.body.style.userSelect = 'none'
-          }}
-          style={{
-            width: 4, flexShrink: 0, cursor: 'col-resize', background: 'transparent',
-            borderLeft: '1px solid var(--border)',
-          }}
-        />}
-        <div style={{
-          display: 'flex', flexDirection: 'column', width: asideIn ? shownArtWidth : 0,
-          flexShrink: 0, minHeight: 0, background: 'var(--bg-surface)',
-          // The contents keep their full width while the box shrinks, so the panel slides out of
-          // view instead of reflowing itself smaller on the way — text rewrapping mid-animation is
-          // what makes a collapse look like a stutter.
-          overflow: 'hidden',
-          transition: asideMotion,
-        }}>
-          <div style={{
-            display: 'flex', flexDirection: 'column', width: shownArtWidth, flexShrink: 0,
-            height: '100%', minHeight: 0,
-          }}>
-            {artifactsPane}
-          </div>
-        </div>
+        ) : (
+          <SessionsAside
+            lang={pt ? 'pt' : 'en'}
+            rows={fleet.rows}
+            finishedTasks={fleet.finishedTasks}
+            loading={loading}
+            unsupported={unsupported}
+            filters={filters}
+            activeOnly={activeOnly}
+            {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
+            stale={stale}
+            rowsById={rowIndex}
+            act={req => act({ ...req, action: req.action as FleetActionId })}
+          />
+        )}
       </div>
+      </>
     )
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+  } else if (panel) {
+    // THE WRAPPER IS UNCONDITIONAL, and that is a focus bug rather than a style. It used to be
+    // `edgeMarker === null ? panel : <div>{edgeMarker}{panel}</div>`: swapping the root between
+    // `panel` and a div CONTAINING it changes the shape of the tree, so every DOM node under it was
+    // recreated, the composer's textarea among them. Typing while a session worked lost the caret
+    // the moment the strip appeared and lost it AGAIN when it went away — "quando essa barra
+    // aparece ele desfoca e quando ela some o input tambem desfoca". `{null}` occupies the slot
+    // without drawing anything, which is what makes the two cases the same SHAPE.
+    //
+    // The marker waits for the pane to be gone: the control and the thing it opens live in the same
+    // place, and both being there at once reads as two panels.
+    centre = (
+      <>
+        {artShell === 'none' ? edgeMarker : null}
+        {panel}
+      </>
+    )
+  } else {
+    centre = (
+      <>
       {/* A link to a session that is no longer in the list is not the same as no link at all, and
           the overview would silently swallow the difference — so it is said, once, above it. */}
       {sessionId !== undefined && !loading && (
@@ -1288,6 +1337,55 @@ export default function SessionsPage() {
           {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
         />
       </div>
+      </>
+    )
+  }
+
+  /**
+   * `splitRef` measures the room the pane is clamped against (`panelWidth`), so it belongs on the
+   * element the pane is actually laid out in — which is now this one, in every layout.
+   */
+  return (
+    <div
+      ref={splitRef}
+      style={split
+        ? { display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }
+        // `relative` for the overlay to resolve against, and it is the one position value that does
+        // NOT become a containing block for a `position: fixed` descendant — so the phone's
+        // full-screen pane still resolves against the viewport.
+        : { position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
+    >
+      {/* `display: flex` is the load-bearing part, not `flex: 1`. This file has recorded the same
+          bug three times: `flex: 1` on a child means nothing until its PARENT is a flex container,
+          and a block child ignores its parent's height and grows to its content — which is how the
+          composer once ended up 40.305px down the page on an iPhone 12. */}
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
+        {centre}
+      </div>
+      {/* The handle. Four pixels of hit area over a one-pixel rule — the rule is what you see, the
+          area is what you can grab, and matching them makes a divider people miss. It goes with the
+          panel: a grab handle for something that is halfway out of the room resizes nothing. */}
+        {split && asideIn ? <div
+          onMouseDown={e => {
+            // From the width on screen, not the remembered one: a clamped panel would otherwise
+            // jump to its stored width the moment the handle is touched.
+            dragArt.current = { x: e.clientX, w: shownArtWidth }
+            setArtDragging(true)
+            document.body.style.userSelect = 'none'
+          }}
+          style={{
+            width: 4, flexShrink: 0, cursor: 'col-resize', background: 'transparent',
+            borderLeft: '1px solid var(--border)',
+          }}
+        /> : null}
+      {/* THE ONE PANE. See the block comment at the top of this section. */}
+      {artShell === 'none' ? null : (
+        <div style={artOuter}>
+          <div style={artInner}>{artifactsPane}</div>
+        </div>
+      )}
+      {/* Mobile-only chrome, and a slot that is always here so it can never shift the pane. */}
+      {isMobile ? filtersSheet : null}
     </div>
   )
 }

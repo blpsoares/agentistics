@@ -37,6 +37,18 @@ export default defineConfig({
       workbox: {
         // Cache only static assets; API calls always go to network
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        // ...EXCEPT Monaco. `globPatterns` above is `**/*.js`, and **a precache manifest is the one
+        // place a lazy chunk stops being lazy**: workbox would download the editor, its ~160 KB of
+        // stylesheet and its five workers on every first visit, for every user, including everyone
+        // who never opens the Repository tab — undoing the whole point of the dynamic import. It is
+        // also a hard BUILD FAILURE and not merely waste: `vite-plugin-pwa` aborts when a
+        // glob-matched asset passes workbox's 2 MiB ceiling, and Monaco's largest chunk is 2.66 MB.
+        // Both patterns are paths this config OWNS (see `build.rollupOptions.output` below), never
+        // chunk names invented by the bundler — rolldown splits Monaco into ~94 chunks called
+        // `editor.api`, `toggleHighContrast`, `pgsql`… and a name-based rule would be one upstream
+        // refactor away from silently precaching 14 MB again. Monaco is fetched on demand and then
+        // served from the ordinary HTTP cache.
+        globIgnores: ['assets/monaco/**', '**/*.worker-*.js'],
         navigateFallback: null,
         skipWaiting: true,
         clientsClaim: true,
@@ -49,6 +61,45 @@ export default defineConfig({
       },
     }),
   ],
+  // Monaco's worker entry points are ES modules that import across several files. Vite's default
+  // worker output is 'iife', which cannot express that; 'es' emits real module workers, which is
+  // also what lets the json/css/html workers share one chunk of Monaco base code instead of
+  // inlining a copy each.
+  worker: {
+    format: 'es',
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        // Everything Monaco emits goes under `assets/monaco/`, so `workbox.globIgnores` above can
+        // exclude it by PATH. **`manualChunks` was tried first and is wrong**: collapsing Monaco
+        // into one named chunk also put a `<link rel="modulepreload" href="…monaco…">` and a
+        // render-blocking `<link rel="stylesheet">` into `index.html`, i.e. 4.5 MB fetched on every
+        // page load — the exact opposite of what the dynamic import is for. Routing by DIRECTORY
+        // leaves rolldown's own splitting alone, and `index.html` then names no Monaco asset at all.
+        chunkFileNames: chunk =>
+          (chunk.moduleIds ?? []).some(id => id.includes('monaco-editor'))
+            ? 'assets/monaco/[name]-[hash].js'
+            : 'assets/[name]-[hash].js',
+        // The same for Monaco's assets, which are its CSS (~160 KB across two files) and
+        // `codicon.ttf`. The test is `originalFileNames`, because that is the only field that is
+        // IDENTICAL on both of the calls Vite makes per asset — it probes once with a placeholder
+        // `source` before the real call, so a content test would answer differently each time and
+        // the file would be named one thing and referenced as another. Monaco's CSS belongs to a
+        // vendor chunk and so traces back to no source file of ours: an EMPTY origin list is the
+        // signature. Every stylesheet this app writes itself carries its own origin
+        // (`index.html`, `src/pages/CustomPage.tsx`, `src/components/SessionTerminal.tsx`) and
+        // stays put. If some future dependency ever emits chunk-level CSS of its own, it would land
+        // here too — which costs it its place in the PRECACHE and nothing else: it is still built,
+        // still served, still cached by the browser. That is the direction to be wrong in.
+        assetFileNames: asset => {
+          const origins = asset.originalFileNames ?? []
+          const fromMonaco = origins.length === 0 || origins.some(n => n.includes('monaco-editor'))
+          return fromMonaco ? 'assets/monaco/[name]-[hash][extname]' : 'assets/[name]-[hash][extname]'
+        },
+      },
+    },
+  },
   server: {
     allowedHosts: true,
     host: true,
