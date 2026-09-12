@@ -67,8 +67,7 @@ import { limiter, RULES, rateRuleFor, tooManyRequests } from './rate-limit'
 import { resolveClientIp } from './client-ip'
 import { corsHeadersFor } from './cors'
 import { csrfVerdict } from './csrf'
-import { securityHeaders } from './security-headers'
-import { keepsOwnCsp, OPAQUE_MEDIA_CSP } from './response-policy'
+import { applyBaselineHeaders, OPAQUE_MEDIA_CSP } from './response-policy'
 import { TRUST_PROXY, ALLOWED_ORIGINS, TEAM_TLS, TEAM_SESSION_SECRET_ENV, TEAM_SESSION_SECRET, setResolvedSessionSecret } from './config'
 import { validateSecret, ensureSessionSecret } from './secret-store'
 import { requiresStepUp, verifyStepUp, STEPUP_HEADER } from './stepup'
@@ -398,24 +397,11 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
   // single scheme no web page can present (`security-headers.ts`), and everything the fleet routes
   // can do stays behind `localShell` regardless.
   const embed = PROFILE === 'local'
-  // A route may keep ITS OWN `Content-Security-Policy`, and only when it is the single allowlisted
-  // one — see `response-policy.ts`. Everything else is set, not appended, so a route cannot forget
-  // the baseline and cannot widen it either.
-  //
-  // `X-Frame-Options` rides the SAME check, and it has to: the allowlisted policy is the media
-  // routes' opaque-byte response (an image, a video, a PDF), and it deliberately carries no
-  // `frame-ancestors` — a sandboxed response with none of the application's own controls has
-  // nothing to clickjack, so any embedder is fine (`response-policy.ts` says why). `embed` above
-  // governs a DIFFERENT question — may an editor frame the DASHBOARD itself — and is false on
-  // every profile but `local`, so leaving XFO out of this check left `DENY` stamped onto every
-  // media response on `lan`/`public`: the CSP was fixed, the legacy header that "wins wherever it
-  // is honoured" was not, and a browser refuses to frame a PDF while firing no `error` event the
-  // pane can catch — a blank box, not a failure sentence.
-  const keepCsp = keepsOwnCsp(res)
-  for (const [k, v] of Object.entries(securityHeaders({ tls: TEAM_TLS, dev: !SERVE_STATIC, isApi, embed }))) {
-    if (keepCsp && (k === 'Content-Security-Policy' || k === 'X-Frame-Options')) continue
-    res.headers.set(k, v)
-  }
+  // The OWASP baseline, plus the one allowlisted exception for the media routes' opaque-byte
+  // responses — see `response-policy.ts` (`applyBaselineHeaders`) for what it does and why. Kept
+  // as a real function rather than inlined here so a test can call the SAME code this route calls,
+  // instead of a copy of it that can silently drift.
+  applyBaselineHeaders(res, { tls: TEAM_TLS, dev: !SERVE_STATIC, isApi, embed })
   // A sliding-session refresh recorded by the auth gate. Appended (not set) so a route that
   // issues its own cookie — login, logout — is never overwritten.
   const refreshed = refreshedCookies.get(req)
