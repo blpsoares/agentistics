@@ -2,7 +2,9 @@
  * What THIS component adds to an already-tested client — and, above everything else, the ONE
  * guarantee the whole repository explorer is allowed to write under:
  *
- *   **A save never silently overwrites a change that landed on disk while the file was open.**
+ *   **A save never silently overwrites a change that landed on disk while the file was open** — with
+ *   ONE STATED LIMIT, which the component's own header names and this file cannot reach: an mtime
+ *   comparison is only as fine as the filesystem's clock.
  *
  * `repoApi.test.ts` owns the three outcomes of a call and `repoErrorText.test.ts` owns the wording;
  * neither is re-asserted here. What is left is the save STATE MACHINE, and the last section of this
@@ -148,7 +150,7 @@ describe('the save state machine', () => {
       OPENED,
       { kind: 'edited' },
       { kind: 'save-started' },
-      { kind: 'save-failed', text: 'O servidor não respondeu.' },
+      { kind: 'save-failed', text: 'O servidor não respondeu.', failure: 'unreachable' },
     )
     expect(failed.mtimeMs).toBe(1000)
     expect(isDirty(failed)).toBe(true)
@@ -166,7 +168,7 @@ describe('the save state machine', () => {
   test('typing DOES clear the two notices, which are about a write the buffer has moved past', () => {
     const saved = run(OPENED, { kind: 'edited' }, { kind: 'save-started' }, { kind: 'saved', mtimeMs: 2 })
     expect(run(saved, { kind: 'edited' }).phase.kind).toBe('idle')
-    const failed = run(OPENED, { kind: 'edited' }, { kind: 'save-started' }, { kind: 'save-failed', text: 'x' })
+    const failed = run(OPENED, { kind: 'edited' }, { kind: 'save-started' }, { kind: 'save-failed', text: 'x', failure: 'refused' })
     expect(run(failed, { kind: 'edited' }).phase.kind).toBe('idle')
   })
 
@@ -225,7 +227,7 @@ describe('the save state machine', () => {
   test('only the "Saved" notice expires; a FAILURE stays until something really changes', () => {
     const saved = run(OPENED, { kind: 'edited' }, { kind: 'save-started' }, { kind: 'saved', mtimeMs: 2 })
     expect(run(saved, { kind: 'notice-cleared' }).phase.kind).toBe('idle')
-    const failed = run(OPENED, { kind: 'edited' }, { kind: 'save-started' }, { kind: 'save-failed', text: 'x' })
+    const failed = run(OPENED, { kind: 'edited' }, { kind: 'save-started' }, { kind: 'save-failed', text: 'x', failure: 'refused' })
     expect(run(failed, { kind: 'notice-cleared' }).phase.kind).toBe('failed')
     const conflicted = run(
       OPENED, { kind: 'edited' }, { kind: 'save-started' },
@@ -259,7 +261,7 @@ describe('the save state machine', () => {
   test('consecutive save FAILURES are counted, and only a write that landed clears the count', () => {
     let state = run(OPENED, { kind: 'edited' })
     for (let i = 1; i <= 3; i++) {
-      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'read-only' })
+      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'read-only', failure: 'refused' })
       expect(state.failedStreak).toBe(i)
     }
     const landed = run(state, { kind: 'save-started' }, { kind: 'saved', mtimeMs: 9 })
@@ -272,7 +274,7 @@ describe('the save state machine', () => {
 
   test('a fresh read, and opening another file, both clear the count', () => {
     const failing = run(
-      OPENED, { kind: 'edited' }, { kind: 'save-started' }, { kind: 'save-failed', text: 'x' },
+      OPENED, { kind: 'edited' }, { kind: 'save-started' }, { kind: 'save-failed', text: 'x', failure: 'refused' },
     )
     expect(failing.failedStreak).toBe(1)
     expect(run(failing, { kind: 'loaded', mtimeMs: 3 }).failedStreak).toBe(0)
@@ -282,10 +284,43 @@ describe('the save state machine', () => {
   test('TYPING does not clear the count — a refusal that cannot change is not changed by a keystroke', () => {
     let state = run(OPENED, { kind: 'edited' })
     for (let i = 0; i < AUTOSAVE_FAILURE_LIMIT; i++) {
-      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'read-only' })
+      state = run(state, { kind: 'save-started' },
+        { kind: 'save-failed', text: 'read-only', failure: 'refused' })
     }
     expect(autosaveStopped(state)).toBe(true)
     expect(autosaveStopped(run(state, { kind: 'edited' }, { kind: 'edited' }))).toBe(true)
+  })
+
+  test('only a REFUSAL counts: a server that could not be reached has decided nothing', () => {
+    // The bound exists for an answer that cannot change — a read-only file, a path outside the
+    // session's folder. An unreachable server has not answered at all, and it is the one case that
+    // un-refuses itself: this product's own CLI restarts the server, and the bound would otherwise
+    // leave autosave permanently off on every file that happened to be open at the time.
+    let state = run(OPENED, { kind: 'edited' })
+    for (let i = 0; i < AUTOSAVE_FAILURE_LIMIT * 3; i++) {
+      state = run(state, { kind: 'save-started' },
+        { kind: 'save-failed', text: 'The server did not answer.', failure: 'unreachable' })
+    }
+    expect(state.failedStreak).toBe(0)
+    expect(autosaveStopped(state)).toBe(false)
+    expect(state.phase).toEqual({ kind: 'failed', text: 'The server did not answer.' })
+    expect(saveGate(state, 'auto')).toEqual({ allowed: true, mtimeMs: 1000 })
+    // …and the sentence is still on screen while it keeps trying, which is the honest pair.
+    expect(saveStatus(state, 'en', true).text).toBe('The server did not answer.')
+  })
+
+  test('a mixed run counts the refusals and ignores the rest', () => {
+    let state = run(OPENED, { kind: 'edited' })
+    const fail = (failure: 'refused' | 'unreachable'): SaveEvent =>
+      ({ kind: 'save-failed', text: 'x', failure })
+    state = run(state, { kind: 'save-started' }, fail('unreachable'))
+    state = run(state, { kind: 'save-started' }, fail('refused'))
+    state = run(state, { kind: 'save-started' }, fail('unreachable'))
+    state = run(state, { kind: 'save-started' }, fail('refused'))
+    expect(state.failedStreak).toBe(2)
+    expect(autosaveStopped(state)).toBe(false)
+    state = run(state, { kind: 'save-started' }, fail('refused'))
+    expect(autosaveStopped(state)).toBe(true)
   })
 })
 
@@ -322,7 +357,7 @@ describe('saveGate', () => {
   test('the two triggers differ in exactly one place: a refusal that keeps repeating', () => {
     let state = dirty
     for (let i = 0; i < AUTOSAVE_FAILURE_LIMIT; i++) {
-      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'read-only' })
+      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'read-only', failure: 'refused' })
     }
     // AUTOSAVE gives up — it would otherwise PUT every 1.5 s for as long as the tab is open, and the
     // error it keeps replacing with `Saving…` is the one thing the reader needs to be able to read.
@@ -330,11 +365,15 @@ describe('saveGate', () => {
     // The PERSON is never locked out: a file that becomes writable again must be savable without
     // reopening the tab.
     expect(saveGate(state, 'explicit')).toEqual({ allowed: true, mtimeMs: 1000 })
-    expect(saveGate(state)).toEqual({ allowed: true, mtimeMs: 1000 })
+    // An UNNAMED trigger is treated as the automatic one: both real callers name theirs, so the only
+    // caller that can reach the default is a new one that forgot to — and of the two ways to be
+    // wrong, handing it the bounded path costs a press, while handing it the unbounded one reopens
+    // the very PUT loop above.
+    expect(saveGate(state)).toEqual({ allowed: false, why: 'autosave-stopped' })
   })
 
   test('below the limit autosave still tries — one failure is not a permanent one', () => {
-    const once = run(dirty, { kind: 'save-started' }, { kind: 'save-failed', text: 'timeout' })
+    const once = run(dirty, { kind: 'save-started' }, { kind: 'save-failed', text: 'read-only', failure: 'refused' })
     expect(saveGate(once, 'auto')).toEqual({ allowed: true, mtimeMs: 1000 })
   })
 })
@@ -362,20 +401,37 @@ describe('saveEventFor', () => {
       ok: false, failure: 'refused', status: 409, reason: 'conflict',
       message: 'O arquivo mudou no disco.',
     } as WriteFileResult
-    expect(saveEventFor(half, 'pt')).toEqual({ kind: 'save-failed', text: 'O arquivo mudou no disco.' })
+    expect(saveEventFor(half, 'pt'))
+      .toEqual({ kind: 'save-failed', text: 'O arquivo mudou no disco.', failure: 'refused' })
   })
 
   test('any other refusal is the server’s own sentence', () => {
     expect(saveEventFor({
       ok: false, failure: 'refused', status: 403, reason: 'escaped',
       message: 'Esse caminho sai da pasta da sessão.',
-    }, 'pt')).toEqual({ kind: 'save-failed', text: 'Esse caminho sai da pasta da sessão.' })
+    }, 'pt')).toEqual({
+      kind: 'save-failed', text: 'Esse caminho sai da pasta da sessão.', failure: 'refused',
+    })
   })
 
   test('an unreachable server is a failure with a sentence, never a silent no-op', () => {
     const event = saveEventFor({ ok: false, failure: 'unreachable', cause: 'network' }, 'en')
     expect(event.kind).toBe('save-failed')
     expect(event.kind === 'save-failed' && event.text.length > 0).toBe(true)
+  })
+
+  test('the event carries WHICH KIND of failure it was — only a refusal may bound autosave', () => {
+    // The two are already apart in `WriteFileResult` (`refused` is a decision the server made,
+    // `unreachable` is no answer at all) and the streak is the one place that distinction matters, so
+    // it is carried through rather than re-derived from the sentence.
+    const refused = saveEventFor({
+      ok: false, failure: 'refused', status: 403, reason: 'not-a-file', message: 'Not a file.',
+    }, 'en')
+    expect(refused.kind === 'save-failed' && refused.failure).toBe('refused')
+    for (const cause of ['network', 'timeout', 'malformed'] as const) {
+      const event = saveEventFor({ ok: false, failure: 'unreachable', cause }, 'en')
+      expect(event.kind === 'save-failed' && event.failure).toBe('unreachable')
+    }
   })
 })
 
@@ -385,7 +441,7 @@ describe('saveStatus', () => {
   const dirty = run(OPENED, { kind: 'edited' })
   const saving = run(dirty, { kind: 'save-started' })
   const saved = run(saving, { kind: 'saved', mtimeMs: 2 })
-  const failed = run(saving, { kind: 'save-failed', text: 'The server did not answer.' })
+  const failed = run(saving, { kind: 'save-failed', text: 'The server did not answer.', failure: 'unreachable' })
   const conflicted = run(saving, { kind: 'conflicted', diskContent: 'x', diskMtimeMs: 2 })
   const stale = run(conflicted, { kind: 'dismiss-conflict' })
 
@@ -426,7 +482,7 @@ describe('saveStatus', () => {
   test('once autosave has GIVEN UP it says so, and names the way out', () => {
     let state = dirty
     for (let i = 0; i < AUTOSAVE_FAILURE_LIMIT; i++) {
-      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'This file is read-only.' })
+      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'This file is read-only.', failure: 'refused' })
     }
     const told = saveStatus(state, 'en', true)
     expect(told.tone).toBe('bad')
@@ -436,18 +492,87 @@ describe('saveStatus', () => {
     expect(saveStatus(state, 'pt', true).text).toContain('automático')
   })
 
+  /** Three consecutive REFUSALS — the bound's own case — leaving autosave given up. */
+  function gaveUp(from: SaveState = dirty): SaveState {
+    let state = from
+    for (let i = 0; i < AUTOSAVE_FAILURE_LIMIT; i++) {
+      state = run(
+        state,
+        { kind: 'save-started' },
+        { kind: 'save-failed', text: 'This file cannot be written.', failure: 'refused' },
+      )
+    }
+    return state
+  }
+
+  test('A KEYSTROKE MAY NOT ERASE IT — the sentence lasts exactly as long as the gate is shut', () => {
+    // The fact belongs to the TRIGGER, not to any one write, and `phaseAfterEdit` clears the failure
+    // NOTICE on every edit (rightly — that sentence described text the buffer has moved past) while
+    // `failedStreak` survives it. Said only in the `failed` arm, it was therefore erased by the very
+    // next keystroke, and the common path — somebody who keeps typing into a read-only file — ended
+    // with the autosave switch visibly ON, a dim "Unsaved changes", and nothing saving, forever.
+    const stopped = gaveUp()
+    const typed = run(stopped, { kind: 'edited' }, { kind: 'edited' })
+
+    expect(saveStatus(stopped, 'en', true).text).toContain('Autosave has stopped trying')
+    expect(saveStatus(typed, 'en', true).text).toContain('Autosave has stopped trying')
+    expect(saveStatus(typed, 'en', true).text).toContain('Save')      // the way out is still named
+    expect(saveStatus(typed, 'en', true).tone).toBe('bad')            // never the dim reassuring one
+    expect(saveStatus(typed, 'pt', true).text).toContain('automático')
+    // …and what it says agrees with what the gate does: both outlive the keystroke.
+    expect(saveGate(typed, 'auto')).toEqual({ allowed: false, why: 'autosave-stopped' })
+  })
+
+  test('a conflict RESOLVED after a failure streak reaches it by the other route, and is told too', () => {
+    // `take-disk` (and `keep-mine`) move the pin and clear nothing else: the streak survives them, so
+    // a person who adopts the disk version and carries on typing sits in exactly the same silent
+    // state by a second route. The sentence is phase-independent, so it covers this one too.
+    const resolved = run(
+      gaveUp(),
+      { kind: 'save-started' },
+      { kind: 'conflicted', diskContent: 'theirs', diskMtimeMs: 5000 },
+      { kind: 'take-disk' },
+      { kind: 'edited' },
+    )
+    expect(resolved.phase.kind).toBe('idle')
+    expect(autosaveStopped(resolved)).toBe(true)
+    expect(saveStatus(resolved, 'en', true).text).toContain('Autosave has stopped trying')
+    expect(saveGate(resolved, 'auto')).toEqual({ allowed: false, why: 'autosave-stopped' })
+  })
+
+  test('nothing to save means nothing to warn about — a clean buffer is not told autosave stopped', () => {
+    // The one thing that clears the streak is a write that LANDED, which also leaves the buffer
+    // clean; and the sentence is about work sitting unsaved. With nothing unsaved there is nothing
+    // for the reader to act on, and a warning that is always on screen is one nobody reads.
+    const clean = run(gaveUp(), { kind: 'save-started' }, { kind: 'saved', mtimeMs: 9 })
+    expect(autosaveStopped(clean)).toBe(false)
+    expect(saveStatus(clean, 'en', true).text).not.toContain('Autosave')
+  })
+
+  test('it is not said over a write in flight, nor over a conflict — each names its own reason', () => {
+    // `saving` may be about to land and clear the streak; a conflict has its own, more actionable
+    // reason for autosave being paused, and the banner beside it already says so. Two explanations
+    // of one pause is how a reader learns to read neither.
+    const saving = run(gaveUp(), { kind: 'edited' }, { kind: 'save-started' })
+    expect(saveStatus(saving, 'en', true).text).toBe('Saving…')
+    const conflicted = run(saving, { kind: 'conflicted', diskContent: 'x', diskMtimeMs: 2 })
+    expect(saveStatus(conflicted, 'en', true).text).not.toContain('Autosave')
+    expect(saveStatus(run(conflicted, { kind: 'dismiss-conflict' }), 'en', true).text)
+      .not.toContain('Autosave')
+  })
+
   test('a reader with autosave OFF is never told autosave stopped — it was never running', () => {
     let state = dirty
     for (let i = 0; i < AUTOSAVE_FAILURE_LIMIT; i++) {
-      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'This file is read-only.' })
+      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'This file is read-only.', failure: 'refused' })
     }
     expect(saveStatus(state, 'en', false).text).toBe('This file is read-only.')
     expect(saveStatus(state, 'en').text).toBe('This file is read-only.')
   })
 
   test('a single failure says nothing about autosave — it has not given up', () => {
-    const once = run(dirty, { kind: 'save-started' }, { kind: 'save-failed', text: 'Timed out.' })
-    expect(saveStatus(once, 'en', true).text).toBe('Timed out.')
+    const once = run(dirty, { kind: 'save-started' }, { kind: 'save-failed', text: 'This file is read-only.', failure: 'refused' })
+    expect(saveStatus(once, 'en', true).text).toBe('This file is read-only.')
   })
 })
 
@@ -475,7 +600,7 @@ describe('saveButtonState', () => {
   test('a save that keeps failing keeps the button LIVE — the manual retry is the way back', () => {
     let state = dirty
     for (let i = 0; i < AUTOSAVE_FAILURE_LIMIT; i++) {
-      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'read-only' })
+      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'read-only', failure: 'refused' })
     }
     expect(saveButtonState(state, 'en', false).enabled).toBe(true)
   })
@@ -596,10 +721,29 @@ describe('the save strip', () => {
   test('a stopped autosave is SAID on the strip, so it never merely looks like it is still trying', () => {
     let state = DIRTY
     for (let i = 0; i < AUTOSAVE_FAILURE_LIMIT; i++) {
-      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'read-only' })
+      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'read-only', failure: 'refused' })
     }
     expect(strip(state, 'en', false, true)).toContain('Autosave')
     expect(strip(state, 'en', false, false)).not.toContain('Autosave')
+  })
+
+  test('and it SURVIVES typing — the strip never falls back to a dim "Unsaved changes"', () => {
+    // The reader's own reproduction: the sentence was on the strip, they typed one character, and it
+    // became "Unsaved changes" in the dim tone while autosave stayed off and nothing was saving.
+    let state = DIRTY
+    for (let i = 0; i < AUTOSAVE_FAILURE_LIMIT; i++) {
+      state = run(
+        state,
+        { kind: 'save-started' },
+        { kind: 'save-failed', text: 'This file cannot be written.', failure: 'refused' },
+      )
+    }
+    const typed = run(state, { kind: 'edited' })
+    expect(strip(typed, 'en', false, true)).toContain('Autosave has stopped trying')
+    expect(strip(typed, 'en', false, true)).not.toContain('>Unsaved changes<')
+    expect(strip(typed, 'pt', false, true)).toContain('automático')
+    // With autosave off there is nothing to say: it was never running.
+    expect(strip(typed, 'en', false, false)).not.toContain('Autosave')
   })
 })
 
@@ -1066,6 +1210,27 @@ describe('autosave gives up instead of retrying a refusal that cannot change', (
     expect(d.fake.disk.content).toBe('mine once more\n')
   })
 
+  test('a server that cannot be REACHED never trips the bound, and saves itself once it is back', () => {
+    // The bound is against an answer that cannot change. Nothing answered here, and this is the one
+    // failure that un-refuses itself — `agentop restart` is an ordinary act in this product — so
+    // counting it would leave autosave off on every file that was open at the time, to be noticed and
+    // undone by hand. The cost is a retry per debounce window while the server is down, with the
+    // refusal's own sentence on the strip throughout; the benefit is the next line.
+    const d = driver('one\n', 1000)
+    d.fake.refusesEveryWrite({ ok: false, failure: 'unreachable', cause: 'network' })
+    d.type('mine\n')
+
+    for (let i = 0; i < 20; i++) d.save('auto')
+    expect(d.attempts.length).toBe(20)
+    expect(autosaveStopped(d.state)).toBe(false)
+    expect(d.state.phase.kind).toBe('failed')
+
+    d.fake.acceptsWritesAgain()                            // the server comes back
+    d.save('auto')                                         // …and the buffer saves ITSELF
+    expect(d.fake.disk.content).toBe('mine\n')
+    expect(isDirty(d.state)).toBe(false)
+  })
+
   test('a CONFLICT never counts toward giving up — that question is still a person’s to answer', () => {
     const d = driver('one\n', 1000)
     d.type('mine\n')
@@ -1085,6 +1250,28 @@ describe('autosave gives up instead of retrying a refusal that cannot change', (
  * `shell-isolation.test.ts`): they fail the build when the ordering is undone in a refactor, which
  * is the whole job here.
  */
+/**
+ * The module's own source with every comment removed. A rule a COMMENT can satisfy is not a rule —
+ * the same reason `shell-isolation.test.ts` strips them before grepping — and it is what makes the
+ * ordering below assertable rather than merely mentioned.
+ */
+function withoutComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+}
+
+/**
+ * The read effect's own body, comments stripped. Anchored on its DEPENDENCY LIST rather than on the
+ * section comment above it, so the slice survives a comment being reworded — and on the `useEffect`
+ * that opens it, so nothing from the effects around it can be read as part of this one.
+ */
+function readFileEffect(source: string): string {
+  const end = source.indexOf('}, [sessionId, path])')
+  expect(end).toBeGreaterThan(0)
+  const start = source.lastIndexOf('useEffect(', end)
+  expect(start).toBeGreaterThanOrEqual(0)
+  return withoutComments(source.slice(start, end))
+}
+
 describe('the save wiring, asserted over the source', () => {
   const src = readFileSync(join(import.meta.dir, 'RepoFileEditor.tsx'), 'utf8')
 
@@ -1097,7 +1284,17 @@ describe('the save wiring, asserted over the source', () => {
   })
 
   test('opening another file resets the reducer before the read, whatever the read turns out to be', () => {
-    expect(src).toContain("dispatch({ kind: 'reset' })")
+    // A bare `toContain` over the whole module is satisfied by a COMMENT: deleting the dispatch and
+    // leaving `// TODO: restore dispatch({ kind: 'reset' }) here` in its place kept this file green
+    // while the PNG dirty-latch bug was fully back. Its sibling above already learned that lesson
+    // (`includes(...).toBe(false)`, matched on the whole expression); this one had not.
+    // So the READ EFFECT's own body is sliced out, its comments are stripped, and the two calls are
+    // compared BY INDEX — the reset has to come before the read, in code that runs.
+    const effect = readFileEffect(src)
+    const reset = effect.indexOf("dispatch({ kind: 'reset' })")
+    const read = effect.indexOf('readRepoFile(')
+    expect(reset).toBeGreaterThanOrEqual(0)
+    expect(read).toBeGreaterThan(reset)
   })
 
   test('the conflict prompt keeps Escape to itself, and nothing behind it is reachable', () => {
@@ -1109,6 +1306,7 @@ describe('the save wiring, asserted over the source', () => {
     )
     expect(onKey).toContain('Escape')
     expect(onKey).toContain('ev.stopPropagation()')
-    expect(src).toContain("inert={save.phase.kind === 'conflict'}")
+    // `includes` again, for its neighbour's reason: a failure here prints `false`, not 40 KB of module.
+    expect(src.includes("inert={save.phase.kind === 'conflict'}")).toBe(true)
   })
 })

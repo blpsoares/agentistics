@@ -1,8 +1,8 @@
 /**
  * RepoFileEditor — ONE open file: Monaco over its text, and a save that can never silently
- * overwrite a change that landed while the file was open. That last clause is the whole reason the
- * repository explorer is allowed to WRITE at all, so it is stated as an invariant rather than left
- * as behaviour:
+ * overwrite a change that landed while the file was open — with ONE STATED LIMIT, below. That last
+ * clause is the whole reason the repository explorer is allowed to WRITE at all, so it is stated as
+ * an invariant rather than left as behaviour:
  *
  *   **THE BASELINE MOVES ONLY ON A FACT, OR ON A PERSON'S EXPLICIT CHOICE.** Every write is PINNED
  *   to `SaveState.mtimeMs` — the mtime the buffer on screen was READ at. The server compares that
@@ -48,14 +48,19 @@
  * every second and a half) and a banner keeps both resolving actions one press away. An explicit
  * Ctrl+S while stale re-asks the question instead of writing.
  *
- * AUTOSAVE GIVES UP, AND SAYS SO. A refusal that cannot change — a read-only file, a path that left
- * the session's folder, `not-a-file` — is the same answer however many times it is asked, so after
- * `AUTOSAVE_FAILURE_LIMIT` consecutive failures the automatic path stops: otherwise it is a `PUT`
- * every 1.5 s for as long as the tab is open, and the status line flickers `Saving…` over the very
- * sentence the reader needs to read. The MANUAL save is deliberately left open (a file that becomes
- * writable again must be savable without reopening the tab), the strip says autosave has stopped
- * rather than letting it look like it is still trying, and only a write that LANDED — or a fresh read
- * — clears the count: a keystroke is no evidence that a refusal has changed.
+ * AUTOSAVE GIVES UP, AND GOES ON SAYING SO. A refusal the SERVER decided — a read-only file, a path
+ * that left the session's folder, `not-a-file` — is the same answer however many times it is asked,
+ * so after `AUTOSAVE_FAILURE_LIMIT` consecutive ones the automatic path stops: otherwise it is a
+ * `PUT` every 1.5 s for as long as the tab is open, and the status line flickers `Saving…` over the
+ * very sentence the reader needs to read. A request that got NO answer (`failure: 'unreachable'`) is
+ * deliberately not counted — see `failedStreak`. The MANUAL save is left open (a file that becomes
+ * writable again must be savable without reopening the tab) and only a write that LANDED — or a
+ * fresh read — clears the count: a keystroke is no evidence that a refusal has changed.
+ *
+ * And because a keystroke is no evidence, it may not ERASE THE SENTENCE either. "Autosave has
+ * stopped" is said by `saveStatus` for as long as it is true and something is unsaved, in any phase,
+ * precisely because the phase it was first written into is cleared by the next edit — the state this
+ * feature must never reach is a switch that reads ON over a file nothing is saving.
  *
  * FIVE FACTS, FIVE SENTENCES — the rule this product applies to harness capabilities, applied to a
  * file: still loading, a read that was refused, a BINARY file (never opened as text), a save that
@@ -165,10 +170,17 @@ export interface SaveState {
    */
   inFlightSeq: number | null
   /**
-   * How many writes in a row have been REFUSED for a reason that is not a conflict. It is what
+   * How many writes in a row the SERVER has refused for a reason that is not a conflict. It is what
    * bounds autosave: a read-only file answers the same way forever, and an automatic path that keeps
    * asking spends a request every debounce window and makes its own error unreadable. Only a write
    * that landed, or a fresh read, clears it — see `autosaveStopped`.
+   *
+   * A REFUSAL ONLY. `failure: 'unreachable'` is not an answer the server decided — nothing answered
+   * at all — and it is the one failure that un-refuses itself: this product's own CLI restarts the
+   * server (`agentop restart`), and counting it would leave autosave permanently off on every file
+   * that happened to be open at the time, which the reader then has to notice and undo by hand. The
+   * price is stated: while nothing is answering, the automatic path keeps retrying once per debounce
+   * window, and the strip keeps the refusal's sentence on screen while it does.
    */
   failedStreak: number
   phase: SavePhase
@@ -188,7 +200,12 @@ export type SaveEvent =
   | { kind: 'save-started' }
   | { kind: 'saved'; mtimeMs: number }
   | { kind: 'conflicted'; diskContent: string; diskMtimeMs: number }
-  | { kind: 'save-failed'; text: string }
+  /**
+   * A write that was not accepted and was not a conflict. `failure` is `WriteFileResult`'s own
+   * distinction carried through rather than re-derived from the sentence, because it is what decides
+   * whether this counts toward autosave giving up — see `failedStreak`.
+   */
+  | { kind: 'save-failed'; text: string; failure: 'refused' | 'unreachable' }
   /** "Keep editing" — the question is closed, the pin is KNOWN stale, autosave stops. */
   | { kind: 'dismiss-conflict' }
   /** An explicit save over a stale pin re-opens the question rather than writing. */
@@ -266,12 +283,14 @@ export function nextSaveState(state: SaveState, event: SaveEvent): SaveState {
       }
 
     // A CONFLICT is not counted here: it is a question waiting on a person, and the gate already
-    // refuses every automatic write while it is open. Only a refusal nobody was asked about counts.
+    // refuses every automatic write while it is open. Only a refusal nobody was asked about counts —
+    // and only one the SERVER actually decided, never a request that got no answer (see
+    // `failedStreak`). The sentence is shown either way; only the bound distinguishes them.
     case 'save-failed':
       return {
         ...state,
         inFlightSeq: null,
-        failedStreak: state.failedStreak + 1,
+        failedStreak: event.failure === 'refused' ? state.failedStreak + 1 : state.failedStreak,
         phase: { kind: 'failed', text: event.text },
       }
 
@@ -338,7 +357,11 @@ export type SaveGate =
   | { allowed: true; mtimeMs: number }
   | { allowed: false; why: 'clean' | 'in-flight' | 'conflict-open' | 'stale' | 'autosave-stopped' }
 
-export function saveGate(state: SaveState, trigger: SaveTrigger = 'explicit'): SaveGate {
+// The DEFAULT is the bounded direction. Both callers name their trigger, so the default is only ever
+// reached by a new one that forgot to — and the two mistakes are not equal: defaulting to `'explicit'`
+// hands an unnamed caller the unbounded path, i.e. exactly the PUT-every-1.5s loop the `'auto'` rule
+// exists to close, while defaulting to `'auto'` costs at worst a Save button that needs one more press.
+export function saveGate(state: SaveState, trigger: SaveTrigger = 'auto'): SaveGate {
   if (state.phase.kind === 'conflict') return { allowed: false, why: 'conflict-open' }
   if (state.phase.kind === 'stale') return { allowed: false, why: 'stale' }
   if (state.phase.kind === 'saving') return { allowed: false, why: 'in-flight' }
@@ -359,7 +382,7 @@ export function saveEventFor(res: WriteFileResult, lang: RepoLang): SaveEvent {
   if (isWriteConflict(res)) {
     return { kind: 'conflicted', diskContent: res.content, diskMtimeMs: res.mtimeMs }
   }
-  return { kind: 'save-failed', text: repoFailureText(res, lang) }
+  return { kind: 'save-failed', text: repoFailureText(res, lang), failure: res.failure }
 }
 
 // --- what the save strip says --------------------------------------------------------------------
@@ -377,9 +400,28 @@ export interface SaveStatus { text: string | null; tone: SaveTone }
  * `autosave` is here for ONE sentence: once the automatic path has given up, a reader who trusts it
  * has to be told, or a file that quietly stops saving itself looks exactly like one that is still
  * trying. It is said only when autosave is actually ON — the same rule the stale banner follows.
+ *
+ * THAT SENTENCE IS ABOUT THE TRIGGER, NOT ABOUT A WRITE, so it is said wherever it is TRUE and there
+ * is still something unsaved — never only in the `failed` phase. It lived there, and a keystroke
+ * erased it: `phaseAfterEdit` clears the failure NOTICE on every edit (rightly — that sentence
+ * described text the buffer has moved past) while `failedStreak` survives it, so the common path,
+ * somebody who keeps typing into a read-only file, ended with the autosave switch visibly ON, a dim
+ * "Unsaved changes", and nothing saving, forever. `take-disk` and `keep-mine` keep the streak too, so
+ * a conflict resolved after a failure streak reached the same state by a second route. The tone goes
+ * `bad` with it: a dim line is the reassurance this state must not give.
+ *
+ * It is NOT appended over a write IN FLIGHT (that one may be about to land and clear the streak) nor
+ * over a conflict or a stale pin, which name their own, more actionable reason for the pause — and
+ * whose banner already says autosave is paused. Two explanations of one pause is how a reader learns
+ * to read neither.
  */
 export function saveStatus(state: SaveState, lang: RepoLang, autosave = false): SaveStatus {
   const pt = lang === 'pt'
+  const gaveUp = autosave && autosaveStopped(state) && isDirty(state)
+    ? (pt
+      ? ' O salvamento automático parou de tentar — use Salvar para tentar de novo.'
+      : ' Autosave has stopped trying — press Save to try again.')
+    : ''
   switch (state.phase.kind) {
     case 'saving':
       return { text: pt ? 'Salvando…' : 'Saving…', tone: 'busy' }
@@ -389,15 +431,15 @@ export function saveStatus(state: SaveState, lang: RepoLang, autosave = false): 
         text: pt ? 'Não salvo — o arquivo mudou no disco.' : 'Not saved — this file changed on disk.',
         tone: 'warn',
       }
-    case 'failed': {
-      if (!autosave || !autosaveStopped(state)) return { text: state.phase.text, tone: 'bad' }
-      const gaveUp = pt
-        ? ' O salvamento automático parou de tentar — use Salvar para tentar de novo.'
-        : ' Autosave has stopped trying — press Save to try again.'
+    case 'failed':
       return { text: `${state.phase.text}${gaveUp}`, tone: 'bad' }
-    }
     default:
-      if (isDirty(state)) return { text: pt ? 'Não salvo' : 'Unsaved changes', tone: 'dim' }
+      if (isDirty(state)) {
+        const unsaved = pt ? 'Não salvo' : 'Unsaved changes'
+        return gaveUp === ''
+          ? { text: unsaved, tone: 'dim' }
+          : { text: `${unsaved}.${gaveUp}`, tone: 'bad' }
+      }
       return state.phase.kind === 'saved'
         ? { text: pt ? 'Salvo' : 'Saved', tone: 'ok' }
         : { text: null, tone: 'dim' }
