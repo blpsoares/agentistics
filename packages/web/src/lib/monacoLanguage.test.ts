@@ -23,6 +23,16 @@ describe('languageForPath', () => {
     expect(languageForPath('Dockerfile')).toBe('dockerfile')
     expect(languageForPath('deploy/Dockerfile')).toBe('dockerfile')
   })
+  test('and so are its stage variants, which the icon table already claimed', () => {
+    // `Dockerfile.dev` wore the whale in the tree and opened as plain text: one file, two answers.
+    for (const p of ['Dockerfile.dev', 'Dockerfile.prod', 'docker/Dockerfile.base']) {
+      expect(languageForPath(p), p).toBe('dockerfile')
+    }
+    // The trailing dot, here for the same reason it is in `.env.` — a name that merely starts with
+    // those ten letters is not a Dockerfile.
+    expect(languageForPath('dockerfiles.md')).toBe('markdown')
+    expect(languageForPath('dockerfile-notes.txt')).toBe('plaintext')
+  })
   test('an unknown extension falls back to plaintext, never throws', () => {
     expect(languageForPath('data.xyz123')).toBe('plaintext')
   })
@@ -107,15 +117,37 @@ describe('languageIdsAreRegistered', () => {
     return null
   }
 
+  /**
+   * Every module specifier an `import`/`export … from` STATEMENT names — anchored at a line start,
+   * the same `SPECIFIER` `monacoEntry.lint.test.ts` reads the entry with.
+   *
+   * **IT WAS UNANCHORED, WHICH MADE THIS GUARD COMMENT-SATISFIABLE.** The old pattern matched the
+   * quoted subpath anywhere in the file, so `// import 'monaco-editor/languages/definitions/apex/
+   * register'` still counted as a grammar in the bundle: trim an import for bundle size, leave the
+   * line commented rather than deleted — which is what everybody does — and the ONE test that
+   * exists to catch a language id nothing registers goes on passing. That is worse than no test,
+   * because this is the test somebody consults before making exactly that edit.
+   *
+   * The commented form still cannot reach the `id:` scan below now: a line whose first non-space
+   * characters are `//` (or ` *`) does not start with `import`.
+   */
+  const SPECIFIER = /^\s*(?:import|export)\b[^\n]*?['"]([^'"\n]+)['"]/gm
+  /** …of which these are the ones that register a language. */
+  const LANG_SUBPATH = /^monaco-editor\/(languages\/(?:definitions|features)\/[^/]+)\/register$/
+
   /** The language ids the composition in `monacoEntry.ts` puts in the bundle, plus `plaintext`. */
   function registeredIds(vs: string): Set<string> {
     const entry = readFileSync(join(import.meta.dir, 'monacoEntry.ts'), 'utf8')
     // Both the grammars (`languages/definitions/<dir>/register`) and the three language FEATURES
     // (`languages/features/<name>/register`) register languages; json's does it with
     // `languages.register({ id: "json" })` and the grammars with `registerLanguage({ id: 'x' })`,
-    // hence the quote-agnostic match below.
-    const specs = [...entry.matchAll(/'monaco-editor\/(languages\/(?:definitions|features)\/[^'/]+)\/register'/g)]
-      .map(m => m[1]!)
+    // hence the quote-agnostic match on the `id:` below.
+    const specs = [...entry.matchAll(SPECIFIER)].flatMap(m => {
+      const sub = LANG_SUBPATH.exec(m[1] ?? '')
+      return sub === null ? [] : [sub[1]!]
+    })
+    // If the parse ever breaks, it must break LOUDLY: a specifier list that came back empty would
+    // make every assertion below vacuously true, which is the failure mode this whole file is about.
     expect(specs.length).toBeGreaterThan(50)
     // `plaintext` is monaco's own built-in and is registered by the editor core, not by a grammar.
     const ids = new Set<string>(['plaintext'])

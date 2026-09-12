@@ -108,6 +108,21 @@ function isDotenvVariant(base: string): boolean {
 }
 
 /**
+ * Is this basename a Dockerfile VARIANT — `Dockerfile.dev`, `Dockerfile.prod`, `Dockerfile.base`?
+ *
+ * Same shape and same reason as `.env.*`: the part after the dot is a STAGE name a project invents,
+ * so there is no list to enumerate, and the trailing dot is what keeps `dockerfiles.md` out.
+ *
+ * It was missing, and the asymmetry was visible on screen: `fileIcon.tsx` has had a `dockerfile.`
+ * prefix rule from the start, so `Dockerfile.dev` wore the whale in the tree and then opened as
+ * PLAIN TEXT — one file, two answers about what it is. The `.env` variants were fixed on both sides
+ * at once; this one was fixed on one.
+ */
+function isDockerfileVariant(base: string): boolean {
+  return base.startsWith('dockerfile.')
+}
+
+/**
  * Every language id this module can answer with.
  *
  * It exists for ONE assertion, and it is the assertion this file most needs: `monacoLanguage.test.ts`
@@ -124,15 +139,17 @@ export function languageIdsInUse(): string[] {
 
 /**
  * Resolve a Monaco language id from a file path. Looks at the basename only (case-insensitive):
- * first a full-name match (Dockerfile, Makefile, `.env` — no extension to key on), then the `.env.*`
- * family, then the extension. An unknown or absent extension resolves to `plaintext` — a confident
- * wrong highlighting is worse than none, so this never guesses and never returns `undefined`.
+ * first a full-name match (Dockerfile, Makefile, `.env` — no extension to key on), then the two
+ * families whose suffix is a NAME rather than an extension (`.env.*`, `Dockerfile.*`), then the
+ * extension. An unknown or absent extension resolves to `plaintext` — a confident wrong
+ * highlighting is worse than none, so this never guesses and never returns `undefined`.
  */
 export function languageForPath(path: string): string {
   const base = (path.split('/').pop() ?? path).toLowerCase()
   const byName = NAME_LANGUAGE[base]
   if (byName) return byName
   if (isDotenvVariant(base)) return DOTENV_LANGUAGE
+  if (isDockerfileVariant(base)) return NAME_LANGUAGE['dockerfile']!
   const dot = base.lastIndexOf('.')
   if (dot <= 0) return 'plaintext'
   const ext = base.slice(dot + 1)

@@ -12,7 +12,10 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { FILE_ICON_IDS, FileIcon, fileIconId, type FileIconId } from './fileIcon'
+import { MIN_UI_CONTRAST, contrastRatio } from '../../lib/monacoTheme'
+import {
+  FILE_ICON_IDS, FileIcon, ICON_GROUNDS, ICON_HUES, fileIconId, type FileIconId,
+} from './fileIcon'
 
 describe('fileIconId', () => {
   test('the extensions the brief asked for', () => {
@@ -74,6 +77,47 @@ describe('fileIconId', () => {
     expect(fileIconId('DOCKER-COMPOSE.YML', 'file')).toBe('docker')
   })
 
+  /**
+   * **THE HALF THIS SUITE DID NOT HAVE.** Every case above asserts a name GETS an icon; none
+   * asserted that a name does not get a WRONG one, and that is exactly the gap `-lock.` walked
+   * through — an unanchored `includes` that painted four hand-written modules of THIS repository as
+   * generated lockfiles, with nothing red anywhere. A resolver that answers is not a resolver that
+   * is right, so each rule that can over-reach is pinned against the name that proves it does not.
+   */
+  describe('the names a rule must NOT claim', () => {
+    test('a `-lock` in the middle of a source file is not a lockfile', () => {
+      // All four are real paths in this repository's own `git ls-files`, and all four resolved to
+      // `lock` before `LOCK_DATA` was anchored to a data extension.
+      for (const name of [
+        'packages/server/server/sessions/file-lock.ts',
+        'packages/server/server/sessions/file-lock.test.ts',
+        'packages/server/server/sessions/resume-lock.ts',
+        'packages/server/server/sessions/resume-lock.test.ts',
+      ]) {
+        expect(fileIconId(name, 'file'), name).toBe('ts')
+      }
+      // And the shape generally: only the formats a lockfile is actually written in are claimed.
+      expect(fileIconId('use-lock.tsx', 'file')).toBe('react')
+      expect(fileIconId('spin-lock.py', 'file')).toBe('python')
+      expect(fileIconId('lock.md', 'file')).toBe('markdown')
+    })
+
+    test('a name that merely STARTS like docker-compose is not a compose file', () => {
+      expect(fileIconId('docker-composer.ts', 'file')).toBe('ts')
+      expect(fileIconId('docker-compose-helper.js', 'file')).toBe('js')
+      // The compose files themselves still answer, middle part and all.
+      expect(fileIconId('docker-compose.yml', 'file')).toBe('docker')
+      expect(fileIconId('docker-compose.override.yml', 'file')).toBe('docker')
+    })
+
+    test('the letters of a mapped extension are not an extension', () => {
+      // `.lock`/`.lockb` are ordinary extensions now; `lockfile` and `envelope.ts` are neither.
+      expect(fileIconId('lockfile', 'file')).toBe('file')
+      expect(fileIconId('envelope.ts', 'file')).toBe('ts')
+      expect(fileIconId('.environment', 'file')).toBe('file')
+    })
+  })
+
   test('a name that is only an extension is not an extension', () => {
     // `.ts` as a whole filename has no stem; `lastIndexOf('.') === 0` is the guard, and the answer
     // is the neutral glyph rather than TypeScript's.
@@ -82,10 +126,15 @@ describe('fileIconId', () => {
 })
 
 describe('every id draws something', () => {
-  test('the map covers the union, and no glyph renders empty', () => {
+  test('the ids are a set, and the three delegated glyphs are among them', () => {
+    // This used to loop `expect(FILE_ICON_IDS).toContain(id)` over `FILE_ICON_IDS` — true of any
+    // array whatsoever, a green tick proving nothing. What IS worth asserting here is that the
+    // exported list is a set (`ICONS`'s keys, so a duplicated id would mean a glyph silently
+    // overwritten) and that the fallback and the two folder states did not get dropped from it;
+    // every id actually DRAWING something is the test two below, which drives the whole table.
     expect(FILE_ICON_IDS.length).toBeGreaterThan(25)
-    for (const id of FILE_ICON_IDS) {
-      // One name per id, resolved back through the resolver so the two halves are checked together.
+    expect(new Set(FILE_ICON_IDS).size).toBe(FILE_ICON_IDS.length)
+    for (const id of ['file', 'folder', 'folder-open'] satisfies FileIconId[]) {
       expect(FILE_ICON_IDS).toContain(id)
     }
   })
@@ -130,15 +179,47 @@ describe('every id draws something', () => {
     }
   })
 
-  test('a letter badge carries its letters and an ink that is not its own fill', () => {
+  test('a letter badge carries its letters, and its ink clears the floor against its own fill', () => {
     const ts = renderToStaticMarkup(<FileIcon name="a.ts" kind="file" size={16} />)
     expect(ts).toContain('TS')
     expect(ts).toContain('#3178c6')
-    // TypeScript blue is dark enough for white letters; the yellow JS badge is not, and must not get
-    // them — that decision is `badgeInk`'s, and this is the assertion that it is actually consulted.
     expect(ts).toContain('#ffffff')
     const js = renderToStaticMarkup(<FileIcon name="a.js" kind="file" size={16} />)
     expect(js).toContain('JS')
-    expect(js).not.toContain('#ffffff')
+
+    // The PROPERTY, rather than one badge's answer. It used to be `js` must NOT take white ink,
+    // which was true of the old pale gold and is false now the hue clears the light ground — and
+    // the assertion would have been read as a regression rather than as the consequence it is. What
+    // must hold for every badge, whatever the palette does next, is that the letters are legible on
+    // the thing they are drawn on.
+    const BADGES: readonly [string, string][] = [
+      ['a.ts', 'ts'], ['a.js', 'js'], ['a.py', 'python'], ['a.go', 'go'], ['a.rs', 'rust'],
+      ['a.java', 'java'], ['a.rb', 'ruby'], ['a.php', 'php'], ['a.c', 'c'], ['a.cpp', 'cpp'],
+      ['a.cs', 'csharp'], ['a.sql', 'sql'], ['a.txt', 'text'],
+    ]
+    for (const [name, hueId] of BADGES) {
+      const html = renderToStaticMarkup(<FileIcon name={name} kind="file" size={16} />)
+      const fill = ICON_HUES[hueId]!
+      expect(html, name).toContain(fill)
+      const ink = html.includes('#ffffff') ? '#ffffff' : '#15151a'
+      expect(contrastRatio(ink, fill), `${name}: ${ink} on ${fill}`)
+        .toBeGreaterThanOrEqual(MIN_UI_CONTRAST)
+    }
+  })
+
+  /**
+   * **THE HEADER SAYS THESE ARE "deepened where a pale one would vanish on the light theme", and
+   * for seven of them that was simply untrue** — `js` sat at 2.09:1 on `--bg-base`, `env` (a
+   * stroke-only key, no badge behind it to carry the shape) at 2.18:1 — against the same 3:1
+   * non-text floor this module already applies to a badge's own ink. A stated rule with nothing
+   * asserting it is a rule that drifts, and three lines is the whole cost of it not drifting again.
+   */
+  test('every hue clears the shape floor on BOTH grounds', () => {
+    for (const [id, hex] of Object.entries(ICON_HUES)) {
+      for (const ground of ICON_GROUNDS) {
+        expect(contrastRatio(hex, ground), `${id} ${hex} on ${ground}`)
+          .toBeGreaterThanOrEqual(MIN_UI_CONTRAST)
+      }
+    }
   })
 })

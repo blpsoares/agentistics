@@ -11,8 +11,8 @@
  * What is NOT asserted here is whether it looks good. That was checked by eye, in both themes, over
  * real files of several languages.
  */
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 import {
   AGENTISTICS_THEME_NAME, MIN_CODE_CONTRAST, MIN_UI_CONTRAST,
@@ -161,11 +161,27 @@ describe('legibility is the reason the derivation exists', () => {
     })
 
     test(`${variant}: the gutter is deliberately BELOW it, and stays that way`, () => {
-      // `faint` is the line numbers, the indent guides and the delimiters. Lifting it would make the
-      // quietest part of the editor compete with the code; this pins that as a decision rather than
-      // leaving it one careless edit from being "fixed".
+      // `faint` is the line numbers, the indent guides and the whitespace dots — things the EDITOR
+      // draws, which the reader is meant to look past. Lifting it would make the quietest part of
+      // the editor compete with the code; this pins that as a decision rather than leaving it one
+      // careless edit from being "fixed".
       const palette = buildPalette(variant === 'light' ? TOKENS_LIGHT : TOKENS_DARK)
       expect(contrastRatio(palette.faint, palette.bg)).toBeLessThan(MIN_CODE_CONTRAST)
+    })
+
+    test(`${variant}: nothing a PERSON typed is drawn at the gutter's weight`, () => {
+      // The exception that proves the line above, and it used to be broken: `delimiter` — every
+      // `,` `;` `:` `.` in the file — wore `faint`, so the characters a reader hunts for when
+      // something will not parse were drawn at 2.62:1 dark / 2.19:1 light. `white` (the whitespace
+      // rendering) is the ONLY syntax class allowed down there, because it is not a character
+      // anybody typed so much as a mark saying one is present.
+      const palette = buildPalette(variant === 'light' ? TOKENS_LIGHT : TOKENS_DARK)
+      const data = agentisticsThemeData(variant)
+      const atFaint = data.rules.filter(r => r.foreground === palette.faint).map(r => r.token)
+      expect(atFaint).toEqual(['white'])
+      const byToken = new Map(data.rules.map(r => [r.token, r.foreground]))
+      expect(contrastRatio(byToken.get('delimiter')!, palette.bg))
+        .toBeGreaterThanOrEqual(MIN_CODE_CONTRAST)
     })
 
     test(`${variant}: the caret clears the SHAPE floor — it is how you find where you are`, () => {
@@ -243,6 +259,64 @@ describe('colour arithmetic', () => {
   })
   test('a colour this module cannot read throws rather than guessing one', () => {
     expect(() => flatten('var(--nope)', '#000000')).toThrow()
+  })
+})
+
+/**
+ * **EVERY CHROME ID IS ONE MONACO ACTUALLY REGISTERS.**
+ *
+ * The module's own comment above `CHROME` already claimed this ("verified by walking its own
+ * `registerColor(` calls") and the walk was done BY HAND, once, by a person. An id nobody
+ * registered is not an error and not a warning — `standaloneThemeService` simply never asks for it
+ * — so `editorLineNumber.forground` would be a carefully chosen colour doing nothing at all,
+ * forever, with the gutter quietly inheriting the base theme instead. The hand check cannot be
+ * repeated on every edit; this is the mechanical version, and it is the same shape (and the same
+ * cost) as `languageIdsAreRegistered` in `monacoLanguage.test.ts` one directory over.
+ *
+ * The set is read from the INSTALLED package rather than from a list kept here — a list of monaco's
+ * colour ids maintained in this repo would be the very thing it is meant to catch, one release out
+ * of date.
+ */
+describe('chromeIdsAreRegistered', () => {
+  const VS_CANDIDATES = [
+    join(import.meta.dir, '../..', 'node_modules', 'monaco-editor/package.json'),
+    join(import.meta.dir, '../../../..', 'node_modules', 'monaco-editor/package.json'),
+  ]
+
+  /** Every id monaco declares, from the `registerColor('<id>', …)` calls in its own sources. */
+  function registeredColorIds(): Set<string> {
+    const pkg = VS_CANDIDATES.find(p => existsSync(p))
+    if (pkg === undefined) {
+      // Same stance as the two lint tests beside this one: a check that cannot answer must FAIL,
+      // never pass quietly — a green tick here would mean nothing was compared at all.
+      throw new Error(`monaco-editor not installed; looked in:\n${VS_CANDIDATES.join('\n')}`)
+    }
+    const ids = new Set<string>()
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, entry.name)
+        if (entry.isDirectory()) walk(p)
+        else if (p.endsWith('.js')) {
+          for (const m of readFileSync(p, 'utf8').matchAll(/registerColor\(\s*['"]([^'"]+)['"]/g)) {
+            ids.add(m[1]!)
+          }
+        }
+      }
+    }
+    walk(join(dirname(pkg), 'esm/vs'))
+    return ids
+  }
+
+  test('every colour id this theme names is one the installed monaco declares', () => {
+    const registered = registeredColorIds()
+    // Read, not assumed: a parse that came back tiny would make the loop below vacuous.
+    expect(registered.size).toBeGreaterThan(300)
+    const named = Object.keys(agentisticsThemeData('dark').colors)
+    expect(named.length).toBeGreaterThan(40)
+    for (const id of named) {
+      expect(registered.has(id), `colour id "${id}" is registered by nothing in monaco-editor`)
+        .toBe(true)
+    }
   })
 })
 

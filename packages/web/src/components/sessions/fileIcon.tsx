@@ -16,6 +16,15 @@
  * deepened where a pale one would vanish on the light theme), because recognition is the entire
  * point: an icon in the app's own accent palette would be decoration, not information.
  *
+ * **THREE MARKS ARE SHARED ON PURPOSE, and the rule above is absolute about everything else.** A
+ * `.vue` and a `.svelte` file wear the web-platform SHIELD (they are single-file components whose
+ * body is markup, and it is the shield the mapping in `monacoLanguage.ts` already reaches for), and
+ * `.kt` wears the Java badge's `JV`. These are stand-ins for languages with no mark of their own,
+ * chosen because the family they name is right; they are NOT the same thing as a rule matching a
+ * file it was never meant to match (`-lock.` once painted four hand-written TypeScript modules as
+ * generated lockfiles — see `compoundIconId`). If a Kotlin letter badge is ever worth 3 lines, it
+ * displaces `JV` and nothing else changes.
+ *
  * **AN UNMAPPED EXTENSION GETS THE NEUTRAL GLYPH — never a near-miss.** `fileIconId` answers
  * `'file'`, which renders lucide's `File` in `--text-tertiary`: exactly the glyph this tree drew
  * before this module existed. A wrong icon is a statement about a file's contents, and the reader
@@ -32,7 +41,7 @@
 
 import { File, Folder, FolderOpen } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { contrastRatio } from '../../lib/monacoTheme'
+import { MIN_UI_CONTRAST, contrastRatio } from '../../lib/monacoTheme'
 
 // --- which glyph ---------------------------------------------------------------------------------
 
@@ -81,7 +90,7 @@ const BY_EXT: Record<string, FileIconId> = {
   yml: 'config', yaml: 'config', toml: 'config', ini: 'config',
   conf: 'config', cfg: 'config', properties: 'config',
   sh: 'shell', bash: 'shell', zsh: 'shell', fish: 'shell',
-  lock: 'lock',
+  lock: 'lock', lockb: 'lock',
   png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image',
   avif: 'image', bmp: 'image', ico: 'image',
   svg: 'svg',
@@ -96,19 +105,35 @@ const BY_EXT: Record<string, FileIconId> = {
 
 /**
  * A compound name whose own extension would answer WRONG: `docker-compose.yml` is a Docker file
- * that happens to be YAML, and `pnpm-lock.yaml` is a lockfile that happens to be YAML. A prefix
- * test, because the real ones in the wild carry a middle part (`docker-compose.override.yml`).
+ * that happens to be YAML, and `pnpm-lock.yaml` is a lockfile that happens to be YAML.
  *
- * `.env.*` is here for the same reason `monacoLanguage.ts` has it: the suffix of a dotenv file is an
- * environment NAME, so there is no list of them to enumerate — and the trailing dot is what keeps
- * `.envrc` (a shell script) and `.environment` out.
+ * **EVERY RULE HERE IS ANCHORED AT BOTH ENDS, and two of them were not.** `base.includes('-lock.')`
+ * matched anywhere in a name, and this repository's own `git ls-files` holds four files it painted
+ * as generated lockfiles — `file-lock.ts`, `file-lock.test.ts`, `resume-lock.ts`,
+ * `resume-lock.test.ts`, all TypeScript modules somebody wrote by hand. `docker-compose` was the
+ * same shape one character short of the same bug (`docker-composer.ts` took the whale). That is the
+ * confident-wrong-value the header forbids, produced by this module on the very repository it was
+ * built to browse, so the rule below is now: a PREFIX carries its trailing dot and a SUFFIX is
+ * pinned to `$`.
+ *
+ * Two of the prefixes stay open-ended on the right and that is deliberate, because the part after
+ * the dot is a NAME rather than a format: `.env.<environment>` and `Dockerfile.<stage>` are both
+ * invented per project, so there is no list to enumerate (`monacoLanguage.ts` says the same of
+ * `.env.*`). The two that name a DATA format — a compose file and a `-lock` file — are pinned to
+ * the extensions those formats actually use, which is what closes the hole.
  */
+const LOCK_DATA = /-lock\.(json|ya?ml)$/
+const COMPOSE = /^docker-compose\.(.+\.)?ya?ml$/
+
 function compoundIconId(base: string): FileIconId | null {
   if (base.startsWith('.env.')) return 'env'
-  if (base.startsWith('dockerfile.') || base.startsWith('docker-compose')) return 'docker'
+  if (base.startsWith('dockerfile.')) return 'docker'
+  if (COMPOSE.test(base)) return 'docker'
   if (base === 'compose.yml' || base === 'compose.yaml') return 'docker'
-  // `package-lock.json`, `bun.lockb`, `Cargo.lock`, `Gemfile.lock`, `poetry.lock`, `uv.lock`…
-  if (base.includes('-lock.') || base.endsWith('.lock') || base.endsWith('.lockb')) return 'lock'
+  // `package-lock.json`, `pnpm-lock.yaml`. `Cargo.lock`, `Gemfile.lock`, `poetry.lock`, `uv.lock`
+  // and `bun.lockb` need no rule here at all — `.lock`/`.lockb` are ordinary extensions and `BY_EXT`
+  // answers them, which is one fewer unanchored test to get wrong.
+  if (LOCK_DATA.test(base)) return 'lock'
   return null
 }
 
@@ -136,27 +161,57 @@ export function fileIconId(name: string, kind: 'file' | 'dir', expanded = false)
  * `#f1e05a` and React `#61dafb` are pale enough to disappear on the light theme, so they are carried
  * down into mid-tone. Fixed in both themes on purpose: a mark whose colour follows the theme is no
  * longer the language's mark.
+ *
+ * **"DEEPENED" IS NOW A MEASURED CLAIM, AND FOR SEVEN OF THEM IT WAS NOT.** The sentence above has
+ * always been the rule; nothing enforced it, and seven hues sat under `MIN_UI_CONTRAST` — the same
+ * 3:1 non-text floor `badgeInk` applies to a badge's own letters, and the floor `monacoTheme.ts`
+ * lifts the caret to. Measured against `--bg-base` on each ground, before → after:
+ *
+ * ```
+ *   js     #d6a400 → #ad8500   light 2.09 → 3.12   (dark 8.62 → 5.77)
+ *   env    #d1a02a → #af8623   light 2.18 → 3.06   (dark 8.25 → 5.89)
+ *   svg    #d98a2b → #c37a23   light 2.51 → 3.12   (dark 7.17 → 5.76)
+ *   react  #2aa7c4 → #2699b3   light 2.58 → 3.04   (dark 6.98 → 5.92)
+ *   json   #c08b12 → #b78411   light 2.76 → 3.03   (dark 6.53 → 5.95)
+ *   go     #1f9fc7 → #1e98be   light 2.80 → 3.04   (dark 6.44 → 5.92)
+ *   less   #2f5d9e → #3162a6   dark  2.99 → 3.22   (light 6.02 → 5.58)
+ * ```
+ *
+ * `env` is why this is worth the churn: it is a stroke-only key with no badge behind it to carry it,
+ * it is the file in a repository whose icon matters most to spot, and it was the second faintest
+ * thing here on the light theme.
+ *
+ * Each replacement is `readable(original, <the failing ground>, MIN_UI_CONTRAST)` from
+ * `monacoTheme.ts` — the same HSL walk the syntax colours take, so hue and saturation are untouched
+ * and the mark is still the language's own. Written out as literals rather than computed at load
+ * because a palette is read by people; `fileIcon.test.tsx` holds both grounds to the floor, so a
+ * hand-edited hue that misses it fails the build instead of the eye.
+ *
+ * ONE lift moves a second decision: `badgeInk` gives `js` WHITE letters now, where the old pale gold
+ * took near-black. That is not a coincidence to be tuned away — a badge pale enough for dark ink
+ * needs a luminance above 0.30, and any such fill is below 2.70:1 on the light ground. Passing this
+ * floor and carrying dark letters are mutually exclusive, so every badge here is white-on-colour.
  */
 const HUE = {
   ts: '#3178c6',
-  react: '#2aa7c4',
-  js: '#d6a400',
-  json: '#c08b12',
+  react: '#2699b3',
+  js: '#ad8500',
+  json: '#b78411',
   markdown: '#4a8ed6',
   css: '#2d6cb5',
   sass: '#cd6799',
-  less: '#2f5d9e',
+  less: '#3162a6',
   html: '#e2642a',
   config: '#9a6cd4',
   shell: '#3f9c52',
   docker: '#1f8fd6',
-  env: '#d1a02a',
+  env: '#af8623',
   lock: '#8b8b94',
   git: '#e2683c',
   image: '#a169d8',
-  svg: '#d98a2b',
+  svg: '#c37a23',
   python: '#3572a5',
-  go: '#1f9fc7',
+  go: '#1e98be',
   rust: '#c4763a',
   java: '#b07219',
   ruby: '#cc342d',
@@ -168,16 +223,28 @@ const HUE = {
   text: '#8b8b94',
 } as const satisfies Record<string, string>
 
+/** The two `--bg-base` values a mark is drawn on. The test's grounds, kept beside the palette. */
+export const ICON_GROUNDS = ['#0a0a0f', '#f4f4f7'] as const
+
+/** Every hue a mark can be drawn in, for the test that holds each of them to the floor. */
+export const ICON_HUES: Readonly<Record<string, string>> = HUE
+
 /**
  * The ink on a letter badge: white when the badge is dark enough to carry it, near-black otherwise.
  *
- * `contrastRatio` is imported from `monacoTheme.ts` rather than re-derived. It is generic colour
- * arithmetic, the repo already has exactly one implementation of it, and a second one here would be
- * a second answer to "is this legible" — the duplication this codebase refuses elsewhere. The floor
- * is 3:1, the non-text/large-glyph floor: a badge letter at 13px is a SHAPE more than a word.
+ * `contrastRatio` and `MIN_UI_CONTRAST` are imported from `monacoTheme.ts` rather than re-derived.
+ * It is generic colour arithmetic, the repo already has exactly one implementation of it, and a
+ * second one here would be a second answer to "is this legible" — the duplication this codebase
+ * refuses elsewhere. The floor is that module's 3:1, the non-text/large-glyph floor: a badge letter
+ * at 13px is a SHAPE more than a word. It is the SAME floor `HUE` is now held to, which is the
+ * point: one number, so the fill and the letters on it cannot be judged by two different rules.
+ *
+ * Every badge in the table above currently answers `#ffffff` — see `HUE` for why that is forced by
+ * the floor rather than chosen. The branch stays because the floor is a property of a hue, and the
+ * next hue somebody adds is the one it exists for.
  */
 function badgeInk(badge: string): string {
-  return contrastRatio('#ffffff', badge) >= 3 ? '#ffffff' : '#15151a'
+  return contrastRatio('#ffffff', badge) >= MIN_UI_CONTRAST ? '#ffffff' : '#15151a'
 }
 
 interface GlyphProps { size: number }

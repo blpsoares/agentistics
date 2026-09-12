@@ -40,6 +40,14 @@
  *    dots and indent guides are deliberately faint and are taken as-is: lifting them would turn
  *    the quietest part of the editor into a second column of text competing with the code.
  *
+ *    **THE LINE BETWEEN THE TWO IS "DID SOMEBODY TYPE IT", and `delimiter` was on the wrong side
+ *    of it.** The gutter is drawn BY the editor; a `,` `;` `:` is a character in the file, and one
+ *    a reader goes looking for when something will not parse. It wore `faint` — 2.62:1 dark,
+ *    2.19:1 light — which is the gutter's weight given to the file's own content. It is `muted`
+ *    now, the same slot a comment takes: above the code floor, still quieter than the names it
+ *    separates. `delimiter.bracket` was already excepted to `fg`, which is what bounded the damage
+ *    and is also what made the inconsistency visible — `{` at 16.58:1 beside `;` at 2.62:1.
+ *
  * **WHAT THE RULE TABLE IS.** A Monaco theme is not a palette swap: it is a token-rule table, and
  * a token class nobody names inherits the BASE theme's colour — so an unnamed class is a patch of
  * Visual Studio inside this theme. `SYNTAX` therefore covers the classes the grammars in this
@@ -479,7 +487,16 @@ const SYNTAX: readonly SyntaxRule[] = [
 
   // punctuation and the in-between
   { token: 'operator', slot: 'fg' },
-  { token: 'delimiter', slot: 'faint' },
+  // **PUNCTUATION IS CODE, SO IT IS NOT `faint`.** It was, and that slot is spent by its own doc
+  // comment on the gutter, whitespace and indent guides — chrome the reader is meant to look past.
+  // A `,` `;` `:` is none of those: it is a character the author typed and the one a reader hunts
+  // for when something will not parse, and it was drawn at 2.62:1 dark / 2.19:1 light, under the
+  // floor this whole module exists to enforce. `muted` (6.28 / 4.77) clears the CODE floor while
+  // keeping punctuation quieter than the names around it, which is what `faint` was reaching for.
+  // Checked by eye against both alternatives at 12.5px on both grounds: `faint` loses the colons
+  // inside `(name: string, kind: 'file')` on the light theme, and `fg` gives a `;` the same weight
+  // as an identifier.
+  { token: 'delimiter', slot: 'muted' },
   { token: 'delimiter.bracket', slot: 'fg' },
   { token: 'meta', slot: 'muted' },
   { token: 'white', slot: 'faint' },
