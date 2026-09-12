@@ -32,7 +32,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { asideCache, asideKey } from '../../lib/asideCache'
 import { focusMissNotice, isFocusedRow, rowsCarry, ROW_FLASH } from '../../lib/noteFocus'
-import { Activity, BarChart3, BookOpen, Bot, Brain, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, ExternalLink, Eye, FileEdit, FilePlus2, FileText, Files, GitBranch, GitPullRequest, Image, LayoutGrid, Loader, PanelRightClose, Pencil, Plug, Plus, Send, Sparkles, Terminal, Trash2, Workflow, X } from 'lucide-react'
+import { Activity, BarChart3, BookOpen, Bot, Brain, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, ExternalLink, Eye, FileEdit, FilePlus2, FileText, Files, FolderTree, GitBranch, GitPullRequest, Image, LayoutGrid, Loader, PanelRightClose, Pencil, Plug, Plus, Send, Sparkles, Terminal, Trash2, Workflow, X } from 'lucide-react'
 import type { Artifact } from '../../lib/sessionArtifacts'
 import {
   countSkills, groupSkills, shortName, skillInvocation, type SkillEntry,
@@ -80,9 +80,14 @@ import {
 } from '../SessionDrilldown'
 import { ArtifactDoc } from './ArtifactDoc'
 import { GalleryTab } from './GalleryTab'
+import { Layer, RepositoryTab } from './RepositoryTab'
+// The FOURTH copy of this shape lived here, byte-identical to the three the repository
+// explorer's own views had already folded into `repoNote.tsx`. Imported under the name this
+// file's own call sites already use: one shape, one place for it to change.
+import { RepoNote as Note } from './repoNote'
 import { createSharedPref } from '../../lib/sharedPref'
 
-type TabId = 'files' | 'docs' | 'live' | 'gallery' | 'skills' | 'agents' | 'forks' | 'workflows' | 'mcps' | 'prs' | 'tasks' | 'metrics'
+type TabId = 'files' | 'docs' | 'live' | 'gallery' | 'skills' | 'agents' | 'forks' | 'workflows' | 'mcps' | 'prs' | 'tasks' | 'metrics' | 'repo'
 
 /** Where the view toggle is remembered. One key, read and written in one place. */
 // SHARED. How a person reads the gallery and a skill is about the work, not about the screen —
@@ -365,7 +370,7 @@ function KindIcon({ kind }: { kind: Artifact['kind'] }) {
 
 export function ArtifactsAside({
   sessionId, cwd, lang, artifacts, loading, unavailable, older, unlistedWrites, outsideNote, turns, facts, onClose,
-  tabRequest, session, onOpenTask, onTaskChanged, metrics,
+  tabRequest, session, onOpenTask, onTaskChanged, metrics, editorEnabled, editorAutosave,
 }: ArtifactsAsideProps) {
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
@@ -404,6 +409,24 @@ export function ArtifactsAside({
   )
   const [mcpError, setMcpError] = useState<string | null>(null)
   const [mcpNonce, setMcpNonce] = useState(0)
+  /**
+   * THE REPOSITORY TAB'S BODY SURVIVES A TAB SWITCH, and that is the whole reason this flag exists.
+   *
+   * Every other tab here is torn down and rebuilt when you leave it, which costs nothing: each one
+   * re-reads what it shows. The Repository tab holds MONACO BUFFERS, and an unsaved one exists in
+   * exactly one place in the world — so unmounting it is the silent loss `mountedEditors` and
+   * `Layer` were both written to make impossible, one level further out. Three lines typed, a glance
+   * at Live, and back: the text was gone, with no prompt.
+   *
+   * So it is mounted and HIDDEN while another tab is active (`Layer`, imported rather than
+   * re-implemented — one rule, one place). It is LAZY rather than permanent for the same reason the
+   * mounted set is bounded: a reader who never opens the tab must not pay for its first directory
+   * read, so nothing is mounted until the tab has been opened once.
+   */
+  const [repoOpened, setRepoOpened] = useState(false)
+  useEffect(() => { if (tab === 'repo') setRepoOpened(true) }, [tab])
+  /** Mounted: the gate is open AND the reader has been here. Never merely "the gate is open". */
+  const repoMounted = editorEnabled === true && (tab === 'repo' || repoOpened)
 
   /**
    * Honour a requested tab, once per request.
@@ -434,6 +457,7 @@ export function ArtifactsAside({
     const t = tabRequest?.tab
     if (t === 'files' || t === 'docs' || t === 'live' || t === 'gallery' || t === 'skills'
       || t === 'agents' || t === 'forks' || t === 'workflows' || t === 'mcps' || t === 'prs' || t === 'tasks'
+      || (t === 'repo' && editorEnabled === true)
       || (t === 'metrics' && metrics !== undefined)) setTab(t)
     // A requested STEP comes with the tab: the edge strip names an action, so pressing it
     // lands on that row rather than on the top of a feed to be searched. Set unconditionally,
@@ -681,6 +705,19 @@ export function ArtifactsAside({
   const tabs: { id: TabId; label: string; icon: React.ReactNode; count?: number | null }[] = [
     { id: 'files', label: pt ? 'Arquivos' : 'Files', icon: <Files size={12} />, count: loading ? null : artifacts.length },
     { id: 'docs', label: pt ? 'Docs' : 'Docs', icon: <BookOpen size={12} />, count: loading ? null : docs.length },
+    // THE REPOSITORY, beside the two tabs that list what this session itself wrote. It is
+    // ABSENT and never greyed when the gate is closed (`editorEnabled` — the server's own
+    // combination of `CAPS.localShell` and the user's switch): a disabled control that
+    // explains nothing is indistinguishable from a broken one, and the route refuses anyway.
+    // NO `count`: a repository is not a list of this session's work, and the grid prints a
+    // dash plus "open the tab to count" for a `null` — a promise this tab can never keep.
+    ...(editorEnabled
+      ? [{
+          id: 'repo' as const,
+          label: pt ? 'Repositório' : 'Repository',
+          icon: <FolderTree size={12} />,
+        }]
+      : []),
     { id: 'live', label: 'Live', icon: <Activity size={12} />, count: loading ? null : feed.length },
     {
       id: 'gallery',
@@ -1670,7 +1707,31 @@ export function ArtifactsAside({
               lives. */}
           {/* The TASKS tab outranks the refusal: it is about the board, not about reading this
               conversation, so a session whose transcript cannot be read can still be filed. */}
-          {tab === 'tasks' && session ? (
+          {/* THE BODY REGION. One `position: relative` box so the Repository tab's layer can sit
+              over it at the region's full size while another tab is the one being read — the same
+              geometry `EditorStack` uses for its own hidden buffers, and the reason a hidden layer
+              still MEASURES (a zero-sized box is a state Monaco's `automaticLayout` then has to
+              recover from). Every branch below is the flex child it was before. */}
+          <div style={{
+            position: 'relative', flex: 1, minHeight: 0, minWidth: 0,
+            display: 'flex', flexDirection: 'column',
+          }}>
+          {repoMounted && (
+            <Layer shown={tab === 'repo'}>
+              <RepositoryTab
+                sessionId={sessionId}
+                lang={lang}
+                autosave={editorAutosave === true}
+                turns={turns ?? []}
+              />
+            </Layer>
+          )}
+          {/* The repo tab's body is the layer above, so the chain renders NOTHING for it — and
+              nothing is also the right answer with the gate closed, which is the only way `tab` can
+              read `repo` without a layer behind it (the switch turned off in another surface while
+              this panel still had it selected). A half-built panel would be worse. */}
+          {tab === 'repo' ? null
+            : tab === 'tasks' && session ? (
             <div style={{ overflowY: 'auto', minHeight: 0 }}>
               <SessionTasksTab
                 session={session}
@@ -1691,6 +1752,7 @@ export function ArtifactsAside({
             : tab === 'mcps' ? mcpBody()
             : tab === 'prs' ? prsBody()
             : body()}
+          </div>
         </>
       )}
     </div>
@@ -3197,24 +3259,6 @@ function McpRow({ entry, pt, canWrite, busy, working, check, onCheck, onRemove, 
 function Spinner({ size = 16 }: { size?: number }) {
   return <Loader size={size} className="ag-working-spin" />
 }
-
-function Note({ text, icon }: { text: string; icon?: React.ReactNode }) {
-  return (
-    <div style={{
-      flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-      padding: '20px 18px',
-    }}>
-      <p style={{
-        margin: 0, fontSize: 12, lineHeight: 1.6, textAlign: 'center',
-        color: 'var(--text-tertiary)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
-      }}>
-        {icon}
-        {text}
-      </p>
-    </div>
-  )
-}
-
 
 /** OPEN / MERGED / CLOSED, in the colours GitHub itself uses, so the state is read before the word. */
 function PrState({ state, draft, pt }: { state: string; draft: boolean; pt: boolean }) {
