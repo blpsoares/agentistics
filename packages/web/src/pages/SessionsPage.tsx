@@ -35,6 +35,7 @@ import { SessionTitleFlag } from '../components/sessions/SessionTitleFlag'
 import { MagnifierButton } from '../components/a11y/MagnifierButton'
 import { HideLensesButton } from '../components/a11y/HideLensesButton'
 import { ArtifactsAside } from '../components/sessions/ArtifactsAside'
+import { UnsavedChangesGuard } from '../components/sessions/UnsavedChangesGuard'
 import {
   ASIDE_ANIM_MS, ASIDE_EASE, edgeHint, panelWidth, resolveArtifactLayout,
   type ArtifactLayout,
@@ -581,6 +582,30 @@ export default function SessionsPage() {
     />
   )
 
+  /**
+   * THE QUESTION BEFORE THE PANE IS DROPPED — asked at THIS level because this is the level that
+   * drops it. `artShell === 'none'` unmounts `ArtifactsAside`, the Studio's `Layer` and every Monaco
+   * model with it; the Studio keeps its buffers through everything INSIDE the panel and asks before
+   * closing one dirty tab, and none of that could see the panel itself being closed or the page
+   * navigating away. Autosave is off by default, so that was three typed lines gone 260 ms after a
+   * press on the panel's close, with nothing asked.
+   *
+   * The guard holds every drop that has a moment to be held: the close (`closeArtifacts` asks through
+   * `unsavedBuffers.ts`), every router navigation that leaves this session's page — another session,
+   * the dedicated terminal, `SideNav`, and on a phone the arrival of a new session, which is a
+   * navigation first — and a reload or closed tab (`beforeunload`). It keeps nothing mounted: the
+   * answer "discard" drops the pane exactly as before. STATED LIMITS: the browser's own Back/Forward
+   * cannot be held by a `BrowserRouter` (`lib/unsavedLeave.ts`), and a selected row that vanishes
+   * from the fleet with no navigation at all still drops the pane unasked.
+   */
+  const leaveGuard = (
+    <UnsavedChangesGuard
+      lang={pt ? 'pt' : 'en'}
+      sessionKeys={[sessionId, selected?.id, selected?.conversationId]
+        .filter((k): k is string => typeof k === 'string' && k !== '')}
+    />
+  )
+
   const panel = selected === undefined ? null : (
     <SessionPanel
       session={selected}
@@ -887,7 +912,9 @@ export default function SessionsPage() {
   // 768px (a phone has a back bar and a title; a desktop has the edge strip), so `SessionPanel`
   // remounts on that crossing exactly as it always has. The conversation is re-read from the
   // server and a half-typed prompt is held by `composerStore`, so nothing is lost there — which is
-  // precisely what was NOT true of the Studio, whose buffers live nowhere but in its own DOM.
+  // precisely what was NOT true of the Studio, whose buffers live nowhere but in its own DOM. (So a
+  // drop that is not a layout change — the panel closing, the page navigating — is ASKED about
+  // first; see `leaveGuard`.)
   // ---------------------------------------------------------------------------
 
   /**
@@ -1386,6 +1413,9 @@ export default function SessionsPage() {
       )}
       {/* Mobile-only chrome, and a slot that is always here so it can never shift the pane. */}
       {isMobile ? filtersSheet : null}
+      {/* LAST, and always present, so adding it shifted no slot above. The return that holds the
+          pane holds the question asked before the pane is dropped — see `leaveGuard`. */}
+      {leaveGuard}
     </div>
   )
 }

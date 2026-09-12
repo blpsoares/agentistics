@@ -79,13 +79,21 @@
  * is the harness's `tool_use` id: the plan's own draft compared `ref` against the open path, and
  * that badge could never have lit.
  *
- * A STATED LIMIT: the open files belong to ONE session. Selecting a different session resets this
- * panel — the tree, the strip and every buffer with it. There is nowhere to keep them (the panel's
- * whole state is per session) and no honest way to ask, since the switch has already happened
- * elsewhere; the buffer that can be lost that way is one nothing else in this aside survives either.
+ * THE LEVELS ABOVE THIS ONE ASK TOO, and this component is what lets them. Everything above keeps
+ * the Studio mounted through gestures INSIDE the panel; the PAGE is what unmounts it — closing the
+ * panel, navigating to another session or another screen. So the dirty paths are REPORTED to
+ * `lib/unsavedBuffers.ts`, and `SessionsPage`'s `UnsavedChangesGuard` holds each of those drops
+ * behind the same question this component asks for one tab, raised for N. Without the report the
+ * guard counts nothing and asks nothing, which is the silent loss it exists to prevent.
+ *
+ * The open files belong to ONE session, and selecting a different session still resets this panel —
+ * the tree, the strip and every buffer with it; there is nowhere to keep them. What changed is that
+ * the switch is a NAVIGATION, and the navigation is held and asked about before it happens. A
+ * STATED LIMIT remains: a switch the router cannot hold (the browser's own Back/Forward, see
+ * `lib/unsavedLeave.ts`) still resets without a question.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
   AlertTriangle, ArrowLeft, Check, ChevronLeft, FilePlus, Loader, PanelLeftClose, PanelLeftOpen,
   Plus, Search, X,
@@ -97,6 +105,7 @@ import {
 import { createRepoEntry, fetchTree, type RepoLang } from '../../lib/repoApi'
 import { repoFailureText } from '../../lib/repoErrorText'
 import { liveEvents, type LiveEvent, type LiveTurn } from '../../lib/artifactTabs'
+import { clearUnsaved, reportUnsaved } from '../../lib/unsavedBuffers'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { ConfirmModal } from '../../pages/settings/primitives'
 import { BetaTag } from '../BetaTag'
@@ -356,6 +365,19 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
   const [tree, setTree] = useState<TreeNode>(makeRootNode())
   const [view, setView] = useState<View>('tree')
   const [tabs, setTabs] = useState<OpenTab[]>([])
+  /**
+   * REPORT WHAT IS UNSAVED to the page's guard — see the file header. Keyed on this INSTANCE, not on
+   * the session: a session switch runs this effect before the reset has emptied `tabs`, and an owner
+   * named after the session would briefly file the previous session's dirty paths under the new one.
+   * The joined key keeps the effect from re-running on a re-render that changed nothing dirty.
+   */
+  const unsavedOwner = useId()
+  const dirtyKey = tabs.filter(t => t.dirty).map(t => t.path).join('\0')
+  useEffect(() => {
+    reportUnsaved(unsavedOwner, dirtyKey === '' ? [] : dirtyKey.split('\0'))
+  }, [unsavedOwner, dirtyKey])
+  // Unmounted, the buffers are gone — there is nothing left for anybody to ask about.
+  useEffect(() => () => clearUnsaved(unsavedOwner), [unsavedOwner])
   const [activePath, setActivePath] = useState<string | null>(null)
   const [goTo, setGoTo] = useState<GoTo | null>(null)
   const [pendingClose, setPendingClose] = useState<string | null>(null)
@@ -398,6 +420,8 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
    *
    * A SESSION CHANGE RESETS EVERYTHING, strip included: those tabs name files under the previous
    * session's folder, and leaving them would have the editor read a path against the wrong root.
+   * Dirty buffers are not dropped here unasked: the switch is a navigation, and `SessionsPage`'s
+   * guard held it behind a question before this prop ever changed (see the file header).
    */
   useEffect(() => {
     let cancelled = false

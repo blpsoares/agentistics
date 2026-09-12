@@ -2,8 +2,9 @@ import { test, expect, beforeEach } from 'bun:test'
 import {
   closeArtifacts, getArtifacts, openArtifacts, resetArtifacts, setArtifactCount, toggleArtifacts,
 } from './artifactsStore'
+import { answerUnsaved, getUnsaved, reportUnsaved, resetUnsaved } from './unsavedBuffers'
 
-beforeEach(() => resetArtifacts())
+beforeEach(() => { resetArtifacts(); resetUnsaved() })
 
 test('it starts knowing nothing — no session, no count, shut', () => {
   expect(getArtifacts()).toEqual({ sessionId: null, open: false, count: 0, dismissed: false, tabRequest: null })
@@ -85,4 +86,48 @@ test('opening without naming a tab leaves the reader where they were', () => {
   const asked = getArtifacts().tabRequest
   openArtifacts()
   expect(getArtifacts().tabRequest).toBe(asked)
+})
+
+/**
+ * CLOSING THE PANEL WITH UNSAVED STUDIO BUFFERS ASKS FIRST.
+ *
+ * Closing unmounts the whole pane, Monaco models and all. The Studio asked before closing ONE dirty
+ * tab and nothing asked before closing the panel holding N — so the question lives in the one
+ * function every close goes through.
+ */
+test('a close with a dirty buffer is HELD: the panel stays open until the reader discards', () => {
+  setArtifactCount('a', 0)
+  openArtifacts('studio')
+  reportUnsaved('studio', ['README.md'])
+  closeArtifacts()
+  expect(getArtifacts().open).toBe(true)
+  expect(getUnsaved().question).toEqual({ cause: 'close' })
+  answerUnsaved(true)
+  expect(getArtifacts()).toMatchObject({ open: false, dismissed: true })
+})
+
+test('"keep editing" leaves the panel open and forgets the close', () => {
+  setArtifactCount('a', 0)
+  openArtifacts()
+  reportUnsaved('studio', ['README.md'])
+  closeArtifacts()
+  answerUnsaved(false)
+  expect(getArtifacts()).toMatchObject({ open: true, dismissed: false })
+})
+
+test('the header toggle is held the same way — it closes through the same function', () => {
+  setArtifactCount('a', 0)
+  toggleArtifacts()
+  reportUnsaved('studio', ['x.ts'])
+  toggleArtifacts()
+  expect(getArtifacts().open).toBe(true)
+  expect(getUnsaved().question).toEqual({ cause: 'close' })
+})
+
+test('with nothing unsaved a close is immediate and asks nothing', () => {
+  setArtifactCount('a', 0)
+  openArtifacts()
+  closeArtifacts()
+  expect(getArtifacts().open).toBe(false)
+  expect(getUnsaved().question).toBeNull()
 })
