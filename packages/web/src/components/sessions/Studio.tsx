@@ -102,7 +102,7 @@ import {
   applyChildren, applyError, closeTab, makeRootNode, markDirty, openTab,
   type OpenTab, type TreeNode,
 } from '../../lib/repoTreeModel'
-import { createRepoEntry, fetchTree, type RepoLang } from '../../lib/repoApi'
+import { createRepoEntry, fetchTree, type RepoLang, type TreeListResult } from '../../lib/repoApi'
 import { repoFailureText } from '../../lib/repoErrorText'
 import { liveEvents, type LiveEvent, type LiveTurn } from '../../lib/artifactTabs'
 import { clearUnsaved, reportUnsaved } from '../../lib/unsavedBuffers'
@@ -137,8 +137,17 @@ export interface StudioProps {
 /** Which layer the panel is showing while no file is open. */
 type View = 'tree' | 'search'
 
-/** Where an editor should jump on open — set by a CONTENT search hit, which names a line. */
-interface GoTo { path: string; line: number }
+/**
+ * Where an editor should jump on open — set by a CONTENT search hit, which names a line.
+ *
+ * `seq` is what makes RE-CLICKING THE SAME HIT work: `RepoFileEditor`'s reveal effect depends on the
+ * line NUMBER (it has to — the number is what it scrolls to), so a second `{path, line}` object
+ * carrying the identical number left that effect's dependency array unchanged and the jump silently
+ * did nothing the second time. `seq` is a value that is NEVER the same twice in a row (see
+ * `nextGoTo`), so the effect always has something new to depend on even when the destination is the
+ * one it just visited.
+ */
+interface GoTo { path: string; line: number; seq: number }
 
 /** The "new file" row: what has been typed, whether a request is out, and the last refusal. */
 interface Creating { name: string; busy: boolean; error: string | null }
@@ -357,6 +366,48 @@ function storeTreeWidth(width: number): void {
   try { localStorage.setItem(TREE_WIDTH_KEY, String(width)) } catch { /* private mode */ }
 }
 
+/**
+ * Applying the root's re-read the same way EVERYWHERE it happens: on success, the real listing; on
+ * refusal, the tree's own error state carrying the SAME sentence every other failure in this feature
+ * shows — never a second wording table and never a stale tree that says nothing about being stale.
+ * The session-reset effect and `submitCreate`'s post-create re-read both go through this, so the one
+ * path that used to drop the refusal silently now cannot drift from the one that never did.
+ */
+export function applyRootRefresh(prev: TreeNode, res: TreeListResult, lang: RepoLang): TreeNode {
+  return res.ok
+    ? applyChildren(prev, '', res.children)
+    : applyError(prev, '', repoFailureText(res, lang))
+}
+
+/**
+ * Has the session moved on since an async continuation for it was kicked off?
+ *
+ * `submitCreate` awaits twice — the create itself, then the root re-read — and either can outlive a
+ * session switch. Applying a LATE answer would put the old session's file listing onto the new
+ * session's tree and open a tab for a path under a root that is no longer on screen. Every
+ * continuation checks this before touching any state.
+ */
+export function sessionMovedOn(startedFor: string, currentSession: string): boolean {
+  return startedFor !== currentSession
+}
+
+/**
+ * The next `goTo` request, and the counter it consumes.
+ *
+ * The counter (`seq`) is the whole fix for re-clicking the same search hit: `{path, line}` alone can
+ * repeat exactly (same file, same line, clicked twice), and `RepoFileEditor`'s reveal effect depends
+ * on the line NUMBER, so a repeated object left nothing in its dependency array different and the
+ * jump silently did not happen the second time. `seq` always advances, so the effect always has a
+ * reason to re-run even when the destination is identical to the one it just visited.
+ */
+export function nextGoTo(
+  counter: number, path: string, line: number | undefined,
+): { goTo: GoTo | null; counter: number } {
+  if (line === undefined || line <= 0) return { goTo: null, counter }
+  const seq = counter + 1
+  return { goTo: { path, line, seq }, counter: seq }
+}
+
 // --- the component -------------------------------------------------------------------------------
 
 export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps) {
@@ -380,6 +431,15 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
   useEffect(() => () => clearUnsaved(unsavedOwner), [unsavedOwner])
   const [activePath, setActivePath] = useState<string | null>(null)
   const [goTo, setGoTo] = useState<GoTo | null>(null)
+  /** The counter behind `goTo.seq` — see `nextGoTo`. */
+  const goToCounter = useRef(0)
+  /**
+   * The session every in-flight async continuation of THIS render was started for, kept current so a
+   * late answer can tell it arrived after the reader has already moved on — see `sessionMovedOn`.
+   * A ref rather than a dependency of the effect below: it must be readable from `submitCreate`,
+   * which is not itself an effect.
+   */
+  const currentSession = useRef(sessionId)
   const [pendingClose, setPendingClose] = useState<string | null>(null)
   const [creating, setCreating] = useState<Creating | null>(null)
   const [treeWidth, setTreeWidth] = useState<number>(readTreeWidth)
@@ -424,6 +484,7 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
    * guard held it behind a question before this prop ever changed (see the file header).
    */
   useEffect(() => {
+    currentSession.current = sessionId
     let cancelled = false
     setTree(makeRootNode())
     setTabs([])
@@ -432,10 +493,9 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
     setPendingClose(null)
     setCreating(null)
     setView('tree')
-    void fetchTree(sessionId, '', lang as RepoLang).then(res => {
+    void fetchTree(sessionId, '', lang).then(res => {
       if (cancelled) return
-      if (res.ok) setTree(prev => applyChildren(prev, '', res.children))
-      else setTree(prev => applyError(prev, '', repoFailureText(res, lang as RepoLang)))
+      setTree(prev => applyRootRefresh(prev, res, lang))
     })
     return () => { cancelled = true }
     // `lang` is deliberately absent: it changes only the WORDING of a refusal, and re-running this
@@ -447,7 +507,9 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
   const openFile = (path: string, line?: number) => {
     setTabs(prev => openTab(prev, path))
     setActivePath(path)
-    setGoTo(line !== undefined && line > 0 ? { path, line } : null)
+    const next = nextGoTo(goToCounter.current, path, line)
+    goToCounter.current = next.counter
+    setGoTo(next.goTo)
     // The view underneath is deliberately left ALONE. Opening from a search hit lands on the file
     // (an active path is what decides which layer is shown), and the back control then returns to
     // the results the hit came from — a reader opening the second of twelve matches should not have
@@ -469,18 +531,28 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
   const submitCreate = async (name: string) => {
     const path = name.trim()
     if (path === '') return
+    const forSession = sessionId
     setCreating({ name, busy: true, error: null })
-    const out = await createRepoEntry(sessionId, path, 'file', lang as RepoLang)
+    const out = await createRepoEntry(sessionId, path, 'file', lang)
+    // The reader may have left this session while the request was out — see `sessionMovedOn`. A late
+    // answer from a session nobody is looking at any more touches nothing: not the create row (which
+    // the reset effect already put back to `null`), not the tree, and no tab is opened under a root
+    // that is no longer on screen.
+    if (sessionMovedOn(forSession, currentSession.current)) return
     if (!out.ok) {
-      setCreating({ name, busy: false, error: repoFailureText(out, lang as RepoLang) })
+      setCreating({ name, busy: false, error: repoFailureText(out, lang) })
       return
     }
     setCreating(null)
     // Re-read the root rather than inserting the row here: the real listing is gitignore-aware and
     // sorted by the server, and a second implementation of that is a second thing to disagree with
     // what was actually created.
-    const res = await fetchTree(sessionId, '', lang as RepoLang)
-    if (res.ok) setTree(prev => applyChildren(prev, '', res.children))
+    const res = await fetchTree(forSession, '', lang)
+    if (sessionMovedOn(forSession, currentSession.current)) return
+    // The create itself already succeeded, so the file is opened either way — what the re-read
+    // decides is whether the TREE shows the fresh listing or a visible refusal. Leaving it silently
+    // stale (the old defect) would mean the new file exists on disk and nowhere on screen.
+    setTree(prev => applyRootRefresh(prev, res, lang))
     openFile(path)
   }
 
@@ -1095,7 +1167,9 @@ export function EditorStack({ sessionId, paths, activePath, autosave, lang, goTo
                 autosave={autosave}
                 onDirtyChange={dirty => onDirtyChange(path, dirty)}
                 lang={lang}
-                {...(goTo !== null && goTo.path === path ? { gotoLine: goTo.line } : {})}
+                {...(goTo !== null && goTo.path === path
+                  ? { gotoLine: goTo.line, gotoSeq: goTo.seq }
+                  : {})}
               />
             </div>
           </Layer>

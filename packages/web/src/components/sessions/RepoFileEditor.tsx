@@ -115,6 +115,12 @@ export interface RepoFileEditorProps {
   lang: 'pt' | 'en'
   /** Set when the file was opened FROM a content-search hit; re-set when another hit re-opens it. */
   gotoLine?: number
+  /**
+   * A value that changes on EVERY jump request, even a repeat of the same line. `gotoLine` alone
+   * cannot make the effect below re-run when the destination is identical to the one just visited —
+   * see the host's `nextGoTo`, which is the only place this is produced.
+   */
+  gotoSeq?: number
 }
 
 // --- loading one file ----------------------------------------------------------------------------
@@ -649,7 +655,7 @@ function readThemeAttr(): string | null {
 }
 
 export function RepoFileEditor({
-  sessionId, path, autosave, onDirtyChange, lang, gotoLine,
+  sessionId, path, autosave, onDirtyChange, lang, gotoLine, gotoSeq,
 }: RepoFileEditorProps) {
   const isMobile = useIsMobile()
   const pt = lang === 'pt'
@@ -789,12 +795,15 @@ export function RepoFileEditor({
   }, [isMobile, themeAttr, mounted])
 
   // --- open at a searched line ----------------------------------------------
+  // `gotoSeq` is in the dependency array FOR a re-click of the same hit: `gotoLine` alone repeats
+  // exactly whenever the destination line is the one already on screen, and a dependency array that
+  // did not change left this effect silently not re-running — see the host's `nextGoTo`.
   useEffect(() => {
     const editor = editorRef.current
     if (editor === null || gotoLine === undefined || gotoLine <= 0) return
     editor.revealLineInCenter(gotoLine)
     editor.setPosition({ lineNumber: gotoLine, column: 1 })
-  }, [gotoLine, mounted])
+  }, [gotoLine, gotoSeq, mounted])
 
   // --- report dirtiness, on the EDGE ---------------------------------------
   // Monaco fires per keystroke; the parent's handler rebuilds its tab list. Reporting only when the

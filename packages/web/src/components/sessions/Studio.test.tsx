@@ -17,16 +17,16 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  agentActivity, clampTreeWidth, closeOutcome, DIVIDER_W, EDITOR_MIN, EditorStack, Layer,
-  mountedEditors, NewFileRow, paneHits, resolveTreeWidth, SPLIT_MIN, Studio, StudioBar, StudioBody,
-  sameFile,
+  agentActivity, applyRootRefresh, clampTreeWidth, closeOutcome, DIVIDER_W, EDITOR_MIN, EditorStack,
+  Layer, mountedEditors, nextGoTo, NewFileRow, paneHits, resolveTreeWidth, sessionMovedOn, SPLIT_MIN,
+  Studio, StudioBar, StudioBody, sameFile,
   studioLayout, TabStrip, Toolbar, TREE_DEFAULT, TREE_MAX, TREE_MIN, TreeDivider, Watermark,
   watermarkOpacity,
 } from './Studio'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { stripComments } from '../../lib/stripComments'
-import type { OpenTab } from '../../lib/repoTreeModel'
+import { makeRootNode, type OpenTab, type TreeNode } from '../../lib/repoTreeModel'
 import type { LiveEvent, LiveTurn } from '../../lib/artifactTabs'
 
 /**
@@ -132,6 +132,104 @@ describe('closeOutcome', () => {
 
   test('closing a path that is not open changes nothing but says so consistently', () => {
     expect(closeOutcome(three, 'b.ts', 'nope.ts')).toEqual({ tabs: three, activePath: 'b.ts' })
+  })
+})
+
+// --- the root re-read after a create --------------------------------------------------------------
+
+describe('applyRootRefresh — the one path a create used to drop the refusal on', () => {
+  test('a successful re-read applies the real listing', () => {
+    const next = applyRootRefresh(makeRootNode(), { ok: true, children: [{ name: 'a.ts', kind: 'file' }] }, 'en')
+    expect(next.children).toEqual([
+      { path: 'a.ts', name: 'a.ts', kind: 'file', expanded: false, loading: false, children: null },
+    ])
+    expect(next.error).toBeUndefined()
+  })
+
+  test('a REFUSED re-read is a visible error on the tree — the defect this replaces', () => {
+    // Before this function existed, `submitCreate`'s re-read had `if (res.ok) …` with no `else`: a
+    // refused re-read left the tree silently holding the pre-create listing, with nothing on screen
+    // saying it was stale. `applyRootRefresh` is the one path both the session load and the create
+    // flow now go through, so this failure mode is structurally the same as every other tree failure.
+    const next = applyRootRefresh(
+      makeRootNode(),
+      { ok: false, failure: 'refused', status: 403, reason: 'editor_disabled' },
+      'en',
+    )
+    expect(next.error).toBe('The Studio is off on this machine. Turn it on in Settings → Sessions.')
+  })
+
+  test('the sentence is the SAME wording table the rest of the feature uses, in Portuguese too', () => {
+    const next = applyRootRefresh(
+      makeRootNode(),
+      { ok: false, failure: 'unreachable', cause: 'timeout' },
+      'pt',
+    )
+    expect(next.error).toBe(
+      'O servidor está demorando demais para responder. Talvez ainda esteja lendo este diretório.',
+    )
+  })
+
+  test('a refusal never keeps stale CHILDREN silently — the node carries the error, and nothing to show alongside it changes', () => {
+    const withChildren = applyChildrenFixture()
+    const next = applyRootRefresh(
+      withChildren,
+      { ok: false, failure: 'refused', status: 404, reason: 'not-found' },
+      'en',
+    )
+    // The error is set (the tree can now show it); the previous listing is left exactly as it was —
+    // `applyError` never touches `children` — which is the honest half of "stale but visible": the
+    // reader sees the old rows AND the sentence saying the listing did not just refresh.
+    expect(next.error).toBe('not-found')
+    expect(next.children).toEqual(withChildren.children)
+  })
+})
+
+function applyChildrenFixture(): TreeNode {
+  return applyRootRefresh(makeRootNode(), { ok: true, children: [{ name: 'old.ts', kind: 'file' }] }, 'en')
+}
+
+// --- a session switch racing an in-flight request --------------------------------------------------
+
+describe('sessionMovedOn — the cancellation guard `submitCreate` checks after every await', () => {
+  test('the same session throughout: nothing moved on', () => {
+    expect(sessionMovedOn('s1', 's1')).toBe(false)
+  })
+
+  test('the reader switched sessions while the request was out', () => {
+    expect(sessionMovedOn('s1', 's2')).toBe(true)
+  })
+})
+
+// --- re-clicking the same search hit ----------------------------------------------------------------
+
+describe('nextGoTo — what makes a re-click of the SAME hit jump again', () => {
+  test('a first jump request gets seq 1', () => {
+    expect(nextGoTo(0, 'a.ts', 10)).toEqual({ goTo: { path: 'a.ts', line: 10, seq: 1 }, counter: 1 })
+  })
+
+  test('clicking the IDENTICAL hit twice produces two DIFFERENT `seq` values', () => {
+    // This is the whole fix: `{path, line}` alone repeats exactly on a re-click of the same hit, and
+    // `RepoFileEditor`'s reveal effect depends on the line NUMBER, so a dependency array that did not
+    // change left the jump silently not happening a second time. `seq` never repeats.
+    const first = nextGoTo(0, 'a.ts', 10)
+    const second = nextGoTo(first.counter, 'a.ts', 10)
+    expect(first.goTo?.seq).not.toBe(second.goTo?.seq)
+    expect(second.goTo).toEqual({ path: 'a.ts', line: 10, seq: 2 })
+  })
+
+  test('clicking a DIFFERENT hit also advances the counter — every request is distinct', () => {
+    const first = nextGoTo(0, 'a.ts', 10)
+    const second = nextGoTo(first.counter, 'b.ts', 20)
+    expect(second.goTo).toEqual({ path: 'b.ts', line: 20, seq: 2 })
+  })
+
+  test('no line (opening from the tree, not a search hit) clears goTo and spends no seq', () => {
+    expect(nextGoTo(3, 'a.ts', undefined)).toEqual({ goTo: null, counter: 3 })
+  })
+
+  test('a non-positive line is treated the same as no line', () => {
+    expect(nextGoTo(3, 'a.ts', 0)).toEqual({ goTo: null, counter: 3 })
   })
 })
 
