@@ -121,8 +121,10 @@ describe('each row wears its own mark', () => {
     // TypeScript blue, from `fileIcon.tsx`'s own HUE table, and the letters it draws.
     expect(html).toContain('#3178c6')
     expect(html).toContain('TS')
-    // `.env` is the key, in its own hue — the file whose icon matters most to spot.
-    expect(html).toContain('#d1a02a')
+    // `.env` is the key, in its own hue — the file whose icon matters most to spot. The hue is the
+    // one `fileIcon.tsx`'s HUE table actually holds: the contrast pass recorded in that module's own
+    // header darkened it (`env #d1a02a → #af8623`) and this expectation was left naming the old one.
+    expect(html).toContain('#af8623')
     // The folder's colour is still the row's, which the delegated glyph inherits.
     expect(html).toContain('var(--anthropic-orange)')
   })

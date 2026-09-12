@@ -62,11 +62,19 @@
  * precisely because the phase it was first written into is cleared by the next edit — the state this
  * feature must never reach is a switch that reads ON over a file nothing is saving.
  *
- * FIVE FACTS, FIVE SENTENCES — the rule this product applies to harness capabilities, applied to a
- * file: still loading, a read that was refused, a BINARY file (never opened as text), a save that
- * failed, and a conflict. Each has its own wording; none of them is a shared empty box, and the
- * refusals are the SERVER'S OWN sentence wherever it wrote one (`repoErrorText.ts` supplies one
- * only for the failures that arrive carrying none).
+ * SEVEN FACTS, SEVEN SENTENCES — the rule this product applies to harness capabilities, applied to a
+ * file: still loading, a read that was refused, a BINARY file (never opened as text), a binary file
+ * the panel WOULD have shown but that is over its size ceiling, a MEDIA file whose bytes did not
+ * arrive, a save that failed, and a conflict. Each has its own wording; none of them is a shared
+ * empty box, and the refusals are the SERVER'S OWN sentence wherever it wrote one
+ * (`repoErrorText.ts` supplies one only for the failures that arrive carrying none).
+ *
+ * AND AN EIGHTH STATE THAT IS NOT A SENTENCE: an image, a video or a PDF is RENDERED
+ * (`RepoMediaView`), because "binary file, not opened as text here, so it cannot be saved back
+ * mangled" is a true reason about SAVING offered to somebody who only wanted to LOOK. Reported as
+ * "imagens nao estao sendo suportadas pra abrir". It is read-only and says so, and the guarantee is
+ * structural: the `media` load state carries no mtime and dispatches no `loaded`, so there is no
+ * buffer, no Save and no dirty dot.
  *
  * `monacoSetup` IS IMPORTED DYNAMICALLY, and that is load-bearing. Its own header says it must only
  * ever be reached that way — it statically imports five `?worker` wrappers, and this component is
@@ -79,14 +87,15 @@ import {
   useEffect, useReducer, useRef, useState,
   type KeyboardEvent as ReactKeyboardEvent, type ReactNode,
 } from 'react'
-import { AlertTriangle, Check, File, Loader, RotateCcw, Save } from 'lucide-react'
+import { AlertTriangle, Check, Eye, File, Loader, RotateCcw, Save } from 'lucide-react'
 import type * as Monaco from 'monaco-editor'
 import { languageForPath } from '../../lib/monacoLanguage'
 import { codeThemeName, defineAgentisticsThemes } from '../../lib/monacoTheme'
 import {
   isWriteConflict, readRepoFile, writeRepoFile,
-  type ReadFileResult, type RepoLang, type WriteFileResult,
+  type ReadFileResult, type RepoLang, type RepoMediaKind, type WriteFileResult,
 } from '../../lib/repoApi'
+import { repoMediaUrl } from '../../lib/attachmentUrl'
 import { repoFailureText } from '../../lib/repoErrorText'
 import { formatBytes } from '../../lib/gallery'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -115,13 +124,35 @@ export interface RepoFileEditorProps {
  */
 export type LoadState =
   | { kind: 'loading' }
-  | { kind: 'binary'; name: string; size: number }
+  /**
+   * A binary file that is NOT shown. `overLimit` is the ceiling it blew when it was one of the three
+   * showable kinds and was simply too large — which gets its own sentence, because `binaryText`'s
+   * reason (it cannot be saved back mangled) is not the reason this one was refused.
+   */
+  | { kind: 'binary'; name: string; size: number; overLimit?: number }
+  /**
+   * A binary file the browser CAN show — an image, a video, a PDF. It is its own state and not a
+   * flavour of `binary`, because the two lead opposite ways: `binary` is a refusal and this is a
+   * render, and the only thing they share is that neither opens in Monaco.
+   *
+   * It carries NO mtime and no content, which is what keeps the save machinery structurally out of
+   * reach: only `ready` dispatches `loaded`, so nothing here can ever make a buffer dirty or offer a
+   * Save. See the `reset` event's own note.
+   */
+  | { kind: 'media'; media: RepoMediaKind; name: string; size: number }
   | { kind: 'failed'; text: string }
   | { kind: 'ready'; content: string; mtimeMs: number }
 
 export function loadStateFor(res: ReadFileResult, lang: RepoLang): LoadState {
   if (!res.ok) return { kind: 'failed', text: repoFailureText(res, lang) }
-  if (res.binary === true) return { kind: 'binary', name: res.name, size: res.size }
+  if (res.binary === true) {
+    if (res.media !== undefined) {
+      return { kind: 'media', media: res.media, name: res.name, size: res.size }
+    }
+    return res.mediaOverLimit !== undefined
+      ? { kind: 'binary', name: res.name, size: res.size, overLimit: res.mediaOverLimit.limit }
+      : { kind: 'binary', name: res.name, size: res.size }
+  }
   return { kind: 'ready', content: res.content, mtimeMs: res.mtimeMs }
 }
 
@@ -138,6 +169,37 @@ export function binaryText(file: { name: string; size: number }, lang: RepoLang)
   return lang === 'pt'
     ? `${where} — arquivo binário. Ele não é aberto como texto aqui, para não ser salvo corrompido.`
     : `${where} — binary file. It is not opened as text here, so it cannot be saved back mangled.`
+}
+
+/**
+ * A binary file the Studio WOULD have shown, refused on SIZE — and the sentence names which ceiling.
+ *
+ * Its own sentence rather than `binaryText`'s, because `binaryText` gives a reason ("it cannot be
+ * saved back mangled") that is simply not why this one was refused, and a wrong reason sends the
+ * reader looking for a setting that does not exist. The ceiling is the SERVER's own number, carried
+ * on the read; nothing here decides it.
+ */
+export function mediaTooBigText(
+  file: { name: string; size: number; limit: number }, lang: RepoLang,
+): string {
+  const size = formatBytes(file.size)
+  const where = size === '' ? file.name : `${file.name} · ${size}`
+  const cap = formatBytes(file.limit)
+  return lang === 'pt'
+    ? `${where} — acima do limite de ${cap} que este painel exibe. Abra o arquivo fora do painel.`
+    : `${where} — over the ${cap} this panel will display. Open it outside the panel.`
+}
+
+/**
+ * The bytes did not arrive. An `<img>`, a `<video>` and an `<iframe>` all report failure as a bare
+ * `error` event with no body to read, so this is as specific as the pane can honestly be — and it is
+ * still a SENTENCE, because the alternative is a broken-image glyph or an empty box, which says
+ * nothing about whether the file moved, was deleted, or the server stopped answering.
+ */
+export function mediaFailedText(name: string, lang: RepoLang): string {
+  return lang === 'pt'
+    ? `${name} — não foi possível carregar este arquivo. Ele pode ter sido movido ou apagado desde que a lista foi lida.`
+    : `${name} — this file could not be loaded. It may have moved or been deleted since the list was read.`
 }
 
 // --- the save state machine ----------------------------------------------------------------------
@@ -842,7 +904,28 @@ export function RepoFileEditor({
   }
 
   if (load.kind === 'binary') {
-    return <RepoNote icon={<File size={15} />} text={binaryText(load, lang)} />
+    const text = load.overLimit === undefined
+      ? binaryText(load, lang)
+      : mediaTooBigText({ ...load, limit: load.overLimit }, lang)
+    return <RepoNote icon={<File size={15} />} text={text} />
+  }
+
+  // A MEDIA pane, and the save machinery is not merely hidden from it — it is unreachable. Only a
+  // `ready` read dispatches `loaded`, the reducer was `reset` before this read, and `RepoSaveStrip`
+  // is rendered in the `ready` branch alone, so `isDirty` stays false and the host's tab can never
+  // light its unsaved dot over a PNG.
+  if (load.kind === 'media') {
+    return (
+      <RepoMediaView
+        sessionId={sessionId}
+        path={path}
+        media={load.media}
+        name={load.name}
+        size={load.size}
+        lang={lang}
+        isMobile={isMobile}
+      />
+    )
   }
 
   return (
@@ -906,6 +989,153 @@ export function RepoFileEditor({
       )}
     </div>
   )
+}
+
+/**
+ * RepoMediaView — an image, a video or a PDF, SHOWN, where the Studio used to print a refusal.
+ *
+ * THREE KINDS, ONE FRAME, and the elements are the ones `AttachmentLightbox` already settled on for
+ * the same three: `<img>`, a `<video controls playsInline>`, and a PDF handed to the BROWSER'S OWN
+ * viewer in an `<iframe>` with `#view=FitH` and a link out beneath it. That is not a coincidence to
+ * be tidied up later — inventing a second answer for "how does this product show a PDF" is how the
+ * two surfaces come to disagree about a file the reader opens from both.
+ *
+ * IT IS READ-ONLY AND IT SAYS SO. The strip where a text file's Save button lives carries the word
+ * instead, because an editor pane with no visible save is indistinguishable from one whose save is
+ * merely off-screen. The guarantee underneath it is structural rather than painted: this component
+ * is reached only from the `media` load state, which carries no mtime, dispatches no `loaded`, and
+ * leaves `isDirty` false — so there is no buffer to save and no dot for the host's tab to light.
+ *
+ * A FAILED LOAD IS A SENTENCE. All three elements report failure as a bare `error` event with no
+ * body, so the pane swaps itself for `mediaFailedText` rather than leaving a broken-image glyph or,
+ * worse, an empty region that looks like a file with nothing in it.
+ *
+ * THE SIZE CEILING IS NOT CHECKED HERE. The server decided it on the read and reported it; a file
+ * over the ceiling never reaches this component at all (it is the `binary` state with `overLimit`
+ * set). A second copy of those numbers in the browser is a second answer to one question.
+ */
+export function RepoMediaView({ sessionId, path, media, name, size, lang, isMobile }: {
+  sessionId: string
+  path: string
+  media: RepoMediaKind
+  name: string
+  size: number
+  lang: 'pt' | 'en'
+  isMobile: boolean
+}) {
+  const pt = lang === 'pt'
+  const [failed, setFailed] = useState(false)
+  const src = repoMediaUrl(sessionId, path)
+
+  if (failed) {
+    return (
+      <RepoNote
+        icon={<AlertTriangle size={15} style={{ color: 'var(--accent-red)' }} />}
+        text={mediaFailedText(name, lang)}
+      />
+    )
+  }
+
+  const bytes = formatBytes(size)
+
+  return (
+    <div style={{
+      flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column',
+      boxSizing: 'border-box',
+    }}>
+      <div
+        data-media-strip={media}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, boxSizing: 'border-box',
+          padding: isMobile ? '5px 8px' : '3px 8px',
+          borderBottom: '1px solid var(--border-subtle)',
+        }}
+      >
+        <Eye size={12} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
+        <span
+          role="status"
+          style={{
+            flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 1.45, color: 'var(--text-tertiary)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}
+        >
+          {/* The kind is named because it is what decides the element below, and "read-only" is the
+              half a reader is looking for where a Save button would be. */}
+          {`${pt ? 'Somente leitura' : 'Read-only'} · ${MEDIA_WORD[media][pt ? 'pt' : 'en']}${bytes === '' ? '' : ` · ${bytes}`}`}
+        </span>
+        <a
+          href={src}
+          target="_blank"
+          rel="noreferrer"
+          style={{
+            display: 'inline-flex', alignItems: 'center', flexShrink: 0, boxSizing: 'border-box',
+            // 44px of HEIGHT on a phone and no `minWidth` beside it: the link carries a word, so it
+            // is already wider than a finger — the same shape the Save button above keeps.
+            minHeight: isMobile ? 44 : undefined,
+            padding: isMobile ? '0 10px' : '2px 6px',
+            fontSize: isMobile ? 13 : 11.5, fontWeight: 600,
+            color: 'var(--anthropic-orange)', textDecoration: 'none',
+          }}
+        >
+          {pt ? 'Abrir em uma aba' : 'Open in a tab'}
+        </a>
+      </div>
+
+      {/* THE REGION SCROLLS, AND IT SCROLLS INSIDE ITSELF. A tall image in an aside the reader can
+          drag down to 280px has to be reachable, and `contain` is the rule this workspace keeps for
+          every inner scroller — a flick off the end of one must not chain to the document and
+          rubber-band the page. `overflowX` is hidden rather than auto on purpose: the elements below
+          are all capped at `maxWidth: 100%`, so a horizontal bar here could only ever be a layout
+          fault, and at 390px the page body must not be able to scroll sideways. */}
+      <div style={{
+        flex: 1, minHeight: 0, minWidth: 0, overflowY: 'auto', overflowX: 'hidden',
+        overscrollBehavior: 'contain',
+        display: 'flex', alignItems: media === 'pdf' ? 'stretch' : 'center', justifyContent: 'center',
+        padding: media === 'pdf' ? 0 : 10, boxSizing: 'border-box',
+        background: 'var(--bg-base)',
+      }}>
+        {media === 'image' ? (
+          <img
+            src={src}
+            alt={name}
+            onError={() => setFailed(true)}
+            // `maxWidth: 100%` is what keeps a 4000px screenshot inside a 280px column instead of
+            // widening the document; `height: auto` keeps its aspect while it does.
+            style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', borderRadius: 6 }}
+          />
+        ) : media === 'video' ? (
+          <video
+            src={src}
+            controls
+            playsInline
+            onError={() => setFailed(true)}
+            // NOT `autoPlay`. The lightbox is a deliberate full-screen open of one file; this is a
+            // tab in a panel that may be restored on load, and a video that starts talking because a
+            // workspace reopened is a surprise nobody asked for.
+            style={{ maxWidth: '100%', maxHeight: '100%', borderRadius: 6 }}
+          />
+        ) : (
+          // The browser's own viewer, `#view=FitH` so it opens fitted to the width rather than at
+          // whatever zoom it remembers — on a narrow column the difference between a page and a
+          // corner of one. iOS Safari renders only the first page inside a frame, which is why the
+          // link in the strip above is not a nicety: it is how the rest is read.
+          <iframe
+            src={`${src}#view=FitH`}
+            title={name}
+            onError={() => setFailed(true)}
+            style={{ flex: 1, width: '100%', minWidth: 0, border: 'none' }}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** What the strip calls each kind. Three words, so the pane never has to say "binary file" again. */
+const MEDIA_WORD: Record<RepoMediaKind, { en: string; pt: string }> = {
+  image: { en: 'image', pt: 'imagem' },
+  video: { en: 'video', pt: 'vídeo' },
+  pdf: { en: 'PDF', pt: 'PDF' },
 }
 
 // --- the strip, the banner and the question ------------------------------------------------------

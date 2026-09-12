@@ -26,8 +26,9 @@ import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   AUTOSAVE_FAILURE_LIMIT, autosaveStopped, binaryText, diskVersionOf, focusTrapTarget,
-  initialSaveState, isDirty, loadStateFor, monacoOptions, monacoThemeFor, nextSaveState,
-  RepoConflictPrompt, RepoSaveStrip, RepoStaleBanner,
+  initialSaveState, isDirty, loadStateFor, mediaFailedText, mediaTooBigText,
+  monacoOptions, monacoThemeFor, nextSaveState,
+  RepoConflictPrompt, RepoMediaView, RepoSaveStrip, RepoStaleBanner,
   saveButtonState, saveEventFor, saveGate, saveStatus,
   type SaveEvent, type SaveState,
 } from './RepoFileEditor'
@@ -82,6 +83,140 @@ describe('loadStateFor', () => {
     const state = loadStateFor({ ok: false, failure: 'unreachable', cause: 'timeout' }, 'en')
     expect(state.kind).toBe('failed')
     expect(state.kind === 'failed' && state.text.length > 0).toBe(true)
+  })
+})
+
+/**
+ * MEDIA — the half of "binary" the Studio now SHOWS.
+ *
+ * The refusal it replaces was true and about the wrong thing: "it is not opened as text here, so it
+ * cannot be saved back mangled" is a statement about SAVING, offered to somebody who wanted to LOOK.
+ * What is asserted here is that the three showable kinds become their own state, that everything
+ * else keeps the old sentence, that a file over its ceiling gets a sentence about its CEILING, and —
+ * the one that matters most — that the shown pane offers no way into the save machinery.
+ */
+describe('media', () => {
+  const shown = (media: 'image' | 'video' | 'pdf') =>
+    loadStateFor({ ok: true, binary: true, name: `f.${media}`, size: 4, media }, 'en')
+
+  test('the three showable kinds become their own state, carrying which one it is', () => {
+    expect(shown('image')).toEqual({ kind: 'media', media: 'image', name: 'f.image', size: 4 })
+    expect(shown('video').kind).toBe('media')
+    expect(shown('pdf').kind).toBe('media')
+  })
+
+  test('a media state carries NO mtime — which is what keeps it out of the save machinery', () => {
+    // `initialSaveState`'s pin only ever moves on a `loaded` event, and only a `ready` read
+    // dispatches one. There is nothing on this state to dispatch it WITH, so the guarantee is the
+    // shape of the type rather than a branch somebody has to remember not to take.
+    expect(Object.keys(shown('image')).sort()).toEqual(['kind', 'media', 'name', 'size'])
+  })
+
+  test('an ordinary binary keeps the old refusal — it is the right one for a .zip', () => {
+    expect(loadStateFor({ ok: true, binary: true, name: 'build.zip', size: 900 }, 'en'))
+      .toEqual({ kind: 'binary', name: 'build.zip', size: 900 })
+  })
+
+  test('over the ceiling is a REFUSAL carrying the ceiling, not a render', () => {
+    const state = loadStateFor({
+      ok: true, binary: true, name: 'huge.mp4', size: 900 * 1024 * 1024,
+      mediaOverLimit: { media: 'video', limit: 512 * 1024 * 1024 },
+    }, 'en')
+    expect(state).toEqual({
+      kind: 'binary', name: 'huge.mp4', size: 900 * 1024 * 1024, overLimit: 512 * 1024 * 1024,
+    })
+  })
+
+  test('the too-big sentence names the FILE, its size and the limit it hit', () => {
+    const text = mediaTooBigText({ name: 'huge.mp4', size: 900 * 1024 * 1024, limit: 512 * 1024 * 1024 }, 'en')
+    expect(text).toContain('huge.mp4')
+    expect(text).toContain('900 MB')
+    expect(text).toContain('512 MB')
+    // And it does NOT give the binary sentence's reason, which is about saving and is not why this
+    // one was refused.
+    expect(text).not.toContain('mangled')
+    expect(mediaTooBigText({ name: 'h.mp4', size: 1, limit: 2 }, 'pt')).toContain('limite')
+  })
+
+  test('a load that failed is a SENTENCE naming the file, in both languages', () => {
+    expect(mediaFailedText('shot.png', 'en')).toContain('shot.png')
+    expect(mediaFailedText('shot.png', 'en')).toContain('could not be loaded')
+    expect(mediaFailedText('shot.png', 'pt')).toContain('não foi possível carregar')
+  })
+})
+
+function mediaView(
+  media: 'image' | 'video' | 'pdf', lang: 'pt' | 'en' = 'en', isMobile = false,
+): string {
+  return renderToStaticMarkup(
+    <RepoMediaView
+      sessionId="s1" path="assets/bryan-home.png" media={media}
+      name="bryan-home.png" size={216 * 1024} lang={lang} isMobile={isMobile}
+    />,
+  )
+}
+
+describe('the media pane', () => {
+  test('an image is an <img> pointed at the STUDIO\'s media route, not the artifacts one', () => {
+    const html = mediaView('image')
+    expect(html).toContain('<img')
+    // `/api/fleet/media` resolves against the files the session WROTE and would refuse a checked-in
+    // asset — the exact file this feature was reported for.
+    expect(html).toContain('/api/fleet/tree/media?id=s1&amp;path=assets%2Fbryan-home.png')
+  })
+
+  test('a video is a <video> with controls and no autoplay', () => {
+    const html = mediaView('video')
+    expect(html).toContain('<video')
+    expect(html).toContain('controls=""')
+    expect(html).toContain('playsInline=""')
+    expect(html).not.toContain('autoplay')
+  })
+
+  test('a PDF goes to the browser\'s OWN viewer, fitted to the width', () => {
+    const html = mediaView('pdf')
+    expect(html).toContain('<iframe')
+    expect(html).toContain('#view=FitH')
+  })
+
+  test('it SAYS it is read-only, and names the kind', () => {
+    expect(mediaView('image')).toContain('Read-only')
+    expect(mediaView('image')).toContain('image')
+    expect(mediaView('video', 'pt')).toContain('Somente leitura')
+    expect(mediaView('video', 'pt')).toContain('vídeo')
+    expect(mediaView('image')).toContain('role="status"')
+  })
+
+  test('THERE IS NO SAVE, in any kind or language', () => {
+    // The strongest half of "read-only" is structural (the state carries no mtime), but a pane that
+    // still painted a Save button would be read as one whose save merely failed.
+    for (const media of ['image', 'video', 'pdf'] as const) {
+      for (const lang of ['en', 'pt'] as const) {
+        const html = mediaView(media, lang)
+        expect(html).not.toContain('<button')
+        expect(html).not.toContain('Save')
+        expect(html).not.toContain('Salvar')
+        expect(html).not.toContain('data-dirty')
+      }
+    }
+  })
+
+  test('a wide image is capped to the column — the page may not scroll sideways at 390px', () => {
+    const html = mediaView('image', 'en', true)
+    expect(html).toContain('max-width:100%')
+    expect(html).toContain('height:auto')
+    // And the region that scrolls does it INSIDE itself, which is this workspace's rule for every
+    // inner scroller — a flick off the end of one must not rubber-band the document.
+    expect(html).toContain('overflow-x:hidden')
+    expect(html).toContain('overscroll-behavior:contain')
+  })
+
+  test('the way out of the panel is a link, and it is a finger tall on a phone', () => {
+    expect(mediaView('pdf', 'en', true)).toContain('Open in a tab')
+    expect(mediaView('pdf', 'pt', true)).toContain('Abrir em uma aba')
+    expect(mediaView('pdf', 'en', true)).toContain('min-height:44px')
+    // 44px is the MOBILE number. On a desktop it would be a painted box three times the link.
+    expect(mediaView('pdf', 'en', false)).not.toContain('min-height:44px')
   })
 })
 

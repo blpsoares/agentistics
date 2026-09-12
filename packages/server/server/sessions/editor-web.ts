@@ -10,11 +10,13 @@
 import type { StartHost } from '../cli-start'
 import type { CliLang } from '../cli-lang'
 import {
-  createTreeEntry, deleteTreeEntry, listChildren, readTreeFile, renameTreeEntry,
+  createTreeEntry, deleteTreeEntry, listChildren, readTreeFile, readTreeMedia, renameTreeEntry,
   resolveSessionDirectory, searchTree, writeTreeFile,
   type CreateRefusal, type DeleteRefusal, type EntryRefusal, type ReadFileRefusal,
-  type RenameRefusal, type WriteFileRefusal,
+  type ReadMediaRefusal, type RenameRefusal, type WriteFileRefusal,
 } from './editor-fs'
+import { planRange } from './editor-media'
+import { OPAQUE_MEDIA_CSP } from '../response-policy'
 import type { SessionDirRefusal } from './editor-directory'
 
 const json = (body: unknown, status = 200): Response =>
@@ -44,6 +46,7 @@ const DIR_REFUSAL: Record<SessionDirRefusal, { en: string; pt: string }> = {
  */
 type GenericRefusal =
   | EntryRefusal | ReadFileRefusal | WriteFileRefusal | CreateRefusal | RenameRefusal | DeleteRefusal
+  | ReadMediaRefusal
   | 'conflict'
 
 const GENERIC_REFUSAL: Record<GenericRefusal, { en: string; pt: string }> = {
@@ -75,6 +78,18 @@ const GENERIC_REFUSAL: Record<GenericRefusal, { en: string; pt: string }> = {
     en: 'This file changed on disk since it was opened. Review the current version before saving over it.',
     pt: 'Este arquivo mudou no disco desde que foi aberto. Revise a versão atual antes de salvar sobre ela.',
   },
+  // The bytes route's own two. Both are reachable only by asking it directly (the pane decides from
+  // the READ, which carries the kind and the ceiling, so it never asks for something it was told is
+  // not shown) — which is exactly why they must still be sentences: the 'open in a tab' link under a
+  // PDF goes to this route, and a file deleted since it was read answers here.
+  'not-media': {
+    en: 'This file is not an image, a video or a PDF, so it is not displayed here.',
+    pt: 'Este arquivo não é uma imagem, um vídeo nem um PDF, então não é exibido aqui.',
+  },
+  'too-big': {
+    en: 'This file is larger than this panel will display.',
+    pt: 'Este arquivo é maior do que este painel exibe.',
+  },
 }
 
 /**
@@ -86,6 +101,16 @@ const GENERIC_REFUSAL: Record<GenericRefusal, { en: string; pt: string }> = {
  */
 const CONFLICT_SHAPED: ReadonlySet<GenericRefusal> = new Set(['already-exists', 'not-empty', 'conflict'])
 const statusFor = (reason: GenericRefusal): number => (CONFLICT_SHAPED.has(reason) ? 409 : 404)
+
+/**
+ * The two refusals the bytes route adds, which `statusFor`'s 404 would misreport: the path resolved
+ * perfectly well and the answer is about its CONTENT (415) or its SIZE (413). Kept as a table beside
+ * that rule rather than folded into it — every other route in this module has only the two shapes.
+ */
+const MEDIA_STATUS: Partial<Record<ReadMediaRefusal, number>> = {
+  'not-media': 415,
+  'too-big': 413,
+}
 
 function sentence(reason: string, lang: CliLang): string {
   const dir = DIR_REFUSAL[reason as SessionDirRefusal]
@@ -150,6 +175,86 @@ export async function handleEditorTreeRoute(
       return json({ ok: false, reason: file.reason, message: sentence(file.reason, lang) }, statusFor(file.reason))
     }
     return json(file)
+  }
+
+  /**
+   * THE BYTES of one image, video or PDF in the session's tree — the route that turns the Studio's
+   * blanket "binary file" refusal into a rendered file for the three kinds a browser can show.
+   *
+   * A SECOND ROUTE rather than `/api/fleet/media`, and the reason is the ALLOWLIST, not the headers.
+   * That route resolves through `planArtifactRead` — files this session WROTE — and refuses
+   * everything else with `not-touched`. The Studio browses the session's whole directory, so the PNG
+   * that prompted this (a checked-in asset the session never opened) is exactly the case that route
+   * exists to refuse. What IS inherited is the content decision: the same closed table
+   * (`artifact-media.ts`), where SVG/HTML/XML are deliberately absent — a repository is full of
+   * SVGs, and one served inline from this origin is a document that can carry script.
+   *
+   * THE POLICY IS `OPAQUE_MEDIA_CSP`, AND IT HAS TO BE THAT EXACT CONSTANT. `handleRequest` stamps
+   * the dashboard's own headers on every `/api/` response and SETS rather than appends, so a policy
+   * written here is normally replaced — which is what happened to this route and to
+   * `/api/fleet/media` alike, both carrying a `default-src 'none'; sandbox` in their source that
+   * never once shipped. It was not cosmetic: the baseline's `frame-ancestors vscode-webview:`
+   * forbade the dashboard from framing its own PDF, so the pane drew the browser's "cannot display"
+   * glyph. `response-policy.ts` is the one-value allowlist that lets this policy through, and
+   * `nosniff` still arrives from the baseline for every response here — which is the half that
+   * makes the closed content table mean anything.
+   *
+   * CONTAINMENT IS THE STUDIO'S OWN, BOTH HALVES. `readTreeMedia` goes through `resolveTreePath`'s
+   * lexical check and `realContained`'s symlink recheck, like every other function in `editor-fs.ts`
+   * — never one without the other.
+   *
+   * IT STREAMS. `Bun.file` is handed to the `Response` rather than read into a buffer, and a
+   * `Range` request is answered with a slice of it, which is what makes a video seekable and what
+   * makes a 512 MB ceiling something other than 512 MB of server memory. `/api/fleet/media` reads
+   * its file whole; at its 12 MB ceiling that is a choice, at this one it would be a defect.
+   */
+  if (pathname === '/api/fleet/tree/media' && req.method === 'GET') {
+    const id = url.searchParams.get('id')
+    const path = url.searchParams.get('path')
+    if (!id || path === null) return badRequest('id-and-path', lang)
+    const dir = await resolveSessionDirectory(host, id)
+    if (!dir.ok) return json({ ok: false, reason: dir.reason, message: sentence(dir.reason, lang) }, 404)
+    const found = await readTreeMedia(dir.dir, path)
+    if (!found.ok) {
+      return json(
+        { ok: false, reason: found.reason, message: sentence(found.reason, lang) },
+        MEDIA_STATUS[found.reason] ?? statusFor(found.reason),
+      )
+    }
+
+    const headers: Record<string, string> = {
+      'Content-Type': found.mime,
+      // The one policy `handleRequest` will not replace — see the note above and `response-policy.ts`.
+      'Content-Security-Policy': OPAQUE_MEDIA_CSP,
+      // Named for all three kinds, not only the PDF: the strip above the pane carries an "Open in a
+      // tab" link for every one of them, and a tab that is then saved should not offer `media` as a
+      // filename. The name is sanitised because it goes into a quoted header value.
+      'Content-Disposition': `inline; filename="${found.name.replace(/[^\w.-]/g, '_')}"`,
+      // The file is one a session is actively working on; a cached copy would show the old one.
+      'Cache-Control': 'no-store',
+      // Stated even on a full response: a media element asks for ranges only once it is told it may.
+      'Accept-Ranges': 'bytes',
+    }
+
+    const range = planRange(req.headers.get('range'), found.size)
+    if (range.kind === 'unsatisfiable') {
+      return new Response(null, {
+        status: 416,
+        headers: { ...headers, 'Content-Range': `bytes */${found.size}` },
+      })
+    }
+    const file = Bun.file(found.real)
+    if (range.kind === 'partial') {
+      return new Response(file.slice(range.start, range.end + 1), {
+        status: 206,
+        headers: {
+          ...headers,
+          'Content-Range': `bytes ${range.start}-${range.end}/${found.size}`,
+          'Content-Length': String(range.end - range.start + 1),
+        },
+      })
+    }
+    return new Response(file, { headers: { ...headers, 'Content-Length': String(found.size) } })
   }
 
   if (pathname === '/api/fleet/tree/file' && req.method === 'PUT') {

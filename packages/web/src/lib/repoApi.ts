@@ -81,9 +81,30 @@ export type TreeListResult = { ok: true; children: TreeChild[] } | RepoFailure
 
 export type SearchResult = { ok: true; hits: SearchHit[]; truncated: boolean } | RepoFailure
 
+/**
+ * WHAT the Studio will show instead of refusing a binary file. Mirrors the server's own `MediaKind`
+ * (`artifact-media.ts`), redeclared here for the reason `TreeChild` above is.
+ */
+export type RepoMediaKind = 'image' | 'video' | 'pdf'
+
 export type ReadFileResult =
   | { ok: true; binary?: false; content: string; mtimeMs: number }
-  | { ok: true; binary: true; name: string; size: number }
+  /**
+   * A BINARY file, and the server's verdict on whether it can be SHOWN.
+   *
+   * `media` is set when it will render, and is the kind. `mediaOverLimit` is set when it is one of
+   * those kinds and is over that kind's ceiling, and carries the ceiling — which is what lets the
+   * pane say WHICH limit refused it rather than falling back to the generic binary sentence. Both
+   * absent is an ordinary binary (a `.zip`, a compiled binary), where that sentence is the right one.
+   *
+   * The ceiling is the SERVER's, reported rather than re-derived: a limit the browser applied would
+   * be a second copy of a number `editor-media.ts` owns, and the two would drift.
+   */
+  | {
+    ok: true; binary: true; name: string; size: number
+    media?: RepoMediaKind
+    mediaOverLimit?: { media: RepoMediaKind; limit: number }
+  }
   | RepoFailure
 
 /**
@@ -241,7 +262,8 @@ export async function searchRepo(sessionId: string, q: string, lang: RepoLang): 
  *
  * A BINARY file answers `{binary: true, name, size}` and no content, and that variant is carried
  * through as its own success: a binary file is not an empty one, and the editor must be able to
- * say which it is looking at.
+ * say which it is looking at. It may also carry the server's MEDIA verdict — whether this is an
+ * image, a video or a PDF the panel will render, or one it refuses on size — see `ReadFileResult`.
  */
 export async function readRepoFile(sessionId: string, path: string, lang: RepoLang): Promise<ReadFileResult> {
   return await request(
@@ -250,15 +272,31 @@ export async function readRepoFile(sessionId: string, path: string, lang: RepoLa
     TIMEOUT_MS,
     body => {
       if (body.binary === true) {
-        return typeof body.name === 'string' && typeof body.size === 'number'
-          ? { ok: true as const, binary: true as const, name: body.name, size: body.size }
-          : null
+        if (typeof body.name !== 'string' || typeof body.size !== 'number') return null
+        const base = { ok: true as const, binary: true as const, name: body.name, size: body.size }
+        // A media verdict is carried through only when it is WELL FORMED. A `media` field that is
+        // not one of the three kinds, or an over-limit report with no number in it, is dropped — the
+        // file then reads as an ordinary binary, which is the safe direction: the pane says it cannot
+        // be opened rather than pointing an `<img>` at a route that will refuse it.
+        if (isMediaKind(body.media)) return { ...base, media: body.media }
+        const over = body.mediaOverLimit
+        if (typeof over === 'object' && over !== null) {
+          const { media, limit } = over as { media?: unknown; limit?: unknown }
+          if (isMediaKind(media) && typeof limit === 'number') {
+            return { ...base, mediaOverLimit: { media, limit } }
+          }
+        }
+        return base
       }
       return typeof body.content === 'string' && typeof body.mtimeMs === 'number'
         ? { ok: true as const, content: body.content, mtimeMs: body.mtimeMs }
         : null
     },
   )
+}
+
+function isMediaKind(value: unknown): value is RepoMediaKind {
+  return value === 'image' || value === 'video' || value === 'pdf'
 }
 
 /**

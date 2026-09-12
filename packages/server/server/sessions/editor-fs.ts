@@ -16,6 +16,8 @@ import { planSessionDirectory, type SessionDirPlan } from './editor-directory'
 import { containedInRoot, resolveTreePath } from './editor-path'
 import { childrenFromDirents, collapseToChildren, type TreeChild } from './editor-list'
 import { looksBinary } from './artifact-web'
+import type { MediaKind } from './artifact-media'
+import { planMediaView } from './editor-media'
 import { planFileWrite } from './editor-conflict'
 import {
   capHits, decideGitGrepOutcome, matchNames, parseGrepOutput, SEARCH_LIMIT,
@@ -162,9 +164,25 @@ async function runGit(cwd: string, args: string[]): Promise<{ ok: boolean; out: 
 
 export type ReadFileRefusal = EntryRefusal | 'not-a-file'
 
+/**
+ * The binary variant's two media fields, and why they are two rather than one.
+ *
+ * `media` is set ONLY when the Studio will render the file, and is the kind it will render it as.
+ * `mediaOverLimit` is set only when the file IS one of those kinds and is over that kind's ceiling,
+ * and carries the ceiling it hit — so the pane can say which limit refused it instead of falling
+ * back to the generic "binary file" sentence. Both absent is an ordinary binary (a `.zip`, a
+ * compiled binary), for which that sentence is exactly right.
+ *
+ * The decision is the server's, made once in `planMediaView`, and the client re-derives none of it:
+ * a ceiling the browser applied would be a second copy of a number this module owns.
+ */
 export type ReadFilePlan =
   | { ok: true; content: string; mtimeMs: number; binary?: false }
-  | { ok: true; binary: true; name: string; size: number }
+  | {
+    ok: true; binary: true; name: string; size: number
+    media?: MediaKind
+    mediaOverLimit?: { media: MediaKind; limit: number }
+  }
   | { ok: false; reason: ReadFileRefusal }
 
 export async function readTreeFile(root: string, requestedPath: string): Promise<ReadFilePlan> {
@@ -181,11 +199,64 @@ export async function readTreeFile(root: string, requestedPath: string): Promise
   }
   if (!st.isFile()) return { ok: false, reason: 'not-a-file' }
 
+  const name = real.split('/').pop() ?? real
+  // MEDIA IS DECIDED BEFORE THE BYTES ARE READ, and that ordering is the point. `looksBinary` needs
+  // the file in memory, and this feature is what makes a half-gigabyte video reachable through this
+  // route — reading one whole just to learn it is not text is the cost the extension already answers.
+  // A file whose extension is on the closed table is never read here at all.
+  const view = planMediaView(real, st.size)
+  if (view.kind === 'render') return { ok: true, binary: true, name, size: st.size, media: view.media }
+  if (view.kind === 'too-big') {
+    return {
+      ok: true, binary: true, name, size: st.size,
+      mediaOverLimit: { media: view.media, limit: view.limit },
+    }
+  }
+
   const buf = await readFile(real)
   if (looksBinary(buf)) {
-    return { ok: true, binary: true, name: real.split('/').pop() ?? real, size: st.size }
+    return { ok: true, binary: true, name, size: st.size }
   }
   return { ok: true, content: buf.toString('utf8'), mtimeMs: st.mtimeMs }
+}
+
+export type ReadMediaRefusal = ReadFileRefusal | 'not-media' | 'too-big'
+
+export type ReadMediaPlan =
+  | { ok: true; real: string; name: string; size: number; mime: string; media: MediaKind }
+  | { ok: false; reason: ReadMediaRefusal; limit?: number }
+
+/**
+ * The file to SERVE, resolved through both containment halves exactly like every other function
+ * here — `resolveTreePath`'s lexical check AND `realContained`'s symlink recheck, never one without
+ * the other. It returns the real PATH and not the bytes: the route streams the file rather than
+ * buffering it, which is the whole reason a 512 MB ceiling is tenable at all.
+ *
+ * The ceiling is re-applied here and not taken on trust from the read that preceded it. The two
+ * calls are seconds apart and the file can grow between them, and more to the point a client can
+ * simply ask — a limit enforced only where the number happens to have been reported is not a limit.
+ */
+export async function readTreeMedia(root: string, requestedPath: string): Promise<ReadMediaPlan> {
+  const planned = resolveTreePath(root, requestedPath)
+  if (!planned.ok) return { ok: false, reason: 'escaped' }
+  const real = await realContained(root, planned.abs)
+  if (real === null) return { ok: false, reason: 'not-found' }
+
+  let st
+  try {
+    st = await stat(real)
+  } catch {
+    return { ok: false, reason: 'not-found' }
+  }
+  if (!st.isFile()) return { ok: false, reason: 'not-a-file' }
+
+  const view = planMediaView(real, st.size)
+  if (view.kind === 'not-media') return { ok: false, reason: 'not-media' }
+  if (view.kind === 'too-big') return { ok: false, reason: 'too-big', limit: view.limit }
+  return {
+    ok: true, real, name: real.split('/').pop() ?? real, size: st.size,
+    mime: view.mime, media: view.media,
+  }
 }
 
 export type WriteFileRefusal = EntryRefusal | 'not-a-file'

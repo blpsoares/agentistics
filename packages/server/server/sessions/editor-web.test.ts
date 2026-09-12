@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { handleEditorTreeRoute } from './editor-web'
+import { securityHeaders } from '../security-headers'
 import type { StartHost } from '../cli-start'
 
 // Same reason repo-probe.test.ts / editor-fs.test.ts strip these: a pre-commit hook running from a
@@ -203,5 +204,107 @@ describe('handleEditorTreeRoute', () => {
     expect(body.message).not.toBe('id is required')
     expect(typeof body.message).toBe('string')
     expect(body.message.length).toBeGreaterThan(0)
+  })
+})
+
+/**
+ * The BYTES route. It is tested through `handleEditorTreeRoute` rather than through a pure plan,
+ * because everything it is judged on is the RESPONSE — the anti-sniffing headers, the status of each
+ * refusal, and the range it answers — and none of that survives being factored into a plan object.
+ */
+describe('GET /api/fleet/tree/media', () => {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+
+  const media = async (host: StartHost, query: string, init?: RequestInit) => {
+    const req = new Request(`http://x/api/fleet/tree/media?${query}`, init)
+    const res = await handleEditorTreeRoute(req, new URL(req.url), host, 'en')
+    expect(res).not.toBeNull()
+    return res!
+  }
+
+  test('serves an image with the declared type and the headers this route OWNS', async () => {
+    writeFileSync(join(repo, 'shot.png'), PNG)
+    const res = await media(hostWith('s1', repo), 'id=s1&path=shot.png')
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('image/png')
+    expect(res.headers.get('Content-Disposition')).toBe('inline; filename="shot.png"')
+    expect(res.headers.get('Cache-Control')).toBe('no-store')
+    expect(res.headers.get('Accept-Ranges')).toBe('bytes')
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(PNG)
+  })
+
+  test('nosniff arrives — asserted where it is actually applied, not where it is written', () => {
+    // WITHOUT IT THE CLOSED TABLE IS DECORATION: the declared type is only honest if the browser is
+    // forbidden from guessing another. The route does not set it, on purpose — `handleRequest` does,
+    // for every `/api/` response, and it SETS rather than appends, so a copy inside the route would
+    // be a header that never ships while reading like a guarantee. Measured on a running server:
+    // this route's own `default-src 'none'; sandbox` came back as the wrapper's policy every time.
+    // So the assertion applies the wrapper the way `handleRequest` does, and asks the result.
+    const applied = securityHeaders({ tls: false, dev: false, isApi: true, embed: true })
+    expect(applied['X-Content-Type-Options']).toBe('nosniff')
+    expect(applied['Content-Security-Policy']).toContain("object-src 'none'")
+  })
+
+  test('a RANGE is answered as a 206 slice — what makes a video seekable', async () => {
+    writeFileSync(join(repo, 'clip.mp4'), PNG)
+    const res = await media(
+      hostWith('s1', repo), 'id=s1&path=clip.mp4', { headers: { Range: 'bytes=4-7' } },
+    )
+    expect(res.status).toBe(206)
+    expect(res.headers.get('Content-Range')).toBe(`bytes 4-7/${PNG.length}`)
+    expect(res.headers.get('Content-Type')).toBe('video/mp4')
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(PNG.subarray(4, 8))
+  })
+
+  test('a range past the end is 416 and no body, never the whole file', async () => {
+    writeFileSync(join(repo, 'clip2.mp4'), PNG)
+    const res = await media(
+      hostWith('s1', repo), 'id=s1&path=clip2.mp4', { headers: { Range: 'bytes=9999-' } },
+    )
+    expect(res.status).toBe(416)
+    expect(res.headers.get('Content-Range')).toBe(`bytes */${PNG.length}`)
+  })
+
+  test('a file off the closed table is 415 with a sentence, never octet-stream', async () => {
+    writeFileSync(join(repo, 'blob.bin'), PNG)
+    const res = await media(hostWith('s1', repo), 'id=s1&path=blob.bin')
+    expect(res.status).toBe(415)
+    const body = await res.json() as { ok: boolean; reason: string; message: string }
+    expect(body).toMatchObject({ ok: false, reason: 'not-media' })
+    expect(body.message.length).toBeGreaterThan(0)
+  })
+
+  test('an SVG is refused here — it can carry script, and it opens as text instead', async () => {
+    writeFileSync(join(repo, 'd.svg'), '<svg onload="x()"></svg>')
+    const res = await media(hostWith('s1', repo), 'id=s1&path=d.svg')
+    expect(res.status).toBe(415)
+    expect(res.headers.get('Content-Type')).toBe('application/json')
+  })
+
+  test('BOTH containment checks bind this route, not one of them', async () => {
+    // The lexical half.
+    const escaped = await media(hostWith('s1', repo), `id=s1&path=${encodeURIComponent('../outside.png')}`)
+    expect(escaped.status).toBe(404)
+    expect(await escaped.json()).toMatchObject({ reason: 'escaped' })
+    // The symlink half: a path that is lexically INSIDE the tree and resolves outside it. The
+    // lexical check passes it; only the `realpath` recheck catches it.
+    writeFileSync(join(root, 'secret.png'), PNG)
+    const link = join(repo, 'link.png')
+    if (!existsSync(link)) symlinkSync(join(root, 'secret.png'), link)
+    const linked = await media(hostWith('s1', repo), 'id=s1&path=link.png')
+    expect(linked.status).toBe(404)
+    expect(await linked.json()).toMatchObject({ reason: 'not-found' })
+  })
+
+  test('an unknown session never reaches the disk', async () => {
+    const res = await media(noHost, 'id=nope&path=shot.png')
+    expect(res.status).toBe(404)
+    expect(await res.json()).toMatchObject({ reason: 'unknown-session' })
+  })
+
+  test('a missing path is a bad request, in the reader\'s language', async () => {
+    const res = await media(hostWith('s1', repo), 'id=s1')
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({ reason: 'bad_request' })
   })
 })

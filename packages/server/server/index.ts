@@ -68,6 +68,7 @@ import { resolveClientIp } from './client-ip'
 import { corsHeadersFor } from './cors'
 import { csrfVerdict } from './csrf'
 import { securityHeaders } from './security-headers'
+import { keepsOwnCsp, OPAQUE_MEDIA_CSP } from './response-policy'
 import { TRUST_PROXY, ALLOWED_ORIGINS, TEAM_TLS, TEAM_SESSION_SECRET_ENV, TEAM_SESSION_SECRET, setResolvedSessionSecret } from './config'
 import { validateSecret, ensureSessionSecret } from './secret-store'
 import { requiresStepUp, verifyStepUp, STEPUP_HEADER } from './stepup'
@@ -397,7 +398,12 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
   // single scheme no web page can present (`security-headers.ts`), and everything the fleet routes
   // can do stays behind `localShell` regardless.
   const embed = PROFILE === 'local'
+  // A route may keep ITS OWN `Content-Security-Policy`, and only when it is the single allowlisted
+  // one — see `response-policy.ts`. Everything else is set, not appended, so a route cannot forget
+  // the baseline and cannot widen it either.
+  const keepCsp = keepsOwnCsp(res)
   for (const [k, v] of Object.entries(securityHeaders({ tls: TEAM_TLS, dev: !SERVE_STATIC, isApi, embed }))) {
+    if (keepCsp && k === 'Content-Security-Policy') continue
     res.headers.set(k, v)
   }
   // A sliding-session refresh recorded by the auth gate. Appended (not set) so a route that
@@ -2460,7 +2466,11 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             'Content-Type': out.mime,
             'Content-Disposition': `inline; filename="${out.name.replace(/[^\w.-]/g, '_')}"`,
             'X-Content-Type-Options': 'nosniff',
-            'Content-Security-Policy': "default-src 'none'; sandbox",
+            // The allowlisted policy, so `handleRequest` leaves it alone. Written out here as a
+            // literal for years, it was replaced by the baseline on every response — which is why
+            // this panel's PDF frame drew the browser's "cannot display" glyph. See
+            // `response-policy.ts`.
+            'Content-Security-Policy': OPAQUE_MEDIA_CSP,
             // A session rewrites the file it is working on; a cached copy would show the old one.
             'Cache-Control': 'no-store',
           },

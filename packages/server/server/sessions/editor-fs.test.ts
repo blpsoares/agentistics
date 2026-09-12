@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   createTreeEntry, deleteTreeEntry, listChildren, readTreeFile, renameTreeEntry, resolveSessionDirectory,
-  searchTree, walkPlain, writeTreeFile,
+  readTreeMedia, searchTree, walkPlain, writeTreeFile,
 } from './editor-fs'
+import { MEDIA_VIEW_LIMITS } from './editor-media'
 import type { StartHost } from '../cli-start'
 
 // Same reason repo-probe.test.ts strips these: a pre-commit hook running from a linked worktree
@@ -173,6 +174,86 @@ describe('readTreeFile', () => {
   test('a missing file is refused as not-found', async () => {
     const r = await readTreeFile(gitRepo, 'nope.ts')
     expect(r).toEqual({ ok: false, reason: 'not-found' })
+  })
+
+  test('an image says WHICH kind it is, so the pane can render it instead of refusing it', async () => {
+    writeFileSync(join(plainDir, 'shot.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+    const r = await readTreeFile(plainDir, 'shot.png')
+    expect(r).toEqual({ ok: true, binary: true, name: 'shot.png', size: 4, media: 'image' })
+  })
+
+  test('a file whose extension is on the table is NEVER read for the binary sniff', async () => {
+    // The sniff needs the bytes in memory, and this feature is what makes a half-gigabyte video
+    // reachable through this route. A PNG holding plain ASCII proves the decision was the
+    // extension's: `looksBinary` would have said text, and the answer is still `media: 'image'`.
+    writeFileSync(join(plainDir, 'textual.png'), 'not actually a png at all\n')
+    const r = await readTreeFile(plainDir, 'textual.png')
+    expect(r).toEqual({ ok: true, binary: true, name: 'textual.png', size: 26, media: 'image' })
+  })
+
+  test('an SVG opens as TEXT — it is media-shaped and deliberately off the table', async () => {
+    writeFileSync(join(plainDir, 'd.svg'), '<svg></svg>\n')
+    const r = await readTreeFile(plainDir, 'd.svg')
+    expect(r.ok).toBe(true)
+    if (r.ok && !r.binary) expect(r.content).toBe('<svg></svg>\n')
+  })
+
+  test('over the ceiling it is a binary with the LIMIT named, not a media file', async () => {
+    const big = join(plainDir, 'big.png')
+    writeFileSync(big, Buffer.alloc(MEDIA_VIEW_LIMITS.image + 1))
+    const r = await readTreeFile(plainDir, 'big.png')
+    expect(r).toEqual({
+      ok: true, binary: true, name: 'big.png', size: MEDIA_VIEW_LIMITS.image + 1,
+      mediaOverLimit: { media: 'image', limit: MEDIA_VIEW_LIMITS.image },
+    })
+    if (r.ok && r.binary) expect(r.media).toBeUndefined()
+    rmSync(big)
+  })
+})
+
+describe('readTreeMedia', () => {
+  test('answers the REAL path to stream, plus the type the closed table declares', async () => {
+    writeFileSync(join(plainDir, 'ok.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+    const r = await readTreeMedia(plainDir, 'ok.png')
+    expect(r).toEqual({
+      ok: true, real: join(plainDir, 'ok.png'), name: 'ok.png', size: 4,
+      mime: 'image/png', media: 'image',
+    })
+  })
+
+  test('a lexical escape is refused — the same first half every function here applies', async () => {
+    expect(await readTreeMedia(plainDir, '../gitrepo/README.md')).toEqual({ ok: false, reason: 'escaped' })
+    expect(await readTreeMedia(plainDir, '/etc/hostname')).toEqual({ ok: false, reason: 'escaped' })
+  })
+
+  test('a symlink OUT of the tree is refused — the second half, on the resolved path', async () => {
+    // The lexical check cannot see this one: the path is inside the root and the LINK is not.
+    const outside = join(root, 'outside.png')
+    writeFileSync(outside, Buffer.from([0x89, 0x50]))
+    const link = join(plainDir, 'escape.png')
+    if (!existsSync(link)) symlinkSync(outside, link)
+    expect(await readTreeMedia(plainDir, 'escape.png')).toEqual({ ok: false, reason: 'not-found' })
+  })
+
+  test('a file that is not on the table is refused as not-media, never as octet-stream', async () => {
+    writeFileSync(join(plainDir, 'blob.bin'), Buffer.from([0, 1, 2]))
+    expect(await readTreeMedia(plainDir, 'blob.bin')).toEqual({ ok: false, reason: 'not-media' })
+    writeFileSync(join(plainDir, 'd2.svg'), '<svg></svg>')
+    expect(await readTreeMedia(plainDir, 'd2.svg')).toEqual({ ok: false, reason: 'not-media' })
+  })
+
+  test('the ceiling is re-applied HERE, not taken on trust from the read that preceded it', async () => {
+    const big = join(plainDir, 'big2.png')
+    writeFileSync(big, Buffer.alloc(MEDIA_VIEW_LIMITS.image + 1))
+    expect(await readTreeMedia(plainDir, 'big2.png')).toEqual({
+      ok: false, reason: 'too-big', limit: MEDIA_VIEW_LIMITS.image,
+    })
+    rmSync(big)
+  })
+
+  test('a directory and a missing file keep their own refusals', async () => {
+    expect(await readTreeMedia(plainDir, 'sub')).toEqual({ ok: false, reason: 'not-a-file' })
+    expect(await readTreeMedia(plainDir, 'nope.png')).toEqual({ ok: false, reason: 'not-found' })
   })
 })
 
