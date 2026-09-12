@@ -7,8 +7,8 @@ import { securityHeaders } from './security-headers'
  * `index.ts` — never a re-typed copy of its loop. A copy proved only that the copy behaves: a
  * planted regression in the real `index.ts` loop (`if (k === 'X-Frame-Options') continue`,
  * unconditional, dropping XFO from every response in the product) passed the full suite while
- * these tests exercised a hand-written stand-in. See the "planted regression" test at the bottom,
- * which proves this file would have caught it.
+ * these tests exercised a hand-written stand-in. Calling the real function is what lets that plant
+ * fail here now.
  */
 function stamp(res: Response, embed = true, isApi = true): Response {
   return applyBaselineHeaders(res, { tls: false, dev: false, isApi, embed })

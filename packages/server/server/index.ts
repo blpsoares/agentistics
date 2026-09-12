@@ -2462,10 +2462,10 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             'Content-Type': out.mime,
             'Content-Disposition': `inline; filename="${out.name.replace(/[^\w.-]/g, '_')}"`,
             'X-Content-Type-Options': 'nosniff',
-            // The allowlisted policy, so `handleRequest` leaves it alone. Written out here as a
-            // literal for years, it was replaced by the baseline on every response — which is why
-            // this panel's PDF frame drew the browser's "cannot display" glyph. See
-            // `response-policy.ts`.
+            // The media marker: `applyBaselineHeaders` recognises it and REPLACES it with the media
+            // policy (this plus `frame-ancestors 'self'`, and `vscode-webview:` on an embedding
+            // profile), instead of the dashboard baseline — which is why this panel's PDF frame no
+            // longer draws the browser's "cannot display" glyph. See `response-policy.ts`.
             'Content-Security-Policy': OPAQUE_MEDIA_CSP,
             // A session rewrites the file it is working on; a cached copy would show the old one.
             'Cache-Control': 'no-store',
