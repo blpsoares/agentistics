@@ -1,10 +1,23 @@
 /**
- * ArtifactsAside — what this session has written, and the file itself.
+ * ArtifactsAside — the session's right-hand panel: what it is doing, what it produced, and the
+ * STUDIO.
  *
- * TWO LAYERS, one panel. The LIST is every file the conversation shows this session touching, newest
- * first; clicking one replaces the list with `ArtifactDoc` and a way back. They are layers rather
- * than a split because the panel is already the narrow column: a list and a document sharing 440px
- * would give the document less room than the conversation it was opened from.
+ * TWO THINGS LIVE IN THIS SLOT, and the second one takes it over. The normal aside is a header, a
+ * tab strip and one tab's body. Agentistics Studio — the repository tree, the search and a multi-tab
+ * Monaco editor — is NOT one of those tabs: opening it covers the header and the strip and gives it
+ * the aside's full height and width, because a tree plus an editor cannot share a 440px column with
+ * two rows of chrome. That is what `StripId` encodes and what the render's own note spends.
+ *
+ * IT MUST NOT UNMOUNT EITHER WAY. The Studio holds Monaco buffers; an unsaved one exists in exactly
+ * one place in the world. So the Studio is a `Layer` at this component's ROOT — a sibling of the
+ * chrome, above both the tab chain and the `open ? <ArtifactDoc/> : …` branch, because each of those
+ * is a tree something routinely replaces. Three different paths used to destroy it; none can reach
+ * it where it is now.
+ *
+ * THE FILES AND DOCS TABS ARE GONE. They listed what this session itself wrote — one of them a
+ * subset of the other — and the Studio's tree holds the whole folder, so the panel held three
+ * answers to one question. `ArtifactDoc` survives them: a WROTE row in the live feed still opens the
+ * file it names, which is the last reader of it.
  *
  * EVERY SCROLLING REGION HERE IS `overscroll-behavior: contain`. On a phone this panel is a
  * full-screen layer over a workspace whose document is deliberately locked (`lib/mobileViewport.ts`),
@@ -12,27 +25,26 @@
  * drag the layer under it. It was reported the other way round — "ele roda a página inteira e não
  * deixa scrollar" — with the whole page rubber-banding out from under the header.
  *
- * IT NEVER CHANGES WHAT IT SHOWS ON ITS OWN. The list updates with each poll of the conversation —
+ * IT NEVER CHANGES WHAT IT SHOWS ON ITS OWN. The lists update with each poll of the conversation —
  * that is the "in real time" half — but the OPEN FILE changes only on a click. There is deliberately
  * no effect here that selects an artifact from incoming data: a panel that swaps the document you
  * are reading because the session wrote something else is a panel you cannot read in.
  *
- * THE GALLERY IS THE OTHER DIRECTION. Files, Docs and Live all answer "what did this session DO";
- * the fourth tab answers "what did I SEND it" — the attachments a person put on a message, grouped
- * by the message that carried them. It reads the same `turns` the Live feed does, so it can never
- * claim something the transcript does not show, and its rules live in `gallery.ts`.
+ * THE GALLERY IS THE OTHER DIRECTION. The Live feed answers "what did this session DO"; the gallery
+ * answers "what did I SEND it" — the attachments a person put on a message, grouped by the message
+ * that carried them. It reads the same `turns` the Live feed does, so it can never claim something
+ * the transcript does not show, and its rules live in `gallery.ts`.
  *
- * THREE EMPTY STATES, THREE SENTENCES, and never one shared empty box. "The conversation has not
- * loaded", "this session has written nothing" and "this harness cannot be read this way" are
- * different facts, and only the second is a statement about the session's work. The third reuses
- * `/api/fleet/chat`'s own `unavailable` sentence verbatim rather than inventing a second wording
+ * EMPTY IS NEVER ONE SHARED BOX. "The conversation has not loaded", "there is nothing here" and
+ * "this harness cannot be read this way" are different facts and get different sentences. The last
+ * reuses `/api/fleet/chat`'s own `unavailable` text verbatim rather than inventing a second wording
  * for the same refusal.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { asideCache, asideKey } from '../../lib/asideCache'
 import { focusMissNotice, isFocusedRow, rowsCarry, ROW_FLASH } from '../../lib/noteFocus'
-import { Activity, BarChart3, BookOpen, Bot, Brain, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, ExternalLink, Eye, FileEdit, FilePlus2, FileText, Files, FolderTree, GitBranch, GitPullRequest, Image, LayoutGrid, Loader, PanelRightClose, Pencil, Plug, Plus, Send, Sparkles, Terminal, Trash2, Workflow, X } from 'lucide-react'
+import { Activity, BarChart3, Bot, Brain, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, ExternalLink, Eye, FileEdit, FileText, FolderTree, GitBranch, GitPullRequest, Image, LayoutGrid, Loader, PanelRightClose, Pencil, Plug, Plus, Send, Sparkles, Terminal, Trash2, Workflow, X } from 'lucide-react'
 import type { Artifact } from '../../lib/sessionArtifacts'
 import {
   countSkills, groupSkills, shortName, skillInvocation, type SkillEntry,
@@ -43,7 +55,7 @@ import ReactMarkdown from 'react-markdown'
 import { SessionTasksTab } from '../tasks/SessionTasksTab'
 import remarkGfm from 'remark-gfm'
 import { useIsMobile } from '../../hooks/useIsMobile'
-import { agoLabel, isDoc, liveEvents, writeStatus, type LiveEvent, type LiveTurn, type WriteStatus } from '../../lib/artifactTabs'
+import { agoLabel, liveEvents, writeStatus, type LiveEvent, type LiveTurn, type WriteStatus } from '../../lib/artifactTabs'
 import {
   stepNotice, stepOpenable, stepPollMs, stepUrl,
   type StepPayload, type StepState,
@@ -80,14 +92,33 @@ import {
 } from '../SessionDrilldown'
 import { ArtifactDoc } from './ArtifactDoc'
 import { GalleryTab } from './GalleryTab'
-import { Layer, RepositoryTab } from './RepositoryTab'
+import { Layer, Studio } from './Studio'
 // The FOURTH copy of this shape lived here, byte-identical to the three the repository
 // explorer's own views had already folded into `repoNote.tsx`. Imported under the name this
 // file's own call sites already use: one shape, one place for it to change.
 import { RepoNote as Note } from './repoNote'
 import { createSharedPref } from '../../lib/sharedPref'
 
-type TabId = 'files' | 'docs' | 'live' | 'gallery' | 'skills' | 'agents' | 'forks' | 'workflows' | 'mcps' | 'prs' | 'tasks' | 'metrics' | 'repo'
+/**
+ * The tabs this panel draws a BODY for.
+ *
+ * `files` and `docs` were the first two and are gone: they listed what this session itself wrote,
+ * which the Studio's own tree now holds in full, and the reader who asked for them to go said the
+ * quiet part — two lists of the same folder, one of them a subset of the other.
+ */
+type TabId = 'live' | 'gallery' | 'skills' | 'agents' | 'forks' | 'workflows' | 'mcps' | 'prs' | 'tasks' | 'metrics'
+
+/**
+ * Every id the tab strip and the launcher grid can carry — the tabs, plus the STUDIO.
+ *
+ * THE SPLIT IS THE GUARANTEE, not documentation of one. The Studio takes the whole aside over: it
+ * covers this panel's header AND its tab strip, because a file tree plus a code editor cannot share
+ * 440px of width with two rows of chrome. So it is a MODE and not a tab body — and because `studio`
+ * is absent from `TabId`, `setTab` cannot be handed it and no arm of the body chain can be written
+ * for it. The alternative was a comment asking the next reader not to, which is the shape of defect
+ * `ArtifactsAside.gate.lint.test.ts` exists to refuse.
+ */
+type StripId = TabId | 'studio'
 
 /** Where the view toggle is remembered. One key, read and written in one place. */
 // SHARED. How a person reads the gallery and a skill is about the work, not about the screen —
@@ -114,15 +145,6 @@ const skillFormatStore = createSharedPref<'md' | 'text'>({
 
 export interface ArtifactsAsideProps {
   /**
-   * Already-localized: files this session wrote outside its own folder, which cannot be listed.
-   *
-   * A COUNT in a sentence, never the paths — see `listArtifactsWithOutside` on the server. It
-   * exists because the drop was silent, and a silent drop reads as the panel having missed
-   * something it wrote.
-   */
-  outsideNote?: string
-
-  /**
    * The session's own directory.
    *
    * Only the MCP tab uses it, and it uses it for a decision rather than a label: the `local` and
@@ -146,12 +168,11 @@ export interface ArtifactsAsideProps {
    * here through `AppContext.editorEnabled`. Never re-derived from a capability plus a preference
    * on this side.
    *
-   * When it is not `true` the Repository tab is ABSENT, never a greyed-out tab: a disabled control
-   * that explains nothing is indistinguishable from a broken one, and the server refuses the route
-   * regardless. Undefined reads as OFF — a read/write file editor is opt-in and absence is never
-   * consent, the same reading `shellEnabled` takes.
-   *
-   * Read by the Repository tab itself; the tab lands in a later task of this feature.
+   * When it is not `true` the Studio is ABSENT — no strip entry, no layer, and a requested `studio`
+   * tab ignored — never a greyed-out control: a disabled one that explains nothing is
+   * indistinguishable from a broken one, and the server refuses the route regardless. Undefined
+   * reads as OFF — a read/write file editor is opt-in and absence is never consent, the same
+   * reading `shellEnabled` takes.
    */
   editorEnabled?: boolean
   /**
@@ -182,14 +203,6 @@ export interface ArtifactsAsideProps {
   older?: string
   onClose: () => void
   /**
-   * The session wrote through commands whose paths cannot be read off the command line.
-   *
-   * Reported rather than swallowed: on a session that had produced eighty files this panel said
-   * "nothing written in this session yet", which is a confident wrong answer. "I cannot list these"
-   * and "there are none" are different facts and get different sentences.
-   */
-  unlistedWrites?: boolean
-  /**
    * The conversation's turns, for the LIVE tab.
    *
    * The feed is derived from the same turns the chat renders, so it can never claim something the
@@ -197,15 +210,6 @@ export interface ArtifactsAsideProps {
    * promise is "this is what is happening".
    */
   turns?: readonly LiveTurn[]
-  /**
-   * What the SERVER knows about each listed path: how big it is, and whether it belongs to the
-   * project or is scratch under the system temp directory.
-   *
-   * The browser cannot answer either — it has the conversation, not the disk — and a size or a
-   * scope guessed from a path would be exactly the confident wrong answer this panel keeps being
-   * asked not to give.
-   */
-  facts?: ReadonlyMap<string, { bytes: number; scope: 'project' | 'temp' }>
   /**
    * EVERYTHING THE STORE KNOWS ABOUT THIS CONVERSATION — the METRICS tab.
    *
@@ -248,8 +252,8 @@ function RunningDot() {
  * desktop, ~343px on a phone), while this costs nothing while it is closed.
  */
 function TabGrid({ tabs, active, pt, isMobile, anchor, onPick, onClose }: {
-  tabs: readonly { id: TabId; label: string; icon: React.ReactNode; count?: number | null }[]
-  active: TabId
+  tabs: readonly { id: StripId; label: string; icon: React.ReactNode; count?: number | null }[]
+  active: StripId
   pt: boolean
   isMobile: boolean
   /**
@@ -261,7 +265,7 @@ function TabGrid({ tabs, active, pt, isMobile, anchor, onPick, onClose }: {
    * exactly that. A popover has to know what opened it.
    */
   anchor: React.RefObject<HTMLButtonElement | null>
-  onPick: (id: TabId) => void
+  onPick: (id: StripId) => void
   onClose: () => void
 }) {
   const ref = useRef<HTMLDivElement | null>(null)
@@ -361,21 +365,19 @@ function TabGrid({ tabs, active, pt, isMobile, anchor, onPick, onClose }: {
   )
 }
 
-/** `new` and `edited` read at a glance from the glyph; the word is beside it for everyone else. */
-function KindIcon({ kind }: { kind: Artifact['kind'] }) {
-  return kind === 'new'
-    ? <FilePlus2 size={13} style={{ color: 'var(--accent-green, #22c55e)', flexShrink: 0 }} />
-    : <FileEdit size={13} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
-}
-
 export function ArtifactsAside({
-  sessionId, cwd, lang, artifacts, loading, unavailable, older, unlistedWrites, outsideNote, turns, facts, onClose,
+  sessionId, cwd, lang, artifacts, loading, unavailable, older, turns, onClose,
   tabRequest, session, onOpenTask, onTaskChanged, metrics, editorEnabled, editorAutosave,
 }: ArtifactsAsideProps) {
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
   const [open, setOpen] = useState<Artifact | null>(null)
-  const [tab, setTab] = useState<TabId>('files')
+  /**
+   * LIVE is the first tab now that the two file lists are gone. It is the one that answers "what is
+   * this session doing", which is why the panel is opened nine times out of ten, and it is derived
+   * from turns this panel already has — so landing here costs no request.
+   */
+  const [tab, setTab] = useState<TabId>('live')
   /**
    * Which of the two things in `subagents/` the list is showing, and how many there are of each.
    *
@@ -410,32 +412,44 @@ export function ArtifactsAside({
   const [mcpError, setMcpError] = useState<string | null>(null)
   const [mcpNonce, setMcpNonce] = useState(0)
   /**
-   * THE REPOSITORY TAB'S BODY SURVIVES A TAB SWITCH, and that is the whole reason this flag exists.
-   *
-   * Every other tab here is torn down and rebuilt when you leave it, which costs nothing: each one
-   * re-reads what it shows. The Repository tab holds MONACO BUFFERS, and an unsaved one exists in
-   * exactly one place in the world — so unmounting it is the silent loss `mountedEditors` and
-   * `Layer` were both written to make impossible, one level further out. Three lines typed, a glance
-   * at Live, and back: the text was gone, with no prompt.
-   *
-   * So it is mounted and HIDDEN while another tab is active (`Layer`, imported rather than
-   * re-implemented — one rule, one place). It is LAZY rather than permanent for the same reason the
-   * mounted set is bounded: a reader who never opens the tab must not pay for its first directory
-   * read, so nothing is mounted until the tab has been opened once.
+   * IS THE STUDIO THE THING ON SCREEN? Its own state, because it is a MODE and not a tab — see
+   * `StripId`. Opening it hides this panel's header and its tab strip and gives it the whole aside.
    */
-  const [repoOpened, setRepoOpened] = useState(false)
-  useEffect(() => { if (tab === 'repo') setRepoOpened(true) }, [tab])
+  const [studio, setStudio] = useState(false)
+  /**
+   * THE STUDIO SURVIVES LEAVING IT, and that is the whole reason this second flag exists.
+   *
+   * Every tab here is torn down and rebuilt when you leave it, which costs nothing: each one
+   * re-reads what it shows. The Studio holds MONACO BUFFERS, and an unsaved one exists in exactly
+   * one place in the world — so unmounting it is the silent loss `mountedEditors` and `Layer` were
+   * both written to make impossible, one level further out. Three lines typed, a glance at Live, and
+   * back: the text was gone, with no prompt.
+   *
+   * So it is mounted and HIDDEN while the normal aside is showing (`Layer`, imported rather than
+   * re-implemented — one rule, one place), which is also what makes `onExit` a control that changes
+   * nothing but what is visible. It is LAZY rather than permanent for the same reason the mounted
+   * set is bounded: a reader who never opens it must not pay for its first directory read, so
+   * nothing is mounted until it has been opened once.
+   */
+  const [studioOpened, setStudioOpened] = useState(false)
+  useEffect(() => { if (studio) setStudioOpened(true) }, [studio])
   /** Mounted: the gate is open AND the reader has been here. Never merely "the gate is open". */
-  const repoMounted = editorEnabled === true && (tab === 'repo' || repoOpened)
+  const studioMounted = editorEnabled === true && (studio || studioOpened)
+  /**
+   * SHOWN, which is narrower than `studio`. The switch can be turned off in another surface while
+   * this panel still has the Studio open, and `editorEnabled` is re-read on every render — so the
+   * panel falls back to its own chrome rather than drawing a frame with nothing behind it.
+   */
+  const inStudio = studio && editorEnabled === true
 
   /**
    * Honour a requested tab, once per request.
    *
    * Keyed on the STAMP and not on the value: the reader must stay free to move afterwards, which a
-   * `[tabRequest.tab]` dependency would take away — they click Files, the prop still reads `live`,
+   * `[tabRequest.tab]` dependency would take away — they click Skills, the prop still reads `live`,
    * and nothing changes so nothing re-runs, but the next unrelated render restores it.
    * An unknown tab is IGNORED rather than defaulted: whoever wrote it meant something this panel
-   * does not have, and dropping them on Files would look like the request was honoured.
+   * does not have, and dropping them on Live would look like the request was honoured.
    */
   /**
    * The step the edge strip asked for, until the reader moves on.
@@ -455,9 +469,12 @@ export function ArtifactsAside({
   const askedAt = tabRequest?.at
   useEffect(() => {
     const t = tabRequest?.tab
-    if (t === 'files' || t === 'docs' || t === 'live' || t === 'gallery' || t === 'skills'
-      || t === 'agents' || t === 'forks' || t === 'workflows' || t === 'mcps' || t === 'prs' || t === 'tasks'
-      || (t === 'repo' && editorEnabled === true)
+    // THE STUDIO IS A MODE, so a request for it sets the mode and never the tab — and it is honoured
+    // only while the gate is open, for the same reason the strip entry is absent without it.
+    if (t === 'studio') { if (editorEnabled === true) setStudio(true) }
+    else if (t === 'live' || t === 'gallery' || t === 'skills'
+      || t === 'agents' || t === 'forks' || t === 'workflows' || t === 'mcps' || t === 'prs'
+      || (t === 'tasks' && session !== undefined)
       || (t === 'metrics' && metrics !== undefined)) setTab(t)
     // A requested STEP comes with the tab: the edge strip names an action, so pressing it
     // lands on that row rather than on the top of a feed to be searched. Set unconditionally,
@@ -467,9 +484,6 @@ export function ArtifactsAside({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [askedAt])
 
-  /** DOCS is a SUBSET of files, never a second list — a document cannot be in one and missing from
-   *  the other. `isDoc` decides it by extension, which is what can be known without opening it. */
-  const docs = useMemo(() => artifacts.filter(a => isDoc(a.path)), [artifacts])
   /**
    * CHRONOLOGICAL, oldest first, and the view follows the tail.
    *
@@ -648,8 +662,6 @@ export function ArtifactsAside({
     if (atTail || el.scrollTop === 0) el.scrollTop = el.scrollHeight
   }, [feed.length, tab])
 
-  const live = artifacts.filter(a => a.live)
-  const past = artifacts.filter(a => !a.live)
   const created = artifacts.filter(a => a.kind === 'new').length
 
   const header = (
@@ -702,19 +714,20 @@ export function ArtifactsAside({
   // asked yet", a number is what is there, and ABSENT is a tab that counts nothing — one
   // session's own metrics is not a list. Without it the grid would print `—` under a tooltip
   // saying "open the tab to count", which is a promise this tab can never keep.
-  const tabs: { id: TabId; label: string; icon: React.ReactNode; count?: number | null }[] = [
-    { id: 'files', label: pt ? 'Arquivos' : 'Files', icon: <Files size={12} />, count: loading ? null : artifacts.length },
-    { id: 'docs', label: pt ? 'Docs' : 'Docs', icon: <BookOpen size={12} />, count: loading ? null : docs.length },
-    // THE REPOSITORY, beside the two tabs that list what this session itself wrote. It is
+  const tabs: { id: StripId; label: string; icon: React.ReactNode; count?: number | null }[] = [
+    // THE STUDIO LEADS, and it is the one entry here that is not a tab: pressing it hands the whole
+    // aside over (see `StripId`). It is kept in the strip as well as on the header button because
+    // this is where the feature has always been found, and a reader who learnt it here must not have
+    // to learn somewhere else; the header is the SHORTER route, not the replacement.
     // ABSENT and never greyed when the gate is closed (`editorEnabled` — the server's own
-    // combination of `CAPS.localShell` and the user's switch): a disabled control that
-    // explains nothing is indistinguishable from a broken one, and the route refuses anyway.
-    // NO `count`: a repository is not a list of this session's work, and the grid prints a
-    // dash plus "open the tab to count" for a `null` — a promise this tab can never keep.
+    // combination of `CAPS.localShell` and the user's switch): a disabled control that explains
+    // nothing is indistinguishable from a broken one, and the route refuses anyway.
+    // NO `count`: a repository is not a list of this session's work, and the grid prints a dash plus
+    // "open the tab to count" for a `null` — a promise this entry can never keep.
     ...(editorEnabled
       ? [{
-          id: 'repo' as const,
-          label: pt ? 'Repositório' : 'Repository',
+          id: 'studio' as const,
+          label: 'Studio',
           icon: <FolderTree size={12} />,
         }]
       : []),
@@ -757,12 +770,18 @@ export function ArtifactsAside({
     { id: 'prs', label: 'PRs', icon: <GitPullRequest size={12} />, count: prs === null ? null : prs.pulls.length },
     // The task this session is filed under, and the form to file it somewhere new. The count is 1
     // or 0 because a session belongs to at most one task — it is a badge, not a list.
-    {
-      id: 'tasks',
-      label: pt ? 'Tarefa' : 'Task',
-      icon: <ClipboardList size={12} />,
-      count: session?.task ? 1 : 0,
-    },
+    // ONLY WITH A SESSION TO FILE. The tab used to be unconditional, and on a surface that has the
+    // id and nothing else (see `ArtifactsAsideProps.session`) it offered a form that could name
+    // nothing — an option is a promise that something is behind it. It is also what makes the body
+    // chain's final `null` unreachable rather than a blank region.
+    ...(session
+      ? [{
+          id: 'tasks' as const,
+          label: pt ? 'Tarefa' : 'Task',
+          icon: <ClipboardList size={12} />,
+          count: session.task ? 1 : 0,
+        }]
+      : []),
     // LAST, and only when there is a record to read. `BarChart3` is the metrics card's own icon —
     // this tab is where that card's "see everything" link lands, and one feature wears one glyph.
     ...(metrics
@@ -821,23 +840,39 @@ export function ArtifactsAside({
     return () => ro.disconnect()
   }, [tabSig, isMobile])
 
+  /**
+   * WHAT THE STRIP MARKS — the tab, or the Studio while the Studio is the thing on screen.
+   *
+   * It is its own value because `tab` keeps its place while the Studio is open: leaving the Studio
+   * puts the reader back where they were, which is what makes `onExit` a control that changes one
+   * thing. (The strip is not drawn in Studio mode; this is what the grid and the cells read when the
+   * reader comes back, and what `splitAsideTabs` keeps on the bar.)
+   */
+  const activeStrip: StripId = inStudio ? 'studio' : tab
+  /** The one place a strip id is turned into an action — and the only place `studio` is routed. */
+  const pickStrip = (id: StripId) => {
+    if (id === 'studio') setStudio(true)
+    else { setStudio(false); setTab(id) }
+    setGridOpen(false)
+  }
+
   const split = splitAsideTabs(
     tabs.map(t => ({ id: t.id, width: tabWidths[t.id] ?? 0 })),
-    tab,
+    activeStrip,
     { container: barWidth, overflowWidth, gap: TAB_GAP },
   )
   const onBar = tabs.filter(t => split.bar.includes(t.id))
 
   /** A tab's own cell. One renderer for the bar and the ruler, so they can never measure apart. */
   const tabCell = (t: (typeof tabs)[number], forRuler: boolean) => {
-    const on = !forRuler && tab === t.id
+    const on = !forRuler && activeStrip === t.id
     return (
       // NO projected box: the bar this sits in is `overflow: hidden`, which CLIPS the overlay — so
       // the class would have quietly REDUCED the target it exists to preserve. Painted instead.
       <button
         key={t.id}
         {...(forRuler ? { 'data-tab-id': t.id, tabIndex: -1 } : { role: 'tab', 'aria-selected': on })}
-        onClick={forRuler ? undefined : () => { setTab(t.id); setGridOpen(false) }}
+        onClick={forRuler ? undefined : () => pickStrip(t.id)}
         style={{
           display: 'flex', alignItems: 'center', gap: 5, padding: '4px 9px',
           borderRadius: 7, border: 'none', cursor: forRuler ? 'default' : 'pointer',
@@ -928,11 +963,11 @@ export function ArtifactsAside({
       {gridOpen && (
         <TabGrid
           tabs={tabs}
-          active={tab}
+          active={activeStrip}
           pt={pt}
           isMobile={isMobile}
           anchor={gridBtnRef}
-          onPick={id => { setTab(id); setGridOpen(false); gridBtnRef.current?.focus() }}
+          onPick={id => { pickStrip(id); gridBtnRef.current?.focus() }}
           onClose={() => { setGridOpen(false); gridBtnRef.current?.focus() }}
         />
       )}
@@ -1249,10 +1284,10 @@ export function ArtifactsAside({
             // `openArtifacts('live', hint.ref)` landed at the top of a feed to be searched. The
             // state was computed and faded on a timer the whole time; only this line was missing.
             focused={e.ref !== undefined && isFocusedRow(e.ref, focusStep)}
-            // A WROTE row is a link to the file it names. Only when that file is actually in the
-            // Files list: the feed shows every write the transcript recorded, while Files shows the
-            // ones still readable on disk, and offering to open a deleted file would be a row whose
-            // only outcome is a refusal.
+            // A WROTE row is a link to the file it names — the last reader of `ArtifactDoc` now that
+            // the Files and Docs tabs are gone. Only when the file is still on disk: the feed shows
+            // every write the transcript recorded, and offering to open a deleted one would be a row
+            // whose only outcome is a refusal.
             {...(openFromFeed(e.text) ? { onOpen: () => openFromFeed(e.text)!() } : {})}
             {...(e.kind === 'wrote'
               ? { status: writeStatus(e.text, new Set(artifacts.map(a => a.path))) }
@@ -1264,53 +1299,22 @@ export function ArtifactsAside({
   }
 
   /**
-   * Clicking a written path in the feed takes you to the file — the Files tab, with it open.
+   * Clicking a written path in the feed opens the FILE, as a document over this region.
    *
-   * Returns null when the path is not in the list, and the row is then plain text rather than a
-   * dead link: the feed records every write the transcript saw, while Files holds the ones still
-   * readable, and a link whose only outcome is a refusal is the control-that-reads-as-broken this
-   * codebase argues against everywhere else.
+   * It used to switch to the Files tab first; with that tab gone it opens `ArtifactDoc` directly, and
+   * it is the only remaining caller of it. That matters for one reason beyond tidiness: `open`
+   * replaces this panel's whole chrome, so it was the third path that could tear the Studio's Monaco
+   * buffers down. It cannot any more — the Studio's layer is a SIBLING of that branch, not a child of
+   * it (see the render).
+   *
+   * Returns null when the path is no longer on disk, and the row is then plain text rather than a
+   * dead link: the feed records every write the transcript saw, and a link whose only outcome is a
+   * refusal is the control-that-reads-as-broken this codebase argues against everywhere else.
    */
   const openFromFeed = (path: string): (() => void) | null => {
     const hit = artifacts.find(a => a.path === path)
     if (!hit) return null
-    return () => { setTab('files'); setOpen(hit) }
-  }
-
-  const fileList = (list: readonly Artifact[], emptyText: string): React.ReactNode => {
-    if (list.length === 0) return <Note text={emptyText} />
-    const liveOnes = list.filter(a => a.live)
-    const pastOnes = list.filter(a => !a.live)
-    return (
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: '6px 6px 10px' }}>
-        {liveOnes.length > 0 && (
-          <Band label={pt ? 'agora' : 'now'}>
-            {liveOnes.map(a => <Row key={a.path} a={a} pt={pt} fact={facts?.get(a.path)} onOpen={() => setOpen(a)} />)}
-          </Band>
-        )}
-        {pastOnes.length > 0 && (
-          <Band label={liveOnes.length > 0 ? (pt ? 'antes' : 'earlier') : undefined}>
-            {pastOnes.map(a => <Row key={a.path} a={a} pt={pt} fact={facts?.get(a.path)} onOpen={() => setOpen(a)} />)}
-          </Band>
-        )}
-        {unlistedWrites && (
-          <p style={{ margin: '6px 8px 0', fontSize: 10.5, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
-            {pt
-              ? 'A sessão também escreveu por comandos cujos caminhos não dá para ler; esses arquivos não estão nesta lista.'
-              : 'The session also wrote through commands whose paths cannot be read; those files are not in this list.'}
-          </p>
-        )}
-        {/* The other reason a written file is not here, and the one that was silent: it is outside
-            this session's own folder, so the read route would refuse it and the list does not offer
-            a row whose only outcome is a refusal. The sentence is the server's — it holds the count
-            and never the paths. */}
-        {outsideNote && (
-          <p style={{ margin: '6px 8px 0', fontSize: 10.5, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
-            {outsideNote}
-          </p>
-        )}
-      </div>
-    )
+    return () => setOpen(hit)
   }
 
   /**
@@ -1659,42 +1663,43 @@ export function ArtifactsAside({
     )
   }
 
-  const body = (): React.ReactNode => {
-    // The refusal outranks everything: there is no list to be empty when the conversation cannot be
-    // read at all.
-    if (unavailable) return <Note text={unavailable} />
-    if (loading && artifacts.length === 0) {
-      return (
-        <Note icon={<Loader size={13} className="ag-working-spin" />}
-          text={pt ? 'Lendo a conversa…' : 'Reading the conversation…'} />
-      )
-    }
-    if (artifacts.length === 0) {
-      // The two empty answers are NOT the same. One is a fact about the session's work; the other
-      // is a limit of this reader, and saying the first when the second is true is the confident
-      // wrong answer this panel was reported for.
-      return unlistedWrites ? (
-        <Note text={pt
-          ? 'Esta sessão escreveu por comandos de shell cujos caminhos não dá para ler da linha de comando — um interpretador alimentado por heredoc, por exemplo. Os arquivos existem; esta lista não consegue nomeá-los.'
-          : 'This session wrote through shell commands whose paths cannot be read from the command line — an interpreter fed a heredoc, for instance. The files exist; this list cannot name them.'} />
-      ) : (
-        <Note text={pt
-          ? 'Nada escrito ainda nesta sessão. Arquivos aparecem aqui assim que a sessão escreve ou edita um.'
-          : 'Nothing written in this session yet. Files appear here as soon as the session writes or edits one.'} />
-      )
-    }
-    return tab === 'docs'
-      ? fileList(docs, pt
-          ? 'Nenhum documento escrito nesta sessão DENTRO da pasta dela. Arquivos .md, .txt e afins aparecem aqui — mas só os que ficam na pasta da sessão: um arquivo escrito fora dela não pode ser lido daqui, e por isso não é listado.'
-          : 'No document written in this session INSIDE its folder. Files like .md and .txt appear here — but only those inside the session\'s folder: a file written outside it cannot be read from here, so it is not listed.')
-      : fileList(artifacts, pt
-          ? 'Nada escrito ainda nesta sessão. Arquivos aparecem aqui assim que a sessão escreve ou edita um.'
-          : 'Nothing written in this session yet. Files appear here as soon as the session writes or edits one.')
-  }
-
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, minWidth: 0 }}>
-      {open ? (
+    /*
+      `position: relative` is LOAD-BEARING, and it is what makes the Studio a mode rather than a tab.
+      The Studio's `Layer` is `position: absolute; inset: 0` against this box, so it covers the
+      header AND the tab strip at the full size of the aside — which is the whole point: a file tree
+      plus a code editor cannot share this column with two rows of chrome.
+    */
+    <div style={{
+      position: 'relative',
+      display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, minWidth: 0,
+    }}>
+      {/*
+        THE STUDIO IS A SIBLING OF THE CHROME, NEVER A CHILD OF IT — and that placement is the fix
+        for the defect this feature was stopped over twice. Inside the body region it was torn down
+        by a tab switch; inside the `open ? … : …` branch below it would be torn down by opening a
+        document from the live feed, which is the one remaining path that replaces this panel's whole
+        tree. Both take unsaved Monaco buffers with them, and an unsaved buffer exists in exactly one
+        place in the world. Up here, nothing below can unmount it: `Layer` hides it, `inert` takes it
+        out of the keyboard's reach, and `visibility` (never `display`) keeps it MEASURING, which is
+        the one state Monaco's `automaticLayout` cannot recover from on its own.
+      */}
+      {studioMounted && (
+        <Layer shown={inStudio}>
+          <Studio
+            sessionId={sessionId}
+            lang={lang}
+            autosave={editorAutosave === true}
+            turns={turns ?? []}
+            /* The way back. It flips which layer is SHOWN and unmounts nothing — see above. */
+            onExit={() => setStudio(false)}
+          />
+        </Layer>
+      )}
+      {/* In Studio mode this panel's own chrome is not rendered at all. Hiding it would leave the
+          header and the strip measuring under a layer nobody can reach; not rendering it is what
+          gives the Studio the aside's full height and says so unambiguously. */}
+      {inStudio ? null : open ? (
         <ArtifactDoc sessionId={sessionId} artifact={open} lang={lang} onBack={() => setOpen(null)} />
       ) : (
         <>
@@ -1702,36 +1707,12 @@ export function ArtifactsAside({
           {/* The tab bar is BELOW the header, so the close button keeps one place whatever tab is
               open — a control that moves with the content is one people stop finding. */}
           {!unavailable && tabBar}
-          {/* The REFUSAL outranks every tab: there is no list, feed or gallery to be empty when
-              the conversation cannot be read at all, and `body()` is where that one sentence
-              lives. */}
           {/* The TASKS tab outranks the refusal: it is about the board, not about reading this
               conversation, so a session whose transcript cannot be read can still be filed. */}
-          {/* THE BODY REGION. One `position: relative` box so the Repository tab's layer can sit
-              over it at the region's full size while another tab is the one being read — the same
-              geometry `EditorStack` uses for its own hidden buffers, and the reason a hidden layer
-              still MEASURES (a zero-sized box is a state Monaco's `automaticLayout` then has to
-              recover from). Every branch below is the flex child it was before. */}
           <div style={{
-            position: 'relative', flex: 1, minHeight: 0, minWidth: 0,
-            display: 'flex', flexDirection: 'column',
+            flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column',
           }}>
-          {repoMounted && (
-            <Layer shown={tab === 'repo'}>
-              <RepositoryTab
-                sessionId={sessionId}
-                lang={lang}
-                autosave={editorAutosave === true}
-                turns={turns ?? []}
-              />
-            </Layer>
-          )}
-          {/* The repo tab's body is the layer above, so the chain renders NOTHING for it — and
-              nothing is also the right answer with the gate closed, which is the only way `tab` can
-              read `repo` without a layer behind it (the switch turned off in another surface while
-              this panel still had it selected). A half-built panel would be worse. */}
-          {tab === 'repo' ? null
-            : tab === 'tasks' && session ? (
+          {tab === 'tasks' && session ? (
             <div style={{ overflowY: 'auto', minHeight: 0 }}>
               <SessionTasksTab
                 session={session}
@@ -1743,7 +1724,9 @@ export function ArtifactsAside({
           ) : tab === 'metrics' && metrics ? metricsBody()
             /* Like the tasks tab, and for the same reason: these figures come from the STORE, not
                from the transcript, so a conversation this panel cannot READ still has metrics. */
-            : unavailable ? body()
+            /* THE REFUSAL outranks every remaining tab: there is no feed, gallery or list to be
+               empty when the conversation cannot be read at all. */
+            : unavailable ? <Note text={unavailable} />
             : tab === 'live' ? liveBody()
             : tab === 'gallery' ? galleryBody()
             : tab === 'skills' ? skillsBody()
@@ -1751,7 +1734,12 @@ export function ArtifactsAside({
             : tab === 'workflows' ? workflowsBody()
             : tab === 'mcps' ? mcpBody()
             : tab === 'prs' ? prsBody()
-            : body()}
+            /* UNREACHABLE, and deliberately `null` rather than an invented sentence. Every `TabId`
+               above has an arm; the two that carry a condition (`tasks` needs a session, `metrics`
+               needs a record) are exactly the two whose strip entry is gated on the same fact, and
+               `tabRequest` is gated on it too — so there is no way to select one of them without the
+               data. A sentence here would be copy nobody can ever read. */
+            : null}
           </div>
         </>
       )}
@@ -1770,63 +1758,6 @@ function Band({ label, children }: { label?: string; children: React.ReactNode }
       )}
       {children}
     </div>
-  )
-}
-
-/** A size a person reads. Two figures is all "how big is this" needs. */
-function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`
-}
-
-function Row({ a, pt, fact, onOpen }: {
-  a: Artifact; pt: boolean
-  fact?: { bytes: number; scope: 'project' | 'temp' }
-  onOpen: () => void
-}) {
-  return (
-    <button
-      onClick={onOpen}
-      title={a.path}
-      style={{
-        display: 'flex', alignItems: 'flex-start', gap: 8, width: '100%', textAlign: 'left',
-        padding: '7px 8px', borderRadius: 8, border: 'none', background: 'transparent',
-        cursor: 'pointer', fontFamily: 'inherit', minWidth: 0,
-      }}
-      onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-elevated)' }}
-      onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
-    >
-      <span style={{ paddingTop: 2 }}><KindIcon kind={a.kind} /></span>
-      <span style={{ minWidth: 0, flex: 1 }}>
-        <span style={{
-          display: 'block', fontSize: 12.5, color: 'var(--text-primary)',
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{a.name}</span>
-        <span style={{
-          display: 'block', fontSize: 10.5, color: 'var(--text-tertiary)', direction: 'rtl',
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{a.dir}</span>
-        {/* The live row says what it is DOING; the others say how much they were touched, and only
-            when it was more than once — "1 edit" is noise on every row that has one. */}
-        {/* THE FACTS, on one line: how big, how many times it was touched, and whether it is the
-            project's or scratch. The scope is said only for TEMP — everything else is the project,
-            and a badge on every row would be noise on the common case. */}
-        <span style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, fontSize: 10.5, color: 'var(--text-tertiary)' }}>
-          {a.live && (
-            <span style={{ color: 'var(--anthropic-orange)' }}>{pt ? 'escrevendo…' : 'writing…'}</span>
-          )}
-          {fact && <span style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtBytes(fact.bytes)}</span>}
-          {a.touches > 1 && <span>{a.touches} {pt ? 'edições' : 'edits'}</span>}
-          {fact?.scope === 'temp' && (
-            <span style={{
-              padding: '0 5px', borderRadius: 4, fontSize: 9.5, fontWeight: 700, letterSpacing: 0.3,
-              background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-            }}>{pt ? 'temporário' : 'temp'}</span>
-          )}
-        </span>
-      </span>
-    </button>
   )
 }
 
@@ -2075,7 +2006,7 @@ function EventRow({ e, pt, now, onOpen, status, sessionId, agentId, focused }: {
       )}
     </Tag>
     {/* Take me to the FILE — the other question this row can answer, and only where the file is
-        actually in the Files list. */}
+        still on disk. */}
     {onOpen && (
       <button className="ag-tap-icon"
         onClick={onOpen}

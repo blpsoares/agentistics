@@ -37,7 +37,7 @@
  * supports and the `button` role does not; `aria-expanded` stays on the button, which does.
  *
  * `onTreeChange` takes an UPDATER, never a finished `TreeNode`: the state lives in the parent
- * (`RepositoryTab`), which passes its `setTree` straight in, so every model call runs against the
+ * (`Studio`), which passes its `setTree` straight in, so every model call runs against the
  * LATEST tree rather than one a closure captured before an `await`.
  */
 

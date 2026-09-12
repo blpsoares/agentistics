@@ -17,9 +17,9 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  agentActivity, closeOutcome, EditorStack, Layer, mountedEditors, NewFileRow, RepositoryTab,
+  agentActivity, closeOutcome, EditorStack, Layer, mountedEditors, NewFileRow, Studio, StudioBar,
   sameFile, TabStrip, Toolbar, Watermark, watermarkOpacity,
-} from './RepositoryTab'
+} from './Studio'
 import type { OpenTab } from '../../lib/repoTreeModel'
 import type { LiveEvent, LiveTurn } from '../../lib/artifactTabs'
 
@@ -213,8 +213,9 @@ describe('EditorStack', () => {
 
   test('exactly one of them is visible, and the other is hidden rather than gone', () => {
     const html = stack(['a.ts', 'b.ts'], 'b.ts')
-    expect(html.match(/visibility:hidden/g)?.length).toBe(1)
-    expect(html.match(/visibility:visible/g)?.length).toBe(1)
+    // Through `Layer`, so the stack cannot hide by a different rule from the two layers above it.
+    expect(html.match(/data-layer-shown="false"/g)?.length).toBe(1)
+    expect(html.match(/data-layer-shown="true"/g)?.length).toBe(1)
   })
 
   test('the hidden one is INERT — out of the keyboard’s reach while it is not on screen', () => {
@@ -234,14 +235,48 @@ describe('Layer', () => {
   test('a hidden layer is HIDDEN and inert — not removed', () => {
     const html = renderToStaticMarkup(<Layer shown={false}><p>tree</p></Layer>)
     expect(html).toContain('<p>tree</p>')
-    expect(html).toContain('visibility:hidden')
+    expect(html).toContain('opacity:0')
+    expect(html).toContain('pointer-events:none')
     expect(html).toContain('inert=""')
   })
 
-  test('a shown layer takes the keyboard', () => {
+  test('a shown layer takes the keyboard and the clicks', () => {
     const html = renderToStaticMarkup(<Layer shown={true}><p>tree</p></Layer>)
-    expect(html).toContain('visibility:visible')
+    expect(html).toContain('opacity:1')
     expect(html).not.toContain('inert=""')
+    expect(html).not.toContain('pointer-events:none')
+  })
+
+  /**
+   * THE HIDE MAY NOT BE `visibility`, AND THIS IS THE TEST THAT SAYS SO.
+   *
+   * `visibility` is inherited AND overridable: a descendant setting `visibility: visible` re-shows
+   * itself inside a hidden ancestor. That is not a theoretical hazard here — `Layer` is nested three
+   * deep (the aside's Studio layer, the Studio's tree/editor pair, the editor stack's buffers) and at
+   * every level one child is always shown, so the inner one re-showed itself and painted, frozen and
+   * unclickable, over whatever the reader had switched to. Reproduced in Chromium: the inner box
+   * computed `visible` under an ancestor computing `hidden`, and `elementsFromPoint` returned it
+   * above the tab body.
+   *
+   * A static render cannot compute styles, so what is asserted is the thing that actually fixed it:
+   * `Layer` NEVER NAMES `visibility` at all, at any nesting depth. `opacity` is not inherited — a
+   * child's `opacity: 1` composites inside a parent's `opacity: 0` and stays invisible — so the
+   * shown inner layer below is allowed to say `opacity:1` and must still be hidden.
+   */
+  test('a SHOWN layer inside a HIDDEN one cannot re-show itself', () => {
+    const html = renderToStaticMarkup(
+      <Layer shown={false}><Layer shown={true}><p>inner</p></Layer></Layer>,
+    )
+    expect(html).toContain('<p>inner</p>')
+    expect(html).not.toContain('visibility')
+    // The outer is the hidden one, and it hides with the non-overridable property.
+    expect(html.indexOf('opacity:0')).toBeLessThan(html.indexOf('<p>inner</p>'))
+  })
+
+  test('the scan still sees the defect it exists to catch', () => {
+    // The test of the test: a `Layer` that went back to `visibility` would fail the assertion above.
+    const planted = '<div style="visibility:hidden"><div style="visibility:visible"><p>inner</p></div></div>'
+    expect(planted).toContain('visibility')
   })
 })
 
@@ -392,9 +427,9 @@ describe('the watermark', () => {
 
 // --- the composition itself --------------------------------------------------------------------------
 
-describe('RepositoryTab', () => {
+describe('Studio', () => {
   const render = (turns: LiveTurn[] = [], lang: 'pt' | 'en' = 'en') => renderToStaticMarkup(
-    <RepositoryTab sessionId="s1" lang={lang} autosave={false} turns={turns} />,
+    <Studio sessionId="s1" lang={lang} autosave={false} turns={turns} onExit={() => {}} />,
   )
 
   test('before the root listing arrives it SAYS it is reading — the tree draws nothing there', () => {
@@ -423,5 +458,57 @@ describe('RepositoryTab', () => {
     const html = render()
     expect(html).toContain('Search')
     expect(html).toContain('New')
+  })
+})
+
+/**
+ * THE EXIT. The Studio covers the aside's header and its tab strip, so this bar is the only way out
+ * of it — and a way out that can be absent is a reader trapped in a panel. `onExit` is therefore a
+ * REQUIRED prop (the type carries that) and the bar is drawn unconditionally (these tests carry
+ * that): neither half is enough on its own, because a required callback nobody renders a control for
+ * is exactly the shape this guards against.
+ */
+describe('StudioBar — the only chrome the Studio has', () => {
+  const bar = (lang: 'pt' | 'en', isMobile = false) => renderToStaticMarkup(
+    <StudioBar isMobile={isMobile} lang={lang} onExit={() => {}} />,
+  )
+
+  test('the way back NAMES where it goes, in both languages', () => {
+    // Not a bare arrow: `ArrowLeft` already means "back to the tree" on the strip below, and the
+    // word is the heading the reader actually lands on.
+    expect(bar('en')).toContain('Contents')
+    expect(bar('pt')).toContain('Conteúdo')
+  })
+
+  test('it is a BUTTON with an accessible name, not a decorated glyph', () => {
+    expect(bar('en')).toContain('aria-label="Leave the Studio and go back to Contents"')
+    expect(bar('pt')).toContain('Sair do Studio e voltar para Conteúdo')
+  })
+
+  test('the product names itself, and carries the beta caveat', () => {
+    const html = bar('en')
+    expect(html).toContain('Agentistics Studio')
+    expect(html).toContain('>beta<')
+  })
+
+  test('mobile keeps the short name and takes the 44px target; desktop does NOT', () => {
+    // 44px is the mobile figure. On desktop this bar sits above a tab strip and must stay thin.
+    expect(bar('en', true)).toContain('min-height:44px')
+    expect(bar('en', true)).not.toContain('Agentistics Studio')
+    expect(bar('en', false)).not.toContain('min-height:44px')
+    expect(bar('en', false)).toContain('min-height:30px')
+  })
+})
+
+describe('the Studio draws its exit from the first frame', () => {
+  const render = (lang: 'pt' | 'en' = 'en') => renderToStaticMarkup(
+    <Studio sessionId="s1" lang={lang} autosave={false} turns={[]} onExit={() => {}} />,
+  )
+
+  test('before any listing has arrived, the way out is already on screen', () => {
+    // The root listing is a fetch and `useEffect` never runs here, so this is the panel at its
+    // emptiest — the moment a missing exit would strand somebody.
+    expect(render()).toContain('Leave the Studio and go back to Contents')
+    expect(render('pt')).toContain('Sair do Studio e voltar para Conteúdo')
   })
 })

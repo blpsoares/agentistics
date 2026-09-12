@@ -1,10 +1,24 @@
 /**
- * RepositoryTab — the Repository tab's own root: the tree, the search and a multi-tab Monaco
- * editor, as LAYERS over one panel rather than a split. That is the exact reason
- * `ArtifactsAside.tsx`'s own header gives for the Files tab: a list and a document sharing this
- * column would give the document less room than the conversation it was opened from. Opening a file
- * REPLACES the tree with the editor; a back control returns to it, and the open-files strip stays
- * on screen either way — a tab you cannot see is a buffer you cannot get back to.
+ * Studio — Agentistics Studio's own root: the tree, the search and a multi-tab Monaco editor, as
+ * LAYERS over one panel rather than a split.
+ *
+ * IT IS A MODE, NOT A TAB, and that is the one thing to understand before changing anything here.
+ * It began as one tab among the aside's fourteen, under the aside's own "Contents" header and its
+ * tab strip — two rows of chrome above a file tree and a code editor, in a column 440px wide. A
+ * tree plus an editor cannot share vertical space with that, so opening the Studio now REPLACES the
+ * aside's chrome: `ArtifactsAside` renders this component as a `Layer` at its own root, over the
+ * header and the strip, at the full size of the aside. The way back is this component's OWN top
+ * edge (`onExit`), which is the only chrome there is here — and it is a required prop rather than an
+ * optional one, because an exit that can be forgotten is a reader trapped in a panel.
+ *
+ * The name is the PRODUCT's, deliberately: Agentistics Studio, the studio of this product. It is
+ * not "agent studio", which reads as a studio for building agents and is a different thing. The
+ * modules under it keep their repository names (`repoApi`, `repoTreeModel`, `RepoTreeView`,
+ * `RepoFileEditor`, …): those describe what they read, which really is a repository.
+ *
+ * Opening a file REPLACES the tree with the editor; a back control returns to it, and the
+ * open-files strip stays on screen either way — a tab you cannot see is a buffer you cannot get
+ * back to.
  *
  * SWITCHING TABS MAY NEVER DESTROY WHAT WAS TYPED, and that is the one rule this composition
  * exists to keep. `RepoFileEditor` re-reads its file on mount and disposes its Monaco model on
@@ -20,6 +34,11 @@
  * are BOTH mounted, one of them hidden (`Layer`). Rendering one OR the other made "back to the
  * tree" — a control that promises to change nothing — destroy the very buffer the paragraph above
  * protects. Caught by running it, not by reading it.
+ *
+ * AND IT HOLDS A THIRD TIME, ONE LEVEL FURTHER OUT: LEAVING the Studio must not unmount it either.
+ * `ArtifactsAside` keeps this component mounted and hidden behind the same `Layer` while the normal
+ * aside is showing, so `onExit` is a control that changes what is on screen and nothing else. That
+ * is why the exit is a plain callback and never an unmount.
  *
  * It is bounded rather than unbounded: the mounted set is the ACTIVE file plus every file with
  * UNSAVED changes. A clean background tab is unmounted, because re-reading it from the server
@@ -41,13 +60,13 @@
  * that badge could never have lit.
  *
  * A STATED LIMIT: the open files belong to ONE session. Selecting a different session resets this
- * tab — the tree, the strip and every buffer with it. There is nowhere to keep them (the panel's
+ * panel — the tree, the strip and every buffer with it. There is nowhere to keep them (the panel's
  * whole state is per session) and no honest way to ask, since the switch has already happened
- * elsewhere; the tab that can be lost that way is a tab nothing else in this panel survives either.
+ * elsewhere; the buffer that can be lost that way is one nothing else in this aside survives either.
  */
 
 import { useEffect, useState, type ReactNode } from 'react'
-import { AlertTriangle, ArrowLeft, Check, FilePlus, Loader, Plus, Search, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Check, ChevronLeft, FilePlus, Loader, Plus, Search, X } from 'lucide-react'
 import {
   applyChildren, applyError, closeTab, makeRootNode, markDirty, openTab,
   type OpenTab, type TreeNode,
@@ -57,18 +76,30 @@ import { repoFailureText } from '../../lib/repoErrorText'
 import { liveEvents, type LiveEvent, type LiveTurn } from '../../lib/artifactTabs'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { ConfirmModal } from '../../pages/settings/primitives'
+import { BetaTag } from '../BetaTag'
 import { RepoFileEditor } from './RepoFileEditor'
 import { RepoSearchView } from './RepoSearchView'
 import { RepoTreeView, treeViewState } from './RepoTreeView'
 import { RepoNote } from './repoNote'
 
-export interface RepositoryTabProps {
+export interface StudioProps {
   sessionId: string
   lang: 'pt' | 'en'
   /** The user's own autosave preference; see `Preferences.editorAutosave`. */
   autosave: boolean
   /** The Live tab's own feed, passed in rather than polled again. */
   turns: readonly LiveTurn[]
+  /**
+   * Leave the Studio and put the normal aside back.
+   *
+   * REQUIRED, and the whole reason is in the header: this component covers the aside's own header
+   * and tab strip, so its top edge is the only chrome a reader has. An optional exit is an exit
+   * somebody forgets to pass, and the result is a panel with no way out of it.
+   *
+   * It may never unmount this component — see the third paragraph of the header. A callback is what
+   * makes that possible: the parent flips which layer is SHOWN and keeps both mounted.
+   */
+  onExit: () => void
 }
 
 /** Which layer the panel is showing while no file is open. */
@@ -177,7 +208,7 @@ export function watermarkOpacity(theme: string | null): number {
 
 // --- the component -------------------------------------------------------------------------------
 
-export function RepositoryTab({ sessionId, lang, autosave, turns }: RepositoryTabProps) {
+export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps) {
   const isMobile = useIsMobile()
   const pt = lang === 'pt'
   const [tree, setTree] = useState<TreeNode>(makeRootNode())
@@ -267,6 +298,8 @@ export function RepositoryTab({ sessionId, lang, autosave, turns }: RepositoryTa
       flex: 1, minHeight: 0, minWidth: 0, boxSizing: 'border-box',
       display: 'flex', flexDirection: 'column',
     }}>
+      <StudioBar isMobile={isMobile} lang={lang} onExit={onExit} />
+
       {tabs.length > 0 && (
         <TabStrip
           tabs={tabs}
@@ -374,6 +407,70 @@ export function RepositoryTab({ sessionId, lang, autosave, turns }: RepositoryTa
   )
 }
 
+/**
+ * THE STUDIO'S OWN TOP EDGE — and the only chrome it has.
+ *
+ * The Studio covers the aside's header and its tab strip (see the file header), so the way back has
+ * to be here. It NAMES where it goes rather than drawing a bare arrow: `ArrowLeft` already means
+ * "back to the tree" on `TabStrip` two rows down, and one glyph for two different backs in one panel
+ * is a control people press to find out what it does. The word is the aside's own heading, so the
+ * destination on the button is the heading the reader lands on.
+ *
+ * ONE ROW, and as short as a row can be: the whole reason this surface took the aside over is
+ * vertical space. It earns its height by being the exit and by saying what this is — the product
+ * name in full, with the beta caveat the nav entries already carry, so the mark is on every surface
+ * that names the feature rather than on some of them.
+ */
+export function StudioBar({ isMobile, lang, onExit }: {
+  isMobile: boolean
+  lang: 'pt' | 'en'
+  onExit: () => void
+}) {
+  const pt = lang === 'pt'
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, minWidth: 0,
+      // 44px is the MOBILE figure and only the mobile figure — applied on desktop it would make
+      // this thin bar as tall as the tab strip under it.
+      minHeight: isMobile ? 44 : 30, padding: '0 8px 0 2px',
+      borderBottom: '1px solid var(--border)',
+    }}>
+      <button
+        onClick={onExit}
+        aria-label={pt ? 'Sair do Studio e voltar para Conteúdo' : 'Leave the Studio and go back to Contents'}
+        title={pt ? 'Sair do Studio e voltar para Conteúdo' : 'Leave the Studio and go back to Contents'}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0,
+          minHeight: isMobile ? 44 : 26, padding: isMobile ? '0 10px 0 4px' : '0 7px 0 3px',
+          border: 'none', borderRadius: 8, background: 'transparent',
+          color: 'var(--text-secondary)', cursor: 'pointer',
+          fontFamily: 'inherit', fontSize: isMobile ? 13 : 11.5,
+        }}
+      >
+        <ChevronLeft size={isMobile ? 18 : 15} />
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {pt ? 'Conteúdo' : 'Contents'}
+        </span>
+      </button>
+
+      <span style={{
+        display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto', minWidth: 0,
+      }}>
+        <span style={{
+          fontSize: isMobile ? 12 : 11, fontWeight: 700, letterSpacing: 0.3,
+          color: 'var(--text-primary)',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {/* The full product name where there is room for it; the tab and the header button say
+              `Studio` alone, which is what the feature is called in conversation. */}
+          {isMobile ? 'Studio' : 'Agentistics Studio'}
+        </span>
+        <BetaTag what={pt ? 'O Studio' : 'The Studio'} />
+      </span>
+    </div>
+  )
+}
+
 // --- the chrome ----------------------------------------------------------------------------------
 //
 // Every piece below takes its state as a PROP and is exported for the reason `RepoSearchResults` is:
@@ -381,13 +478,37 @@ export function RepositoryTab({ sessionId, lang, autosave, turns }: RepositoryTa
 // clicking could not be asserted at all.
 
 /**
- * One of the panel's two layers: shown, or kept exactly as it is behind the other one.
+ * ONE REGION, SEVERAL MOUNTED TREES, EXACTLY ONE OF THEM VISIBLE.
  *
- * `visibility: hidden` and NOT `display: none`, for the same reason `EditorStack` gives: a
- * display-less box measures zero, and Monaco's `automaticLayout` would have that to recover from
- * every time a file is reopened. `inert` is what keeps the hidden layer out of the keyboard's reach
- * and out of the accessibility tree — a Tab that walks into an invisible file tree is a panel whose
- * focus has gone somewhere the reader cannot see.
+ * **IT IS NESTED, AND `visibility` COULD NOT SURVIVE THAT.** This used to hide with
+ * `visibility: hidden`, which is wrong here for a reason CSS states outright: `visibility` is
+ * INHERITED AND OVERRIDABLE, so a descendant setting `visibility: visible` re-shows itself inside a
+ * hidden ancestor. And a descendant always does — `Studio` renders two of these inside itself and
+ * one of them is always `shown`, while `ArtifactsAside` now renders the whole Studio inside one
+ * more. Reproduced in Chromium on exactly this nesting: the inner layer computed `visible` under an
+ * ancestor computing `hidden`, `elementsFromPoint` returned it ABOVE the tab body, and a screenshot
+ * showed the file tree painted over the tab the reader had switched to. Because the box is
+ * `position: absolute; inset: 0` it covered the region completely; because `inert` IS inherited and
+ * cannot be undone by a descendant, what you got was a frozen, unclickable panel over your content.
+ *
+ * So the hide is `opacity: 0`, which a descendant cannot reverse (it is not inherited — it composites
+ * the whole subtree), plus `pointer-events: none` for the clicks `opacity` leaves live and `inert`
+ * for the keyboard and the accessibility tree. **`display: none` is the one thing this component
+ * exists to avoid**: a display-less box measures ZERO, and a zero-sized Monaco is the one state its
+ * `automaticLayout` then has to recover from — which is why the layer has to keep measuring while it
+ * is hidden.
+ *
+ * THE COST IS STATED RATHER THAN DISCOVERED: `opacity: 0` keeps the subtree in the DOCUMENT's text,
+ * which `visibility: hidden` would not — the browser's own find-in-page can still match a hidden
+ * buffer. That is the cheaper half of the trade. `inert` is what keeps it out of the ACCESSIBILITY
+ * tree and away from the keyboard, so a screen reader never reads it, and nothing here is ever the
+ * only copy of anything on screen: the hidden layer is always a file the reader has open and can
+ * bring back. Measured on a live session — the hidden layer computed `opacity: 0`,
+ * `pointer-events: none` (inherited by its own shown children, which is exactly the point) and
+ * `inert`, and `elementsFromPoint` over the middle of the region returned the visible content.
+ *
+ * `data-layer-shown` is the attribute the tests read; it is also the only honest way to ask this
+ * question from outside, since every style here is inline.
  */
 export function Layer({ shown, children }: { shown: boolean; children: ReactNode }) {
   return (
@@ -397,7 +518,9 @@ export function Layer({ shown, children }: { shown: boolean; children: ReactNode
       style={{
         position: 'absolute', inset: 0, minWidth: 0,
         display: 'flex', flexDirection: 'column',
-        visibility: shown ? 'visible' : 'hidden',
+        // NOT `visibility` — see the note above. These three cannot be undone from inside.
+        opacity: shown ? 1 : 0,
+        pointerEvents: shown ? undefined : 'none',
       }}
     >
       {children}
@@ -413,10 +536,15 @@ export function Layer({ shown, children }: { shown: boolean; children: ReactNode
  * is the one fact the pure `mountedEditors` cannot carry on its own.
  *
  * The editors are stacked absolutely inside one relative box so that every one of them has the full
- * region's size, visible or not. `visibility: hidden` rather than `display: none` for that reason:
- * a display-less box measures zero, which is the one state Monaco's `automaticLayout` then has to
- * recover from when the tab comes back. `inert` is what keeps a hidden buffer out of the keyboard's
- * reach and out of the accessibility tree while it is not the file on screen.
+ * region's size, visible or not — which is exactly what `Layer` is, so it is `Layer` that draws them
+ * rather than a second copy of the same three styles. That matters beyond tidiness: this stack sits
+ * INSIDE two more layers, and `Layer`'s doc comment records why the hide may not be `visibility`
+ * (a descendant can set `visibility: visible` and re-show itself through a hidden ancestor, which
+ * shipped once and painted a frozen file tree over the tab the reader had switched to). One hiding
+ * rule, in one place, for every level of the nest.
+ *
+ * `data-editor-path` stays on a wrapper of its own: it is what the tests count mounted buffers by,
+ * and `Layer` carries no identity.
  */
 export function EditorStack({ sessionId, paths, activePath, autosave, lang, goTo, onDirtyChange }: {
   sessionId: string
@@ -432,25 +560,20 @@ export function EditorStack({ sessionId, paths, activePath, autosave, lang, goTo
       {paths.map(path => {
         const active = path === activePath
         return (
-          <div
-            key={path}
-            data-editor-path={path}
-            inert={!active}
-            style={{
-              position: 'absolute', inset: 0, minWidth: 0,
-              display: 'flex', flexDirection: 'column',
-              visibility: active ? 'visible' : 'hidden',
-            }}
-          >
-            <RepoFileEditor
-              sessionId={sessionId}
-              path={path}
-              autosave={autosave}
-              onDirtyChange={dirty => onDirtyChange(path, dirty)}
-              lang={lang}
-              {...(goTo !== null && goTo.path === path ? { gotoLine: goTo.line } : {})}
-            />
-          </div>
+          <Layer key={path} shown={active}>
+            <div data-editor-path={path} style={{
+              flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column',
+            }}>
+              <RepoFileEditor
+                sessionId={sessionId}
+                path={path}
+                autosave={autosave}
+                onDirtyChange={dirty => onDirtyChange(path, dirty)}
+                lang={lang}
+                {...(goTo !== null && goTo.path === path ? { gotoLine: goTo.line } : {})}
+              />
+            </div>
+          </Layer>
         )
       })}
     </div>

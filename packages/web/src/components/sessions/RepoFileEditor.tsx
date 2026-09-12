@@ -518,7 +518,7 @@ export function monacoThemeFor(attr: string | null): 'vs' | 'vs-dark' {
  *   line highlight, the suggest widget and the context menu (a long press there fights the native
  *   selection UI). What is left is the number, the text, and a 14px font that can actually be read.
  * - **The editor is SHOWN on a phone rather than refused.** Monaco's touch support is imperfect but
- *   real, and a read-only fallback would make the Repository tab a different feature on a phone —
+ *   real, and a read-only fallback would make the Studio a different feature on a phone —
  *   what a phone genuinely cannot do is Ctrl+S, which is why the Save button exists beside it.
  */
 export function monacoOptions({ isMobile, theme }: { isMobile: boolean; theme: 'vs' | 'vs-dark' }):
@@ -595,7 +595,7 @@ export function RepoFileEditor({
   /**
    * The theme is read off `<html data-theme>`, the one place `App.tsx` writes it, and followed with
    * an observer rather than taken as a prop: a second copy threaded through two components would be
-   * a second source for one fact, and this component's props are fixed by `RepositoryTab`.
+   * a second source for one fact, and this component's props are fixed by `Studio`.
    */
   const [themeAttr, setThemeAttr] = useState<string | null>(readThemeAttr)
   /** Bumped once the editor exists, so effects that need an instance can depend on its arrival. */

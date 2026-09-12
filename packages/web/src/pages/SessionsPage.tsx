@@ -19,7 +19,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
-import { ChevronLeft, FileText, MessagesSquare, Plus, TerminalSquare } from 'lucide-react'
+import { ChevronLeft, FileText, FolderTree, MessagesSquare, Plus, TerminalSquare } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import { useFleet, useFleetIndex, type FleetActionId } from '../lib/fleet'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -265,7 +265,6 @@ export default function SessionsPage() {
   const [artifactsUnavailable, setArtifactsUnavailable] = useState<string | undefined>(undefined)
   /** The conversation behind these lists is the END of a longer one — see `chat-web.ts`'s `older`. */
   const [artifactsOlder, setArtifactsOlder] = useState<string | undefined>(undefined)
-  const [artifactsUnlisted, setArtifactsUnlisted] = useState(false)
   /** The conversation's turns, for the LIVE tab — the same ones the chat renders. */
   const [artifactTurns, setArtifactTurns] = useState<readonly LiveTurn[]>([])
 
@@ -279,18 +278,18 @@ export default function SessionsPage() {
    */
   const [onDisk, setOnDisk] = useState<Map<string, { bytes: number; scope: 'project' | 'temp' }>>(new Map())
   /**
-   * Already-localized: files this session wrote OUTSIDE its own folder, which the list cannot offer.
+   * `onDisk` is now a FILTER and nothing else — what the aside drew as a per-row size and scope went
+   * with the Files and Docs tabs. The read stays because the filter does: the aside's gallery and its
+   * live feed both link to paths, and a link whose only outcome is a refusal is worse than no link.
    *
-   * Reported as the panel missing a file the session had just written. It had not missed it — the
-   * list drops what the read route would refuse, because a row whose only outcome is a refusal is
-   * worse than no row. What was wrong is that the drop was SILENT, and a silent drop reads as a bug
-   * in the panel. A count and a sentence say the list is complete for what it can serve, and that
-   * something else was written elsewhere; the paths themselves stay off the screen, or explaining
-   * the guard would undo it.
+   * The route's `outside` sentence is no longer read here, and that is a decision rather than an
+   * oversight. It said "the session also wrote files outside this folder, which cannot be LISTED" —
+   * a qualification OF THE LIST, composed in those terms by the server, and with no list left it
+   * qualifies nothing. A sentence about a list that does not exist is worse than its absence, and it
+   * cannot be reworded from here. The route is untouched, so rehoming it later costs one line.
    */
-  const [outsideNote, setOutsideNote] = useState<string | null>(null)
   useEffect(() => {
-    if (!selected) { setOnDisk(new Map()); setOutsideNote(null); return }
+    if (!selected) { setOnDisk(new Map()); return }
     let alive = true
     const read = async () => {
       try {
@@ -298,10 +297,8 @@ export default function SessionsPage() {
         if (!r.ok || !alive) return
         const d = await r.json() as {
           files?: { raw: string; bytes: number; scope: 'project' | 'temp' }[]
-          outside?: string
         }
         setOnDisk(new Map((d.files ?? []).map(f => [f.raw, { bytes: f.bytes, scope: f.scope }])))
-        setOutsideNote(d.outside ?? null)
       } catch { /* the list simply stays as it was */ }
     }
     void read()
@@ -347,7 +344,6 @@ export default function SessionsPage() {
   const art = useArtifacts()
   const onArtifacts = useCallback((a: { artifacts: Artifact[]; loading: boolean; unavailable?: string; older?: string; unlisted: boolean; turns: readonly LiveTurn[] }) => {
     setArtifacts(a.artifacts)
-    setArtifactsUnlisted(a.unlisted)
     setArtifactTurns(a.turns)
     setArtifactsLoading(a.loading)
     setArtifactsUnavailable(a.unavailable)
@@ -521,12 +517,9 @@ export default function SessionsPage() {
       // Only what the server confirmed is still a file with content. Until it has answered the
       // list is shown as recorded, so the panel is never empty for the length of a request.
       artifacts={onDisk.size === 0 ? artifacts : artifacts.filter(a => onDisk.has(a.path))}
-      facts={onDisk}
-      {...(outsideNote ? { outsideNote } : {})}
       loading={artifactsLoading}
       {...(artifactsUnavailable ? { unavailable: artifactsUnavailable } : {})}
       {...(artifactsOlder ? { older: artifactsOlder } : {})}
-      unlistedWrites={artifactsUnlisted}
       turns={artifactTurns}
       // The repository explorer's gate and its autosave switch. The gate decides whether the tab
       // exists at all — see `ArtifactsAsideProps`.
@@ -1018,6 +1011,23 @@ export default function SessionsPage() {
                     on: art.open,
                     onSelect: () => (art.open ? closeArtifacts() : openArtifacts()),
                   },
+                  /* AGENTISTICS STUDIO, on a phone. The desktop entry is a button on the sessions
+                     strip (`App.tsx`), which this layout does not render — the actions live in this
+                     menu instead, which is where the panel's own entry already is. A tile in the
+                     bottom nav's "More" sheet was the other candidate and is wrong: that sheet is
+                     machine-wide chrome and the Studio is about the SESSION you have open, which
+                     only this menu has.
+                     ABSENT when the gate is closed, never greyed — the same `editorEnabled` the
+                     aside reads, the server's own already-resolved answer. The `new` badge is the
+                     pair to the desktop button's two marks, as far as one row of a 240px menu can
+                     carry: the beta caveat is on the Studio's own top bar, one tap away. */
+                  ...(editorEnabled ? [{
+                    id: 'studio',
+                    label: 'Studio',
+                    icon: <FolderTree size={15} />,
+                    badge: pt ? 'novo' : 'new',
+                    onSelect: () => openArtifacts('studio'),
+                  }] : []),
                 ]}
               />
             )}

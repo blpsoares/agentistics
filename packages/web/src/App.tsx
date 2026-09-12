@@ -6,7 +6,7 @@ import {
   Activity, AlertTriangle, ArrowLeft, ArrowRight, BarChart2, Bot,
   Calendar, CheckCircle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
   Clock, Code2, Cpu, Database, DollarSign, Download,
-  FileCode, FileDown, FileText, Flame, FolderOpen, GitBranch,
+  FileCode, FileDown, FileText, Flame, FolderOpen, FolderTree, GitBranch,
   GitCommit, GitCompare, Globe, Home, KeyRound, Layers,
   LogOut, Maximize2, MessageSquare, MessagesSquare, Moon, MoreHorizontal,
   PanelLeft, RefreshCw, Server, Settings, Shield, ShieldCheck,
@@ -39,6 +39,7 @@ import { ProjectsList } from './components/ProjectsList'
 import { FiltersBar } from './components/FiltersBar'
 import { NotificationToasts } from './components/NotificationToasts'
 import { BetaTag } from './components/BetaTag'
+import { NewTag } from './components/NewTag'
 import { KeyboardProbe, keyboardProbeOn } from './components/KeyboardProbe'
 import { shouldResetDocumentScroll } from './lib/viewportReset'
 import { MagnifierLayer } from './components/a11y/MagnifierLayer'
@@ -3234,8 +3235,8 @@ export default function AppLayout() {
           onClick={toggleArtifacts}
           aria-pressed={artifacts.open}
           title={lang === 'pt'
-            ? 'Conteúdo desta sessão — arquivos, docs, atividade, galeria e skills'
-            : 'This session’s contents — files, docs, activity, gallery and skills'}
+            ? 'Conteúdo desta sessão — atividade, galeria, skills, subagentes e mais'
+            : 'This session’s contents — activity, gallery, skills, subagents and more'}
           style={{
             display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
             height: 30, padding: '0 10px', borderRadius: 9, cursor: 'pointer',
@@ -3255,6 +3256,45 @@ export default function AppLayout() {
               gallery, so it names what the panel opens on nine times out of ten and the tooltip
               carries the rest. `Files` (two sheets) was tried and reads as "copy". */}
           <FileText size={14} />
+        </button>
+      )}
+
+      {/* AGENTISTICS STUDIO — the second way in, and the short one.
+          It lived only behind the aside's tab strip, which is two presses and a launcher grid away
+          from a reader who does not already know it is there; this row had the space because the
+          dashboard's action cluster moved out of it.
+
+          ABSENT, NEVER DISABLED, when the gate is closed. `appCtx.editorEnabled` is the SERVER's own
+          answer — `CAPS.localShell` AND the user's switch, combined by `sessions/editor-gate.ts` —
+          and it is read here rather than re-derived from a capability plus a preference, which is the
+          one rule this feature's wiring has. A greyed button would explain nothing and the route
+          refuses anyway. `!isCentral` for the same reason the panel beside it is: the whole
+          `/api/fleet` prefix is refused there.
+
+          It carries BOTH marks. `beta` is the caveat every other entry to this feature wears, and
+          `new` is why a reader should look at a button that was not on this row yesterday — two
+          different statements, so two marks (see `NewTag`). The same pair is on the mobile entry in
+          `SessionsPage`'s session menu: a feature marked on one nav and not the other teaches the
+          reader that the unmarked one is something else. */}
+      {selectedFleetSession && !isCentral && appCtx.editorEnabled && (
+        <button
+          onClick={() => openArtifacts('studio')}
+          title={lang === 'pt'
+            ? 'Agentistics Studio — os arquivos desta sessão em árvore, com busca e editor'
+            : 'Agentistics Studio — this session’s files as a tree, with search and an editor'}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+            height: 30, padding: '0 9px', borderRadius: 9, cursor: 'pointer',
+            border: '1px solid var(--border-subtle)',
+            background: 'var(--bg-elevated)', color: 'var(--text-secondary)',
+            fontFamily: 'inherit', fontSize: 12,
+          }}
+        >
+          {/* `FolderTree`, the glyph the strip entry already wears — one feature, one icon. */}
+          <FolderTree size={14} />
+          <span>Studio</span>
+          <BetaTag what={lang === 'pt' ? 'O Studio' : 'The Studio'} />
+          <NewTag lang={lang === 'pt' ? 'pt' : 'en'} />
         </button>
       )}
 
