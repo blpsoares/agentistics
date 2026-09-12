@@ -778,6 +778,42 @@ export function Layer({ shown, children }: { shown: boolean; children: ReactNode
 }
 
 /**
+ * WHETHER A STACKED PANE'S OWN BOX MAY TAKE A TAP — the half of `Layer`'s rule that lives out here.
+ *
+ * `Layer` makes a hidden pane's CONTENT untouchable (`opacity: 0`, `pointer-events: none`, `inert`
+ * over the whole subtree) and that was read as making the PANE untouchable. It does not. The box
+ * the layer sits in is a different element, and in `layers` both boxes are `position: absolute;
+ * inset: 0` over one region — an absolutely positioned div with no background of its own paints
+ * nothing and is still a perfectly good hit target, and the EDITOR's box is the one that comes last
+ * in the DOM. So on a phone every tap meant for the file tree landed on an invisible editor pane:
+ * the tree was fully drawn, scrolled correctly, and did nothing at all — no file would open, and
+ * neither would `Buscar` or `Novo`, which are inside it. The only control that still worked was the
+ * bar above the region, i.e. the one that leaves.
+ *
+ * Measured at 390x844 against a live session before the fix — `document.elementsFromPoint` over the
+ * middle of the `AGENTS.md` row answered, topmost first:
+ *   DIV[data-studio-pane=editor] pe=auto op=1 inert=false pos=absolute box=0,45 390x799
+ *   SPAN … BUTTON box=0,102 390x44   ← the row, underneath it
+ * and Playwright refused the click with `<div data-studio-pane="editor"> intercepts pointer
+ * events`. The desktop never saw it because `split` makes the two boxes flex SIBLINGS, which
+ * overlap nothing; `layers` is the phone and the narrow aside.
+ *
+ * It is `pointer-events` and deliberately NOT `inert`. `inert` is INHERITED and cannot be lifted
+ * from inside, so a box carrying it would freeze a `Layer` that became shown while the box had not
+ * caught up — there is no style the layer could write to get out. `Layer`'s own comment calls
+ * `pointer-events` the weak leg because a DESCENDANT may set `auto` and become the target again,
+ * and that is exactly what makes it right here and wrong there: the box has no content of its own
+ * to re-enable anything, and everything under it is already held by the layer's `inert`.
+ *
+ * Not restricted to `layers`, even though that is the arrangement that overlaps: a collapsed column
+ * in the split is zero-wide and cannot be hit either way, so the narrower rule would buy nothing and
+ * would have to be reasoned out again the next time a pane is positioned over another one.
+ */
+export function paneHits(shown: boolean): 'none' | undefined {
+  return shown ? undefined : 'none'
+}
+
+/**
  * WHERE THE TWO PANES SIT — and nothing else.
  *
  * It takes the tree and the editor as NODES and decides only their boxes. That separation is the
@@ -838,7 +874,7 @@ export function StudioBody({
             position: 'relative', minWidth: 0, flexShrink: 0, overflow: 'hidden',
             width: collapsed ? 0 : treeWidth,
           }
-          : { position: 'absolute', inset: 0 }}
+          : { position: 'absolute', inset: 0, pointerEvents: paneHits(treeShown) }}
       >
         {/*
           THE SIZER. It holds the tree at a CONSTANT width while the pane around it collapses to
@@ -869,7 +905,7 @@ export function StudioBody({
         data-studio-pane="editor"
         style={split
           ? { position: 'relative', flex: 1, minWidth: 0 }
-          : { position: 'absolute', inset: 0 }}
+          : { position: 'absolute', inset: 0, pointerEvents: paneHits(editorShown) }}
       >
         <Layer shown={editorShown}>{editor}</Layer>
       </div>
@@ -1198,16 +1234,53 @@ export function NewFileRow({ state, isMobile, lang, onChange, onSubmit, onCancel
             minHeight: isMobile ? 44 : undefined,
           }}
         />
-        <IconButton
-          label={pt ? 'Criar o arquivo' : 'Create the file'}
-          disabled={!ready}
-          onClick={onSubmit}
-        >
-          {state.busy ? <Loader size={14} className="ag-working-spin" /> : <Check size={14} />}
-        </IconButton>
-        <IconButton label={pt ? 'Cancelar' : 'Cancel'} onClick={onCancel}>
-          <X size={14} />
-        </IconButton>
+        {/*
+          CONFIRM AND CANCEL, AND ON A PHONE THEY ARE WORDS.
+
+          They were two `IconButton`s, 22x22 and six painted pixels apart, and `.ag-tap-icon` grows a
+          hit box 7px on each side — which is the overlap index.css's own comment says must never be
+          waved away, sitting here on the one pair where it costs something: a mis-tap CANCELS what
+          you just typed. MEASURED at 390x844 on a live session, by probing `elementFromPoint`
+          outward from each centre: Create painted `x:332..354` but only answered over `325..352`,
+          because Cancel answered from `353` — the right TWO PIXELS of the Create button already
+          cancelled. Neither reached 44 in either axis (27x35 and 35x35).
+
+          Labels fix both halves at once: a word is wider than a finger, so the targets stop
+          overlapping, and the reader can see which is which — the `title` that used to carry that
+          is not something a phone can show. Height only, never a 44x44 square: see `BarButton`.
+        */}
+        {isMobile ? (
+          <>
+            <BarButton
+              label={pt ? 'Criar' : 'Create'}
+              icon={state.busy ? <Loader size={14} className="ag-working-spin" /> : <Check size={14} />}
+              isMobile
+              // A disabled CONFIRM is the honest state while the name is empty — the `ready` rule is
+              // the same one the desktop button reads and the Enter key applies.
+              disabled={!ready}
+              onClick={onSubmit}
+            />
+            <BarButton
+              label={pt ? 'Cancelar' : 'Cancel'}
+              icon={<X size={14} />}
+              isMobile
+              onClick={onCancel}
+            />
+          </>
+        ) : (
+          <>
+            <IconButton
+              label={pt ? 'Criar o arquivo' : 'Create the file'}
+              disabled={!ready}
+              onClick={onSubmit}
+            >
+              {state.busy ? <Loader size={14} className="ag-working-spin" /> : <Check size={14} />}
+            </IconButton>
+            <IconButton label={pt ? 'Cancelar' : 'Cancel'} onClick={onCancel}>
+              <X size={14} />
+            </IconButton>
+          </>
+        )}
       </div>
 
       {/* The server's own sentence, kept BESIDE the name that caused it — `already-exists` is only
@@ -1260,11 +1333,34 @@ export function TabStrip({ tabs, activePath, agentHere, isMobile, lang, onSelect
         overflowX: 'auto', overflowY: 'hidden', overscrollBehavior: 'contain',
       }}
     >
-      {onBack !== undefined && (
-        <IconButton label={pt ? 'Voltar para a árvore de arquivos' : 'Back to the file tree'} onClick={onBack}>
-          <ArrowLeft size={15} />
-        </IconButton>
-      )}
+      {/*
+        THE WAY BETWEEN THE TWO LAYERS, AND ON A PHONE IT IS THE ONLY ONE — so it carries a WORD.
+        `layers` is the whole arrangement at 390px: the tree and the editor are not two columns you
+        glance between, they are two screens, and this is the single control that goes from the
+        second back to the first. It was an `IconButton` on both layouts — a bare 15px arrow in a
+        strip of filenames, with its name reachable only through `title`, which a phone has no hover
+        to show. MEASURED at 390x844 on a live session: painted 22x22, and `.ag-tap-icon`'s invisible
+        box brought the real hit area to 34x35, not the 44 the class's own doc claims for it.
+        Two things were wrong at once and the label is the one that mattered more: a reader who
+        cannot see what a control does does not press it to find out.
+
+        Height only, never a 44x44 square — the label is what makes it wide enough for a finger, and
+        a painted square around a labelled control is what `touchTarget.lint.test.ts` refuses. On the
+        DESKTOP this appears only in the narrow aside, where the strip is a few pixels tall and the
+        reader has a pointer and a tooltip, so it keeps the icon it had.
+      */}
+      {onBack !== undefined && (isMobile
+        ? <BarButton
+          label={pt ? 'Arquivos' : 'Files'}
+          icon={<ArrowLeft size={15} />}
+          isMobile
+          onClick={onBack}
+        />
+        : (
+          <IconButton label={pt ? 'Voltar para a árvore de arquivos' : 'Back to the file tree'} onClick={onBack}>
+            <ArrowLeft size={15} />
+          </IconButton>
+        ))}
       {tabs.map(tab => {
         const active = tab.path === activePath
         const name = tab.path.split('/').pop() ?? tab.path
@@ -1333,15 +1429,18 @@ export function TabStrip({ tabs, activePath, agentHere, isMobile, lang, onSelect
 }
 
 /** A labelled control in the toolbar: a word, so the label is what makes it wide enough for a finger. */
-function BarButton({ label, icon, isMobile, onClick }: {
+function BarButton({ label, icon, isMobile, disabled, onClick }: {
   label: string
   icon: ReactNode
   isMobile: boolean
+  /** A control that cannot act yet SAYS so rather than failing silently — `NewFileRow`'s confirm. */
+  disabled?: boolean
   onClick: () => void
 }) {
   return (
     <button
       type="button"
+      disabled={disabled === true}
       onClick={onClick}
       style={{
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5,
@@ -1354,7 +1453,8 @@ function BarButton({ label, icon, isMobile, onClick }: {
         borderRadius: 6, border: '1px solid var(--border-subtle)',
         background: 'transparent', fontFamily: 'inherit',
         fontSize: isMobile ? 13 : 11.5, color: 'var(--text-secondary)',
-        cursor: 'pointer',
+        cursor: disabled === true ? 'not-allowed' : 'pointer',
+        opacity: disabled === true ? 0.45 : 1,
       }}
     >
       {icon}

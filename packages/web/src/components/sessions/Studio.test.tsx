@@ -18,7 +18,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:tes
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   agentActivity, clampTreeWidth, closeOutcome, DIVIDER_W, EDITOR_MIN, EditorStack, Layer,
-  mountedEditors, NewFileRow, resolveTreeWidth, SPLIT_MIN, Studio, StudioBar, StudioBody, sameFile,
+  mountedEditors, NewFileRow, paneHits, resolveTreeWidth, SPLIT_MIN, Studio, StudioBar, StudioBody,
+  sameFile,
   studioLayout, TabStrip, Toolbar, TREE_DEFAULT, TREE_MAX, TREE_MIN, TreeDivider, Watermark,
   watermarkOpacity,
 } from './Studio'
@@ -660,9 +661,38 @@ describe('StudioBody — where the panes sit, and what that may never cost', () 
     // keeps it measuring — see `Layer`'s own comment on why it may not be `display: none`.
     expect(html.match(/position:absolute/g)?.length).toBe(4)
     // And both panes really are the same rectangle, one over the other.
-    expect(html.match(/data-studio-pane="\w+" style="position:absolute;inset:0"/g)?.length).toBe(2)
+    expect(html.match(/data-studio-pane="\w+" style="position:absolute;inset:0/g)?.length).toBe(2)
     expect(html.match(/data-layer-shown="true"/g)?.length).toBe(1)
     expect(html.match(/data-layer-shown="false"/g)?.length).toBe(1)
+  })
+
+  /**
+   * THE TAP HAZARD OF STACKING THEM, PINNED — see `paneHits`.
+   *
+   * The two boxes are the same rectangle, so whichever comes LAST in the DOM is on top, and the
+   * editor is the one that comes last. Its box paints nothing when its layer is hidden and is still
+   * a hit target, so on a phone every tap meant for the file tree landed on an invisible editor
+   * pane: the tree drew, scrolled, and did nothing. Measured at 390x844 against a live session,
+   * `document.elementsFromPoint` over the middle of the `AGENTS.md` row answered
+   * `DIV[data-studio-pane=editor] pe=auto op=1 inert=false` ABOVE the row's own button.
+   */
+  test('stacked, the HIDDEN pane\'s box cannot take a tap — the visible one can', () => {
+    const onTree = body({ layout: 'layers', treeShown: true, editorShown: false })
+    expect(onTree).toContain('data-studio-pane="tree" style="position:absolute;inset:0"')
+    expect(onTree).toContain('data-studio-pane="editor" style="position:absolute;inset:0;pointer-events:none"')
+    // And symmetrically, with a file open: the tree is the one that may not be hit. (It comes FIRST
+    // in the DOM, so it was never the pane that stole anything — which is exactly why only half of
+    // this was ever noticed.)
+    const onFile = body({ layout: 'layers', treeShown: false, editorShown: true })
+    expect(onFile).toContain('data-studio-pane="tree" style="position:absolute;inset:0;pointer-events:none"')
+    expect(onFile).toContain('data-studio-pane="editor" style="position:absolute;inset:0"')
+  })
+
+  test('the rule is `paneHits`, and it answers for the box rather than for the layer', () => {
+    // A plain ternary, stated once so the two panes cannot disagree. `undefined` rather than `auto`:
+    // the box has no reason to re-enable anything its ancestors turned off.
+    expect(paneHits(true)).toBeUndefined()
+    expect(paneHits(false)).toBe('none')
   })
 
   /**

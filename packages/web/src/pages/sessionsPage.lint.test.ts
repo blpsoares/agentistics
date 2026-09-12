@@ -41,10 +41,58 @@ test('the centre is not swapped between `panel` and a wrapper around it', () => 
 })
 
 test('the edge strip is rendered INSIDE the wrapper, not as an alternative to it', () => {
-  // The wrapper holds both, in this order, unconditionally — `{null}` keeps the slot when the strip
-  // is absent, which is what makes both cases the same shape.
-  const wrapper = /return \(\s*<div style=\{\{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 \}\}>\s*\{edgeMarker\}\s*\{panel\}/
+  // The wrapper holds both, in this order, unconditionally — a `null` in the slot when the strip is
+  // absent, which is what makes both cases the same shape. It is a fragment rather than a `return`
+  // since the centre became a VALUE (see the `artifactsPane` assertions below); the property being
+  // pinned is unchanged, and it is the ORDER plus the unconditional slot.
+  const wrapper = /\{artShell === 'none' \? edgeMarker : null\}\s*\{panel\}/
   expect(SRC).toMatch(wrapper)
+})
+
+/**
+ * ONE PANE, ONE PLACE — the defect this page shipped and the reason the centre is a value.
+ *
+ * `artifactsPane` was written into FOUR separate `return`s, one per `ArtifactLayout`. React
+ * reconciles by POSITION, so four positions are four different elements: crossing 768px or
+ * `SPLIT_MIN` unmounted the entire aside and mounted a new one. The Studio's whole composition
+ * (`Layer`, `mountedEditors`, `StudioBody`'s one DOM shape) exists so that an unsaved buffer
+ * survives every move a reader makes inside it, and the page around it was discarding the lot
+ * whenever the WINDOW changed size — which on a phone is turning it over, or opening the keyboard.
+ *
+ * MEASURED at 390x844 on a live session before the fix: two files open, the second edited and the
+ * strip reading `artifactLayout.test.ts — não salvo`, one Monaco instance. After a single resize to
+ * 1600x900 the same reads answered `openTabs: []`, `monaco: 0` and a re-fetched tree.
+ *
+ * This is the same class of invariant as the edge-strip shape above, and the same reason it is a
+ * grep: seeing it requires mounting the page against a fleet host and resizing the window, and
+ * `packages/web` has no jsdom. The COUNT is what went wrong, so the count is what is asserted.
+ */
+test('the artifacts pane is rendered in exactly ONE place', () => {
+  expect([...SRC.matchAll(/\{artifactsPane\}/g)]).toHaveLength(1)
+})
+
+test('...and the layout is a STYLE, not a second copy of the pane', () => {
+  // The one slot, and the two style objects the four old branches collapsed into. `artShell` is the
+  // single answer to "which shape"; a branch that returned early would not need it.
+  expect(has('const artShell:')).toBe(true)
+  expect(has('const artOuter: CSSProperties')).toBe(true)
+  expect(has('<div style={artOuter}>')).toBe(true)
+  expect(has('<div style={artInner}>{artifactsPane}</div>')).toBe(true)
+  // And the centre is a value. A `return` inside the layout branches is how the four sites happened.
+  expect(has('let centre: ReactNode')).toBe(true)
+})
+
+test('the scan still sees a SECOND pane being added back', () => {
+  // The plant: the same needle twice is what a second render site looks like, and the scan must
+  // count it — including when one of the two is only prose, which must NOT count.
+  const twice = 'a{artifactsPane}b\nc{artifactsPane}d\n'
+  expect([...stripComments(twice).matchAll(/\{artifactsPane\}/g)]).toHaveLength(2)
+  expect([...stripComments('{artifactsPane}\n// {artifactsPane}\n').matchAll(/\{artifactsPane\}/g)])
+    .toHaveLength(1)
+  expect([...stripComments('{artifactsPane}\nconst x = 1 // {artifactsPane}\n').matchAll(/\{artifactsPane\}/g)])
+    .toHaveLength(1)
+  expect([...stripComments('{artifactsPane}\n/* {artifactsPane} */\n').matchAll(/\{artifactsPane\}/g)])
+    .toHaveLength(1)
 })
 
 // Without this the greps above could pass on a file that no longer has either name, which would be

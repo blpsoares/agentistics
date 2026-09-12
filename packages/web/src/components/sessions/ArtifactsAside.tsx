@@ -922,6 +922,21 @@ export function ArtifactsAside({
           background: on ? 'var(--bg-elevated)' : 'transparent',
           color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
           // 44px is the MOBILE number; applying it on desktop turns the bar into a row of buttons.
+          //
+          // THAT SENTENCE WAS HERE WITH NO `minHeight` UNDER IT. It reads as the rule being applied
+          // on one layout and withheld on the other, and what was actually shipped was withheld on
+          // BOTH: measured at 390x844 on a live session, these tabs painted 70x22 / 83x22 / 85x22
+          // and answered `elementFromPoint` over 21 vertical pixels. This bar is how you reach the
+          // Studio, the live feed and the gallery, so on a phone it IS the navigation — which is
+          // what "não tô conseguindo navegar direito" gets you.
+          //
+          // Painted, exactly as the note above `tabCell` reasoned and did not do: `.ag-tap` projects
+          // its box with `::after`, the bar is `overflow: hidden`, and a clipped projection is a
+          // SMALLER target than the paint it was meant to enlarge. HEIGHT only — the label is what
+          // makes a tab wide enough, and a 44x44 square is what `touchTarget.lint.test.ts` refuses.
+          // The ruler renders through this same function, so the measured WIDTHS are untouched and
+          // `splitAsideTabs` keeps deciding exactly what it decided before.
+          minHeight: isMobile ? 44 : undefined,
           flexShrink: 0, whiteSpace: 'nowrap',
         }}
       >
@@ -951,7 +966,11 @@ export function ArtifactsAside({
       }}>
         {onBar.map(t => tabCell(t, false))}
         {split.overflow && (
-          <button className="ag-tap"
+          // NOT `.ag-tap`, for the reason stated above `tabCell`: this bar is `overflow: hidden`, so
+          // a projected box is CLIPPED and buys nothing — it carried the class and measured the same
+          // ~22px as the tabs beside it. The way to the tabs that did not fit has to be at least as
+          // reachable as the ones that did, so it is painted to the same height.
+          <button
             ref={gridBtnRef}
             onClick={() => setGridOpen(v => !v)}
             aria-expanded={gridOpen}
@@ -961,6 +980,7 @@ export function ArtifactsAside({
               display: 'inline-flex', alignItems: 'center', gap: 5, marginLeft: 'auto',
               padding: '4px 9px', borderRadius: 7, cursor: 'pointer', fontFamily: 'inherit',
               fontSize: 11.5, fontWeight: 700, flexShrink: 0, whiteSpace: 'nowrap',
+              minHeight: isMobile ? 44 : undefined,
               // A real control, not a placeholder. It was a dashed outline in the tertiary colour
               // and read as the disabled remains of something — the same thing that made the MCP
               // tab's add button disappear into the cards under it.
