@@ -17,9 +17,14 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  agentActivity, closeOutcome, EditorStack, Layer, mountedEditors, NewFileRow, Studio, StudioBar,
-  sameFile, TabStrip, Toolbar, Watermark, watermarkOpacity,
+  agentActivity, clampTreeWidth, closeOutcome, DIVIDER_W, EDITOR_MIN, EditorStack, Layer,
+  mountedEditors, NewFileRow, resolveTreeWidth, SPLIT_MIN, Studio, StudioBar, StudioBody, sameFile,
+  studioLayout, TabStrip, Toolbar, TREE_DEFAULT, TREE_MAX, TREE_MIN, TreeDivider, Watermark,
+  watermarkOpacity,
 } from './Studio'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { stripComments } from '../../lib/stripComments'
 import type { OpenTab } from '../../lib/repoTreeModel'
 import type { LiveEvent, LiveTurn } from '../../lib/artifactTabs'
 
@@ -510,5 +515,301 @@ describe('the Studio draws its exit from the first frame', () => {
     // emptiest — the moment a missing exit would strand somebody.
     expect(render()).toContain('Leave the Studio and go back to Contents')
     expect(render('pt')).toContain('Sair do Studio e voltar para Conteúdo')
+  })
+})
+
+// --- the split: the tree stays beside the editor ----------------------------------------------------
+
+/**
+ * THE ASK, AND THE THREE THINGS THAT COULD GO WRONG WITH IT.
+ *
+ * "quando um arquivo for aberto tenhamos uma barra aqui redimensionavel e minimizavel que ainda
+ * mostra a arvore de arquivos pra eu poder continuar navegando" — so a file open on a wide enough
+ * panel puts the tree in a column beside the editor.
+ *
+ * What is worth pinning is not that it renders. It is (1) that the column can never be dragged to
+ * something useless in either direction, (2) that a panel with no room for both says so by falling
+ * back to the stacked arrangement rather than shipping two unusable halves, and (3) that NOTHING
+ * about the arrangement touches what is mounted — the one rule this whole composition exists to
+ * keep. A `renderToStaticMarkup` run cannot click a divider, which is exactly why the clamp and the
+ * layout are exported functions and `StudioBody` takes its state as props.
+ */
+describe('studioLayout — whether there is a split at all', () => {
+  const at = (isMobile: boolean, fileOpen: boolean, available: number) =>
+    studioLayout({ isMobile, fileOpen, available })
+
+  test('a file open on a wide panel is the split — the whole point of the change', () => {
+    expect(at(false, true, 620)).toBe('split')
+  })
+
+  test('a PHONE is never split: a tree and an editor sharing 390px is two things doing neither job', () => {
+    expect(at(true, true, 390)).toBe('layers')
+    // And it stays stacked however wide the viewport claims to be — the switch is the breakpoint.
+    expect(at(true, true, 1400)).toBe('layers')
+  })
+
+  test('nothing open is stacked, so the tree keeps the whole panel', () => {
+    expect(at(false, false, 620)).toBe('layers')
+  })
+
+  test('a panel too narrow for both minima degrades rather than halving them', () => {
+    // The aside is itself draggable down to 280px, so this is an ordinary Tuesday.
+    expect(at(false, true, SPLIT_MIN - 1)).toBe('layers')
+    expect(at(false, true, SPLIT_MIN)).toBe('split')
+    expect(SPLIT_MIN).toBe(TREE_MIN + DIVIDER_W + EDITOR_MIN)
+  })
+
+  test('UNMEASURED answers split, because the common panel holds one', () => {
+    // The first render, before the ref callback has seen a box. Guessing `layers` here would flash
+    // a full-width tree for a frame on every single open.
+    expect(at(false, true, 0)).toBe('split')
+    expect(at(false, true, Number.NaN)).toBe('split')
+    // But `isMobile` still outranks it: a phone is a phone before anything is measured.
+    expect(at(true, true, 0)).toBe('layers')
+  })
+})
+
+describe('clampTreeWidth — the column can never be dragged to something useless', () => {
+  test('a width that fits is kept, to the pixel', () => {
+    expect(clampTreeWidth(240, 800)).toBe(240)
+  })
+
+  test('dragging it to nothing stops at a width a file name still fits in', () => {
+    expect(clampTreeWidth(10, 800)).toBe(TREE_MIN)
+    expect(clampTreeWidth(-500, 800)).toBe(TREE_MIN)
+  })
+
+  test('dragging it over the editor stops where the editor’s own floor begins', () => {
+    // 620 - 6 - 220 = 394. Past that the editor is a gutter with two tokens in it.
+    expect(clampTreeWidth(9000, 620)).toBe(620 - DIVIDER_W - EDITOR_MIN)
+  })
+
+  test('and never past the absolute cap, however much room there is', () => {
+    expect(clampTreeWidth(9000, 4000)).toBe(TREE_MAX)
+  })
+
+  test('a panel with no room for both still answers the minimum rather than a negative', () => {
+    // `studioLayout` has already said `layers` here; the clamp must not produce a nonsense number
+    // for the frame in between.
+    expect(clampTreeWidth(200, 100)).toBe(TREE_MIN)
+  })
+
+  test('unmeasured falls back to the absolute cap, which is the only honest ceiling then', () => {
+    expect(clampTreeWidth(9000)).toBe(TREE_MAX)
+    expect(clampTreeWidth(9000, 0)).toBe(TREE_MAX)
+  })
+
+  test('a fraction lands on a whole pixel, and junk lands on the default', () => {
+    expect(clampTreeWidth(240.6, 800)).toBe(241)
+    expect(clampTreeWidth(Number.NaN, 800)).toBe(TREE_DEFAULT)
+  })
+})
+
+describe('resolveTreeWidth — what a stored width may be', () => {
+  test('a real stored number is the reader’s answer and is kept', () => {
+    expect(resolveTreeWidth('260', 800)).toBe(260)
+  })
+
+  test('nothing stored is the default — a first visit, not a zero-width column', () => {
+    expect(resolveTreeWidth(null, 800)).toBe(TREE_DEFAULT)
+    expect(resolveTreeWidth('', 800)).toBe(TREE_DEFAULT)
+    expect(resolveTreeWidth('   ', 800)).toBe(TREE_DEFAULT)
+  })
+
+  test('junk, a negative and a zero are all "nobody has said", never a literal width', () => {
+    expect(resolveTreeWidth('wide', 800)).toBe(TREE_DEFAULT)
+    expect(resolveTreeWidth('-40', 800)).toBe(TREE_DEFAULT)
+    expect(resolveTreeWidth('0', 800)).toBe(TREE_DEFAULT)
+  })
+
+  test('a width stored on a wide monitor is narrowed by the panel it is reopened in', () => {
+    expect(resolveTreeWidth('500', 500)).toBe(500 - DIVIDER_W - EDITOR_MIN)
+  })
+})
+
+describe('StudioBody — where the panes sit, and what that may never cost', () => {
+  const body = (over: Partial<Parameters<typeof StudioBody>[0]> = {}) => renderToStaticMarkup(
+    <StudioBody
+      layout="split" treeWidth={200} treeShown={true} editorShown={true} available={620} lang="en"
+      onResize={() => {}} onCommit={() => {}} onCollapse={() => {}}
+      tree={<p>THE TREE</p>} editor={<p>THE EDITOR</p>}
+      {...over}
+    />,
+  )
+
+  test('the split puts BOTH on screen — which is the whole of what was asked for', () => {
+    const html = body()
+    expect(html).toContain('THE TREE')
+    expect(html).toContain('THE EDITOR')
+    expect(html).toContain('data-studio-layout="split"')
+    // Neither is hidden: two shown layers, no hidden one.
+    expect(html.match(/data-layer-shown="true"/g)?.length).toBe(2)
+    expect(html).not.toContain('data-layer-shown="false"')
+  })
+
+  test('the tree column takes its width and the editor takes the rest', () => {
+    const html = body({ treeWidth: 240 })
+    expect(html).toContain('width:240px')
+    expect(html).toContain('flex:1')
+  })
+
+  test('stacked, the two panes are absolute over ONE region and exactly one is shown', () => {
+    const html = body({ layout: 'layers', treeShown: true, editorShown: false })
+    expect(html).toContain('data-studio-layout="layers"')
+    // Two panes and the two layers inside them: the HIDDEN layer is absolute too, which is what
+    // keeps it measuring — see `Layer`'s own comment on why it may not be `display: none`.
+    expect(html.match(/position:absolute/g)?.length).toBe(4)
+    // And both panes really are the same rectangle, one over the other.
+    expect(html.match(/data-studio-pane="\w+" style="position:absolute;inset:0"/g)?.length).toBe(2)
+    expect(html.match(/data-layer-shown="true"/g)?.length).toBe(1)
+    expect(html.match(/data-layer-shown="false"/g)?.length).toBe(1)
+  })
+
+  /**
+   * THE REMOUNT HAZARD, PINNED.
+   *
+   * A layout that rendered a different TREE per arrangement would remount everything under it the
+   * moment the aside crossed `SPLIT_MIN` — which is `RepoFileEditor` re-reading its file and
+   * disposing its Monaco model, i.e. the silent loss of typed text this composition exists to make
+   * impossible. The same two boxes in the same order, in both arrangements, is what rules that out;
+   * only their styles differ.
+   */
+  test('both arrangements are the SAME two boxes in the same order — nothing can remount', () => {
+    const order = (html: string) => html.match(/data-studio-pane="(tree|editor)"/g)
+    expect(order(body())).toEqual(['data-studio-pane="tree"', 'data-studio-pane="editor"'])
+    expect(order(body({ layout: 'layers', editorShown: false })))
+      .toEqual(['data-studio-pane="tree"', 'data-studio-pane="editor"'])
+  })
+
+  test('minimizing CLIPS the column and keeps the tree laid out at its full width', () => {
+    const html = body({ treeShown: false })
+    // The pane goes to zero (React writes a unitless `0` for a zero length)...
+    expect(html).toContain('overflow:hidden;width:0"')
+    // ...while the sizer inside it still holds 200px, so a long listing keeps its scroll position.
+    expect(html).toContain('width:200px')
+    // And the tree is HIDDEN, never unmounted: the text is still there, behind an inert layer.
+    expect(html).toContain('THE TREE')
+    expect(html).toContain('data-layer-shown="false"')
+    expect(html).toContain('inert=""')
+  })
+
+  test('a minimized column has no separator left to drag — the bar is what brings it back', () => {
+    expect(body({ treeShown: false })).not.toContain('role="separator"')
+  })
+
+  test('stacked, there is no separator either: there is nothing beside anything', () => {
+    expect(body({ layout: 'layers', editorShown: false })).not.toContain('role="separator"')
+  })
+
+  test('the split offers one', () => {
+    expect(body()).toContain('role="separator"')
+  })
+})
+
+describe('TreeDivider — draggable, and reachable without a pointer', () => {
+  const div = (lang: 'pt' | 'en' = 'en', available = 620, width = 200) => renderToStaticMarkup(
+    <TreeDivider
+      width={width} available={available} lang={lang}
+      onResize={() => {}} onCommit={() => {}} onCollapse={() => {}}
+    />,
+  )
+
+  test('it is a separator that takes the keyboard, not a bare div with a cursor on it', () => {
+    const html = div()
+    expect(html).toContain('role="separator"')
+    expect(html).toContain('aria-orientation="vertical"')
+    expect(html).toContain('tabindex="0"')
+  })
+
+  test('it announces where it is and how far it may go — the REAL maximum, not the cap', () => {
+    const html = div('en', 620, 200)
+    expect(html).toContain('aria-valuenow="200"')
+    expect(html).toContain(`aria-valuemin="${TREE_MIN}"`)
+    expect(html).toContain(`aria-valuemax="${620 - DIVIDER_W - EDITOR_MIN}"`)
+  })
+
+  test('unmeasured announces the absolute cap, which is the only honest answer then', () => {
+    expect(div('en', 0)).toContain(`aria-valuemax="${TREE_MAX}"`)
+  })
+
+  test('and it is NAMED, in both languages', () => {
+    expect(div('en')).toContain('Resize the file tree')
+    expect(div('pt')).toContain('Redimensionar a árvore de arquivos')
+  })
+})
+
+describe('StudioBar — minimizing the tree, and getting it back', () => {
+  const bar = (tree?: { collapsed: boolean; onToggle: () => void }, lang: 'pt' | 'en' = 'en') =>
+    renderToStaticMarkup(
+      <StudioBar isMobile={false} lang={lang} onExit={() => {}} {...(tree ? { tree } : {})} />,
+    )
+
+  test('with no split there is no toggle — a button that does nothing is worse than none', () => {
+    expect(bar()).not.toContain('Hide the file tree')
+    expect(bar()).not.toContain('Show the file tree')
+  })
+
+  test('the split offers it, and it SAYS which way it goes', () => {
+    expect(bar({ collapsed: false, onToggle: () => {} })).toContain('Hide the file tree')
+    expect(bar({ collapsed: true, onToggle: () => {} })).toContain('Show the file tree')
+  })
+
+  test('a MINIMIZED tree still has a visible way back — not a keyboard-only escape', () => {
+    const html = bar({ collapsed: true, onToggle: () => {} })
+    expect(html).toContain('<button')
+    expect(html).toContain('aria-label="Show the file tree"')
+    expect(html).toContain('aria-pressed="false"')
+  })
+
+  test('and in Portuguese', () => {
+    expect(bar({ collapsed: false, onToggle: () => {} }, 'pt')).toContain('Esconder a árvore de arquivos')
+    expect(bar({ collapsed: true, onToggle: () => {} }, 'pt')).toContain('Mostrar a árvore de arquivos')
+  })
+
+  test('the toggle is a TOGGLE: it reports the state it is in', () => {
+    expect(bar({ collapsed: false, onToggle: () => {} })).toContain('aria-pressed="true"')
+  })
+})
+
+/**
+ * THE SCAN, AND WHY IT READS THROUGH `stripComments`.
+ *
+ * This file's subject is a hiding rule, so the module it scans necessarily contains, in prose, the
+ * exact shapes the rule forbids — `display: none` and `visibility` are both NAMED in `Layer`'s own
+ * doc comment, at length, because that is where the defect was recorded. A scan that read the
+ * comments would fail on the explanation of the thing it is checking, and the positive half would
+ * be satisfied by a doc comment sitting above the line that dropped the call. `lib/stripComments.ts`
+ * is the one stripper in this package and there is no second one.
+ */
+describe('the split obeys the hiding rule rather than inventing a second one', () => {
+  const RAW = readFileSync(join(import.meta.dir, 'Studio.tsx'), 'utf8')
+  const CODE = stripComments(RAW)
+
+  test('the panes hide through `Layer`, never with a rule of their own', () => {
+    expect(CODE).toContain('<Layer shown={treeShown}>{tree}</Layer>')
+    expect(CODE).toContain('<Layer shown={editorShown}>{editor}</Layer>')
+  })
+
+  test('nothing in this module hides with `display: none` or with `visibility`', () => {
+    // `display: none` measures zero, and a zero-sized Monaco is the state `automaticLayout` then has
+    // to recover from; `visibility` is inherited AND overridable, which shipped once and painted a
+    // frozen file tree over the tab the reader had switched to.
+    expect(CODE).not.toMatch(/display:\s*'none'/)
+    expect(CODE).not.toMatch(/visibility\s*:/)
+  })
+
+  test('the scan still sees the defects it exists to catch, and a COMMENT does not satisfy it', () => {
+    // Planted: each shape, as real code, is found.
+    expect(stripComments("const s = { display: 'none' }")).toMatch(/display:\s*'none'/)
+    expect(stripComments("const s = { visibility: shown ? 'visible' : 'hidden' }")).toMatch(/visibility\s*:/)
+    // And the positive half is NOT satisfied by prose above the line, nor by a trailing comment —
+    // the two forms that have shipped green in this package.
+    expect(stripComments('/** <Layer shown={treeShown}>{tree}</Layer> */'))
+      .not.toContain('<Layer shown={treeShown}>')
+    expect(stripComments('const x = 1 // <Layer shown={treeShown}>{tree}</Layer>'))
+      .not.toContain('<Layer shown={treeShown}>')
+    // ...while the real line survives the stripper untouched.
+    expect(stripComments('  <Layer shown={treeShown}>{tree}</Layer>\n'))
+      .toContain('<Layer shown={treeShown}>{tree}</Layer>')
   })
 })

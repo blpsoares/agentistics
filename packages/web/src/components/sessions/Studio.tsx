@@ -16,9 +16,29 @@
  * modules under it keep their repository names (`repoApi`, `repoTreeModel`, `RepoTreeView`,
  * `RepoFileEditor`, …): those describe what they read, which really is a repository.
  *
- * Opening a file REPLACES the tree with the editor; a back control returns to it, and the
- * open-files strip stays on screen either way — a tab you cannot see is a buffer you cannot get
- * back to.
+ * THE TREE STAYS BESIDE THE EDITOR, and that is what `StudioBody` is for. Opening a file used to
+ * REPLACE the tree with the editor, so reading one file and looking for the next were two modes you
+ * moved between — asked about in those words: "quero tbm que quando um arquivo for aberto tenhamos
+ * uma barra aqui redimensionavel e minimizavel que ainda mostra a arvore de arquivos pra eu poder
+ * continuar navegando e explorando eles". So a file open on a wide enough panel puts the tree in a
+ * column of its own on the left, DRAGGABLE and collapsible, with the editor beside it.
+ *
+ * IT IS A LAYOUT, NOT A SECOND COMPOSITION. Both panes are the same two `Layer`s that were stacked
+ * before; `studioLayout` decides only whether they sit side by side or on top of each other, and
+ * every rule below — what stays mounted, what hides and how — is untouched by that choice. A split
+ * that built its own panes would be a second place for the mounting rules to be got wrong.
+ *
+ * `layers` IS STILL THE ANSWER IN TWO CASES, and neither is a fallback for the other. A PHONE has
+ * one column: a tree and an editor sharing 390px is two things doing neither job, so there the
+ * panes stay stacked and the open-files strip is what moves between them. And a panel too NARROW to
+ * hold both minima (`SPLIT_MIN`) degrades the same way rather than shipping a 90px tree beside a
+ * 90px editor — the aside is itself draggable, down to 280px, so this is an ordinary Tuesday and
+ * not an edge case.
+ *
+ * The open-files strip stays on screen in every arrangement — a tab you cannot see is a buffer you
+ * cannot get back to — and the back control it carries appears only where there IS a back: in the
+ * split the tree is already on screen, so the control that answers "get it out of my way" is the
+ * collapse toggle on the Studio's own bar, never a control that would empty the editor pane.
  *
  * SWITCHING TABS MAY NEVER DESTROY WHAT WAS TYPED, and that is the one rule this composition
  * exists to keep. `RepoFileEditor` re-reads its file on mount and disposes its Monaco model on
@@ -65,8 +85,11 @@
  * elsewhere; the buffer that can be lost that way is one nothing else in this aside survives either.
  */
 
-import { useEffect, useState, type ReactNode } from 'react'
-import { AlertTriangle, ArrowLeft, Check, ChevronLeft, FilePlus, Loader, Plus, Search, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import {
+  AlertTriangle, ArrowLeft, Check, ChevronLeft, FilePlus, Loader, PanelLeftClose, PanelLeftOpen,
+  Plus, Search, X,
+} from 'lucide-react'
 import {
   applyChildren, applyError, closeTab, makeRootNode, markDirty, openTab,
   type OpenTab, type TreeNode,
@@ -206,6 +229,125 @@ export function watermarkOpacity(theme: string | null): number {
   return theme === 'light' ? WATERMARK_OPACITY.light : WATERMARK_OPACITY.dark
 }
 
+// --- the split: how wide the tree may be, and whether there is room for it at all ----------------
+
+/**
+ * Which arrangement the two panes are in.
+ *
+ * `split` is the tree in a column of its own beside the editor; `layers` is the two of them stacked
+ * with exactly one visible, which is what this panel did everywhere before the split existed and
+ * still does on a phone and in a narrow aside.
+ */
+export type StudioLayout = 'layers' | 'split'
+
+/**
+ * Narrower than this and the tree is a column of ellipses: `src/components/sessions/` is already
+ * three levels of indent before a name starts, and a name is the only thing a row is for.
+ */
+export const TREE_MIN = 150
+
+/**
+ * What the editor keeps, whatever the tree is dragged to.
+ *
+ * It is the floor the CLAMP is written against rather than a `min-width` on the pane, because the
+ * two are not the same promise: a `min-width` lets the flex row overflow its container, and an
+ * overflowing row is the horizontal page scroll this repo checks for at 390px.
+ */
+export const EDITOR_MIN = 220
+
+/** The grip between the panes. A 1px line is not something a pointer can land on. */
+export const DIVIDER_W = 6
+
+/**
+ * What the tree opens at.
+ *
+ * Read against the panel it lives in rather than against a screen: the artifacts aside is 620px by
+ * default (`SessionsPage`), so 200 leaves the editor 414 — enough for real code — while still
+ * showing a nested path. Only a reader who has never dragged the handle ever sees this number.
+ */
+export const TREE_DEFAULT = 200
+
+/**
+ * An absolute ceiling, so a stored width is bounded even before anything has been measured.
+ *
+ * The clamp's real ceiling is what the editor can spare, which needs the panel's own width; this is
+ * the answer for the first render, where that is not known yet.
+ */
+export const TREE_MAX = 520
+
+/** Below this the two panes cannot both hold their minimum, so there is no split to offer. */
+export const SPLIT_MIN = TREE_MIN + DIVIDER_W + EDITOR_MIN
+
+/**
+ * Where the dragged width is remembered.
+ *
+ * `localStorage`, NOT `/api/preferences`, and for the reason `boardPrefs.ts` already records: on a
+ * central that file is shared by everyone signed in, so one reader's column width would be
+ * everyone's. This is a per-viewer layout convenience — exactly the kind that belongs in the
+ * browser — and every read and write is guarded, because a private window makes the accessor itself
+ * throw.
+ */
+export const TREE_WIDTH_KEY = 'agentistics:studio-tree-w'
+
+/**
+ * Which arrangement the panel is in.
+ *
+ * `available` is the MEASURED width of the region the panes share, and `0` means "not measured
+ * yet" — the first render, before the ref callback has seen a box. That case answers `split` rather
+ * than `layers` because the common desktop panel (620px) holds one comfortably, and guessing the
+ * other way flashes a full-width tree for a frame on every single open.
+ */
+export function studioLayout(
+  { isMobile, fileOpen, available }: { isMobile: boolean; fileOpen: boolean; available: number },
+): StudioLayout {
+  // A phone has one column, and nothing open needs no editor beside anything.
+  if (isMobile || !fileOpen) return 'layers'
+  if (!Number.isFinite(available) || available <= 0) return 'split'
+  return available >= SPLIT_MIN ? 'split' : 'layers'
+}
+
+/**
+ * The tree's width, held inside its bounds AND inside what the editor can spare.
+ *
+ * The ceiling MOVES: the aside this sits in is itself draggable, so a width chosen at 900px is
+ * reopened at 400px, and a tree that keeps its number there leaves the editor a gutter. Deriving
+ * the ceiling from `available` on every render is what makes the narrowing automatic instead of
+ * something the reader has to undo by hand.
+ */
+export function clampTreeWidth(width: number, available?: number): number {
+  const room = available !== undefined && Number.isFinite(available) && available > 0
+    ? available - DIVIDER_W - EDITOR_MIN
+    : TREE_MAX
+  const ceiling = Math.max(TREE_MIN, Math.min(TREE_MAX, room))
+  const wanted = Number.isFinite(width) ? width : TREE_DEFAULT
+  return Math.round(Math.max(TREE_MIN, Math.min(ceiling, wanted)))
+}
+
+/** The stored width, with anything unreadable — absent, empty, `NaN`, negative — as the default. */
+export function resolveTreeWidth(stored: string | null, available?: number): number {
+  const n = Number(stored)
+  return clampTreeWidth(stored === null || stored.trim() === '' || !Number.isFinite(n) || n <= 0
+    ? TREE_DEFAULT
+    : n, available)
+}
+
+/** The remembered width. Guarded: a private window throws on the accessor itself, not on the value. */
+function readTreeWidth(): number {
+  try { return resolveTreeWidth(localStorage.getItem(TREE_WIDTH_KEY)) } catch { return TREE_DEFAULT }
+}
+
+/**
+ * Remember the width — on the END of a drag and on each keyboard step, never on every pointer move.
+ *
+ * The COLLAPSE is deliberately not stored beside it. A width is a measurement of this reader's
+ * screen and habits and is tedious to make again; collapsing is a momentary "get this out of my
+ * way" for one file, and a Studio that reopens with its tree hidden is a feature that looks broken
+ * — the tree staying beside the editor is the whole of what was asked for.
+ */
+function storeTreeWidth(width: number): void {
+  try { localStorage.setItem(TREE_WIDTH_KEY, String(width)) } catch { /* private mode */ }
+}
+
 // --- the component -------------------------------------------------------------------------------
 
 export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps) {
@@ -218,6 +360,35 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
   const [goTo, setGoTo] = useState<GoTo | null>(null)
   const [pendingClose, setPendingClose] = useState<string | null>(null)
   const [creating, setCreating] = useState<Creating | null>(null)
+  const [treeWidth, setTreeWidth] = useState<number>(readTreeWidth)
+  const [treeCollapsed, setTreeCollapsed] = useState(false)
+
+  /**
+   * The width of the region the two panes share, MEASURED.
+   *
+   * It cannot be derived: the aside this sits in is dragged by the reader, the window is resized,
+   * and the layout below has to answer "is there room for both" against what is actually there.
+   * `0` is "not measured yet", and `studioLayout` states what it does with that.
+   *
+   * The ref callback measures at ATTACH as well as observing, so the first paint already holds a
+   * real number — a `ResizeObserver`'s first callback lands after the frame that mounted the box.
+   */
+  const [available, setAvailable] = useState(0)
+  const observer = useRef<ResizeObserver | null>(null)
+  const measure = useCallback((el: HTMLDivElement | null) => {
+    observer.current?.disconnect()
+    observer.current = null
+    if (el === null) return
+    setAvailable(el.getBoundingClientRect().width)
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect.width
+      if (w !== undefined) setAvailable(w)
+    })
+    ro.observe(el)
+    observer.current = ro
+  }, [])
+  useEffect(() => () => { observer.current?.disconnect() }, [])
 
   /**
    * The root loads exactly like any other node — through `applyChildren`, and a failure through
@@ -293,12 +464,42 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
   const mounted = mountedEditors(tabs, activePath)
   const rootLoading = treeViewState(tree) === 'loading'
 
+  const layout = studioLayout({ isMobile, fileOpen: activePath !== null, available })
+  const split = layout === 'split'
+  const shownTreeWidth = clampTreeWidth(treeWidth, available)
+  /*
+    WHICH PANE IS SHOWN, and the two readings of that question.
+
+    In the SPLIT both panes are on screen and the collapse is the only thing that hides one of them.
+    STACKED, it is the open file that decides — which is exactly what it decided before the split
+    existed, so the phone and the narrow aside keep the behaviour they have always had.
+
+    `treeCollapsed` survives a layout change on purpose rather than being reset by one: closing the
+    last file drops back to `layers`, where the flag says nothing, and opening the next file should
+    honour the standing "keep it out of my way" instead of quietly undoing it.
+  */
+  const treeShown = split ? !treeCollapsed : activePath === null
+  const editorShown = split ? true : activePath !== null
+  const resize = (want: number) => setTreeWidth(clampTreeWidth(want, available))
+  const commit = (want: number) => {
+    const w = clampTreeWidth(want, available)
+    setTreeWidth(w)
+    storeTreeWidth(w)
+  }
+
   return (
     <div style={{
       flex: 1, minHeight: 0, minWidth: 0, boxSizing: 'border-box',
       display: 'flex', flexDirection: 'column',
     }}>
-      <StudioBar isMobile={isMobile} lang={lang} onExit={onExit} />
+      <StudioBar
+        isMobile={isMobile}
+        lang={lang}
+        onExit={onExit}
+        {...(split
+          ? { tree: { collapsed: treeCollapsed, onToggle: () => setTreeCollapsed(v => !v) } }
+          : {})}
+      />
 
       {tabs.length > 0 && (
         <TabStrip
@@ -309,25 +510,36 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
           lang={lang}
           onSelect={setActivePath}
           onClose={requestClose}
-          {...(activePath !== null ? { onBack: () => setActivePath(null) } : {})}
+          {...(!split && activePath !== null ? { onBack: () => setActivePath(null) } : {})}
         />
       )}
 
       {/*
-        THE TWO LAYERS ARE BOTH MOUNTED, AND ONLY ONE IS SHOWN. Swapping them instead — rendering
-        the tree OR the stack — was written first, and the live run caught what it costs: pressing
-        "back to the tree" over an unsaved file unmounted the whole stack, so the buffer `mountedEditors`
-        exists to protect was destroyed by the one control that promises to change nothing. Measured
-        on a real session: `tsconfig.json` came back re-read from disk with the typed characters
-        gone, while the strip still showed its unsaved dot. The hiding rule is therefore the SAME one
-        the stack applies to its own inactive editors, one level up.
+        THE TWO LAYERS ARE BOTH MOUNTED, AND THE LAYOUT ONLY DECIDES WHERE THEY SIT. Swapping them
+        instead — rendering the tree OR the stack — was written first, and the live run caught what
+        it costs: pressing "back to the tree" over an unsaved file unmounted the whole stack, so the
+        buffer `mountedEditors` exists to protect was destroyed by the one control that promises to
+        change nothing. Measured on a real session: `tsconfig.json` came back re-read from disk with
+        the typed characters gone, while the strip still showed its unsaved dot. The hiding rule is
+        therefore the SAME one the stack applies to its own inactive editors, one level up — and the
+        split changes none of it, because `StudioBody` moves the boxes and never the `Layer`s.
 
         It buys a second thing: the tree keeps its expanded folders AND its scroll position across a
-        visit to a file, and a search keeps its query and its results — so the back control returns
-        you to what you were actually looking at.
+        visit to a file, and a search keeps its query and its results — so a collapse, or a back
+        control where there is one, returns you to what you were actually looking at.
       */}
-      <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0 }}>
-        <Layer shown={activePath === null}>
+      <StudioBody
+        layout={layout}
+        treeWidth={shownTreeWidth}
+        treeShown={treeShown}
+        editorShown={editorShown}
+        available={available}
+        lang={lang}
+        containerRef={measure}
+        onResize={resize}
+        onCommit={commit}
+        onCollapse={() => setTreeCollapsed(true)}
+        tree={<>
           {view === 'tree' && (
             <Toolbar
               working={agent.working}
@@ -363,9 +575,9 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
             />
           ) : (
             /* The watermark sits UNDER the tree, in the region a document would occupy if one were
-               open — this composition has no separate empty editor pane to paint it in, because
-               opening a file replaces the tree rather than sitting beside it. It is decoration:
-               `aria-hidden`, no text, and it can never take a click. */
+               open. In the SPLIT that region is the editor pane beside it, so the mark reads as the
+               tree column's own backdrop rather than as an empty document — which is what it is. It
+               is decoration: `aria-hidden`, no text, and it can never take a click. */
             <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0, display: 'flex' }}>
               <Watermark />
               <RepoTreeView
@@ -377,9 +589,8 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
               />
             </div>
           )}
-        </Layer>
-
-        <Layer shown={activePath !== null}>
+        </>}
+        editor={
           <EditorStack
             sessionId={sessionId}
             paths={mounted}
@@ -389,8 +600,8 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
             goTo={goTo}
             onDirtyChange={(path, dirty) => setTabs(prev => markDirty(prev, path, dirty))}
           />
-        </Layer>
-      </div>
+        }
+      />
 
       <ConfirmModal
         open={pendingClose !== null}
@@ -420,11 +631,20 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
  * vertical space. It earns its height by being the exit and by saying what this is — the product
  * name in full, with the beta caveat the nav entries already carry, so the mark is on every surface
  * that names the feature rather than on some of them.
+ *
+ * IT IS ALSO WHERE THE TREE IS MINIMIZED AND BROUGHT BACK, and that is a placement decision. A rail
+ * down the side of the collapsed column would have cost horizontal space permanently, in the one
+ * direction this panel has none to give; this row is already on screen in every arrangement, and a
+ * control whose whole job is to give the reader their width back should not itself take any. The
+ * toggle is ABSENT outside the split — there is no second pane to hide there, and a button that
+ * does nothing is worse than no button.
  */
-export function StudioBar({ isMobile, lang, onExit }: {
+export function StudioBar({ isMobile, lang, onExit, tree }: {
   isMobile: boolean
   lang: 'pt' | 'en'
   onExit: () => void
+  /** The tree column's collapse, when there IS one — i.e. only while the split is in force. */
+  tree?: { collapsed: boolean; onToggle: () => void }
 }) {
   const pt = lang === 'pt'
   return (
@@ -452,6 +672,18 @@ export function StudioBar({ isMobile, lang, onExit }: {
           {pt ? 'Conteúdo' : 'Contents'}
         </span>
       </button>
+
+      {tree !== undefined && (
+        <IconButton
+          label={tree.collapsed
+            ? (pt ? 'Mostrar a árvore de arquivos' : 'Show the file tree')
+            : (pt ? 'Esconder a árvore de arquivos' : 'Hide the file tree')}
+          pressed={!tree.collapsed}
+          onClick={tree.onToggle}
+        >
+          {tree.collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+        </IconButton>
+      )}
 
       <span style={{
         display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto', minWidth: 0,
@@ -541,6 +773,222 @@ export function Layer({ shown, children }: { shown: boolean; children: ReactNode
       }}
     >
       {children}
+    </div>
+  )
+}
+
+/**
+ * WHERE THE TWO PANES SIT — and nothing else.
+ *
+ * It takes the tree and the editor as NODES and decides only their boxes. That separation is the
+ * whole point: every rule about what stays mounted and how a hidden pane is hidden lives in `Layer`
+ * and in `mountedEditors`, one level in, and a layout that reached into either would be a second
+ * place for the rules this panel exists to keep to be got wrong. Drop the split tomorrow and the
+ * buffers are untouched.
+ *
+ * ONE DOM SHAPE FOR BOTH ARRANGEMENTS, and that is load-bearing rather than tidy. Rendering a
+ * different tree per layout would REMOUNT everything under it the moment the aside was dragged past
+ * `SPLIT_MIN` or a phone was turned sideways — which is `RepoFileEditor` re-reading its file and
+ * disposing its Monaco model, i.e. exactly the silent loss of typed text this composition is
+ * arranged to make impossible. So the panes are the same two boxes in both cases and only their
+ * STYLES differ: absolutely stacked over one region when `layers`, side by side in a flex row when
+ * `split`.
+ *
+ * THE COLLAPSE IS A WIDTH, NOT A `display`. The pane goes to zero and clips, while the SIZER inside
+ * it keeps the tree laid out at its full width the whole time — so the tree's scroll position and
+ * its wrapping survive being hidden, which reflowing it to zero would destroy, and `display: none`
+ * would destroy along with everything `Layer`'s own comment says about measuring. The `Layer` is
+ * told `shown={false}` for the same reasons it always is: `inert` is what takes a clipped-but-alive
+ * column out of the keyboard's reach and out of the accessibility tree.
+ *
+ * The pane BOXES carry `data-studio-pane` and the region `data-studio-layout` — every style here is
+ * inline, so those attributes are the only honest way to ask this question from outside.
+ */
+export function StudioBody({
+  layout, treeWidth, treeShown, editorShown, available, lang,
+  containerRef, onResize, onCommit, onCollapse, tree, editor,
+}: {
+  layout: StudioLayout
+  /** Already clamped by the caller — this component measures nothing and decides nothing. */
+  treeWidth: number
+  treeShown: boolean
+  editorShown: boolean
+  /** The measured region width, for the separator's `aria-valuemax`. `0` = not measured yet. */
+  available: number
+  lang: 'pt' | 'en'
+  containerRef?: (el: HTMLDivElement | null) => void
+  onResize: (width: number) => void
+  onCommit: (width: number) => void
+  onCollapse: () => void
+  tree: ReactNode
+  editor: ReactNode
+}) {
+  const split = layout === 'split'
+  const collapsed = split && !treeShown
+  return (
+    <div
+      ref={containerRef}
+      data-studio-layout={layout}
+      style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0, display: 'flex' }}
+    >
+      <div
+        data-studio-pane="tree"
+        style={split
+          ? {
+            position: 'relative', minWidth: 0, flexShrink: 0, overflow: 'hidden',
+            width: collapsed ? 0 : treeWidth,
+          }
+          : { position: 'absolute', inset: 0 }}
+      >
+        {/*
+          THE SIZER. It holds the tree at a CONSTANT width while the pane around it collapses to
+          zero, so nothing inside reflows and the scroll position of a long listing is exactly where
+          it was when the column comes back. Reflowing a file tree to 0px and back is how a reader
+          loses their place in it — a cost paid for nothing, since the column is clipped either way.
+        */}
+        <div style={{
+          position: 'relative', height: '100%', minWidth: 0,
+          width: split ? treeWidth : '100%',
+        }}>
+          <Layer shown={treeShown}>{tree}</Layer>
+        </div>
+      </div>
+
+      {split && !collapsed && (
+        <TreeDivider
+          width={treeWidth}
+          available={available}
+          lang={lang}
+          onResize={onResize}
+          onCommit={onCommit}
+          onCollapse={onCollapse}
+        />
+      )}
+
+      <div
+        data-studio-pane="editor"
+        style={split
+          ? { position: 'relative', flex: 1, minWidth: 0 }
+          : { position: 'absolute', inset: 0 }}
+      >
+        <Layer shown={editorShown}>{editor}</Layer>
+      </div>
+    </div>
+  )
+}
+
+/** How far one arrow key moves the column. `AsideResizer`'s own step, so the two feel the same. */
+const DIVIDER_STEP = 16
+
+/**
+ * The grip between the tree and the editor.
+ *
+ * A 6px hit area over a 2px line, the trade `AsideResizer` already records: the line is what you
+ * should see and it is not something a pointer can reliably land on.
+ *
+ * IT IS OPERABLE FROM THE KEYBOARD, and that is not a nicety — a column you can only reach by
+ * dragging is a column some readers cannot move at all. `separator` with a `valuenow` is the role
+ * ARIA has for exactly this: arrows step, Home and End go to the bounds, and `Enter` minimizes,
+ * which is the same act the Studio's own bar offers with a word on it. The bar is what brings it
+ * BACK — a collapsed column has no separator left to press, so a keyboard-only way out would be a
+ * control that can hide itself and nothing else.
+ *
+ * IT DECIDES NO WIDTH. Every number it emits is a WANT; the clamp lives with the component that
+ * knows how much room there is (`clampTreeWidth` against the measured region), so there is one
+ * answer to how wide the column may be and it is testable without a pointer.
+ */
+export function TreeDivider({ width, available, lang, onResize, onCommit, onCollapse }: {
+  width: number
+  available: number
+  lang: 'pt' | 'en'
+  onResize: (width: number) => void
+  onCommit: (width: number) => void
+  onCollapse: () => void
+}) {
+  const pt = lang === 'pt'
+  const drag = useRef<{ x: number; w: number } | null>(null)
+  const latest = useRef(width)
+  latest.current = width
+  /**
+   * What the LAST move asked for, which is not the same as what is currently on screen.
+   *
+   * Committing the rendered `width` reads the state as of the last render, and a `mouseup` that
+   * arrives in the same task as the final `mousemove` is one React has not re-rendered for yet — so
+   * the drag would be remembered at the width it had BEFORE its last step. The want is the fact the
+   * pointer stated; `onCommit` clamps it exactly as `onResize` did.
+   */
+  const wanted = useRef<number | null>(null)
+
+  useEffect(() => {
+    const move = (e: MouseEvent) => {
+      const from = drag.current
+      // The delta from where the drag STARTED, never the pointer's absolute x: this column's left
+      // edge is wherever the aside happens to be, and reading it every frame is a forced layout.
+      if (from === null) return
+      const want = from.w + (e.clientX - from.x)
+      wanted.current = want
+      onResize(want)
+    }
+    const up = () => {
+      if (drag.current === null) return
+      drag.current = null
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      // Persisted ONCE, at the end — a write per pointer move is a write per frame.
+      onCommit(wanted.current ?? latest.current)
+      wanted.current = null
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+    return () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+    }
+  }, [onResize, onCommit])
+
+  // What the column could reach HERE, so the announced maximum is the real one rather than the
+  // absolute cap. Unmeasured falls back to the cap, which is the only honest answer then.
+  const max = available > 0
+    ? Math.max(TREE_MIN, Math.min(TREE_MAX, available - DIVIDER_W - EDITOR_MIN))
+    : TREE_MAX
+
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={pt ? 'Redimensionar a árvore de arquivos' : 'Resize the file tree'}
+      aria-valuenow={width}
+      aria-valuemin={TREE_MIN}
+      aria-valuemax={max}
+      tabIndex={0}
+      onMouseDown={e => {
+        e.preventDefault()
+        drag.current = { x: e.clientX, w: width }
+        wanted.current = null
+        document.body.style.cursor = 'col-resize'
+        document.body.style.userSelect = 'none'
+      }}
+      onDoubleClick={() => onCommit(TREE_DEFAULT)}
+      onKeyDown={e => {
+        const delta = e.key === 'ArrowLeft' ? -DIVIDER_STEP : e.key === 'ArrowRight' ? DIVIDER_STEP : 0
+        if (delta !== 0) { e.preventDefault(); onCommit(width + delta); return }
+        if (e.key === 'Home') { e.preventDefault(); onCommit(TREE_MIN); return }
+        if (e.key === 'End') { e.preventDefault(); onCommit(max); return }
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onCollapse() }
+      }}
+      style={{
+        position: 'relative', width: DIVIDER_W, flexShrink: 0, alignSelf: 'stretch',
+        cursor: 'col-resize', background: 'transparent', border: 'none', padding: 0,
+      }}
+      onMouseEnter={e => { e.currentTarget.style.background = 'var(--anthropic-orange-dim)' }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+      onFocus={e => { e.currentTarget.style.background = 'var(--anthropic-orange-dim)' }}
+      onBlur={e => { e.currentTarget.style.background = 'transparent' }}
+    >
+      <span aria-hidden style={{
+        position: 'absolute', top: 0, bottom: 0, left: 2, width: 1,
+        background: 'var(--border)', pointerEvents: 'none',
+      }} />
     </div>
   )
 }
@@ -919,10 +1367,12 @@ function BarButton({ label, icon, isMobile, onClick }: {
  * An icon-only control: PAINTED small, TARGETED at 44px by `.ag-tap-icon`'s invisible box — the
  * repo's rule, and the reason a 13px glyph here is not a 44x44 square on a phone.
  */
-function IconButton({ label, onClick, disabled, children }: {
+function IconButton({ label, onClick, disabled, pressed, children }: {
   label: string
   onClick: () => void
   disabled?: boolean
+  /** A TOGGLE says which of its two states it is in; a plain action has none and omits this. */
+  pressed?: boolean
   children: ReactNode
 }) {
   return (
@@ -930,6 +1380,7 @@ function IconButton({ label, onClick, disabled, children }: {
       className="ag-tap-icon"
       type="button"
       aria-label={label}
+      aria-pressed={pressed}
       title={label}
       disabled={disabled === true}
       onClick={onClick}
