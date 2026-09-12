@@ -160,7 +160,7 @@ export default function SessionsPage() {
    */
   const goToReopened = (id: string) => {
     const r = reopenedSessionRoute(id, selected
-      ? { harness: selected.harness, title: selected.title }
+      ? { id: selected.id, harness: selected.harness, title: selected.title }
       : undefined)
     navigate(r.path, r.options)
   }
@@ -593,10 +593,12 @@ export default function SessionsPage() {
    * The guard holds every drop that has a moment to be held: the close (`closeArtifacts` asks through
    * `unsavedBuffers.ts`), every router navigation that leaves this session's page — another session,
    * the dedicated terminal, `SideNav`, and on a phone the arrival of a new session, which is a
-   * navigation first — and a reload or closed tab (`beforeunload`). It keeps nothing mounted: the
-   * answer "discard" drops the pane exactly as before. STATED LIMITS: the browser's own Back/Forward
-   * cannot be held by a `BrowserRouter` (`lib/unsavedLeave.ts`), and a selected row that vanishes
-   * from the fleet with no navigation at all still drops the pane unasked.
+   * navigation first — the browser's own Back/Forward (a capture-phase `popstate`, see
+   * `lib/unsavedLeave.ts`), and a reload or closed tab (`beforeunload`). It keeps nothing mounted:
+   * the answer "discard" drops the pane exactly as before. STATED LIMITS: a REOPEN of this session
+   * is deliberately not held — the server has already retired the row, so "keep editing" could keep
+   * nothing (`navigationRetiresStudio`) — and a selected row that vanishes from the fleet with no
+   * navigation at all still drops the pane unasked.
    */
   const leaveGuard = (
     <UnsavedChangesGuard

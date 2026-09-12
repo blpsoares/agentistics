@@ -51,15 +51,28 @@ describe('unsavedBuffers', () => {
     expect(getUnsaved().files).toEqual(['y'])
   })
 
-  test('a second hold of the same cause replaces what proceeding does without a new snapshot', () => {
+  test('a second drop while a question is pending is held and forgotten — the answer does what was ASKED', () => {
     reportUnsaved('s', ['a'])
     const calls: string[] = []
     holdIfUnsaved('leave', () => calls.push('first'))
     const snap = getUnsaved()
-    holdIfUnsaved('leave', () => calls.push('second'))
+    expect(holdIfUnsaved('leave', () => calls.push('second'))).toBe(true)
     expect(getUnsaved()).toBe(snap)
     answerUnsaved(true)
-    expect(calls).toEqual(['second'])
+    expect(calls).toEqual(['first'])
+  })
+
+  test('a navigation under a pending CLOSE does not turn the question into a leave', () => {
+    reportUnsaved('s', ['a'])
+    const calls: string[] = []
+    holdIfUnsaved('close', () => calls.push('close'))
+    expect(holdIfUnsaved('leave', () => calls.push('leave'))).toBe(true)
+    expect(getUnsaved().question).toEqual({ cause: 'close' })
+    answerUnsaved(true)
+    expect(calls).toEqual(['close'])
+    // Once answered, the next drop is asked on its own.
+    expect(holdIfUnsaved('leave', () => calls.push('later'))).toBe(true)
+    expect(getUnsaved().question).toEqual({ cause: 'leave' })
   })
 
   test('an unchanged report keeps the SAME object, so no consumer re-renders', () => {

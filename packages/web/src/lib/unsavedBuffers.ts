@@ -21,9 +21,12 @@
  * (the Studio, deep inside `ArtifactsAside`) and the askers (the store's close, the router guard, the
  * page's modal) do not contain one another.
  *
- * ONE PENDING QUESTION. A second drop asked while one is pending REPLACES what proceeding does and
- * does not re-render: an effect that navigates on every render would otherwise loop against the
- * modal it opened.
+ * ONE PENDING QUESTION, AND ITS ANSWER DOES WHAT IT WAS ASKED ABOUT. A second drop asked while one
+ * is pending is HELD AND FORGOTTEN — it neither replaces what proceeding does nor re-renders. It used
+ * to replace it, so a second navigation while the modal was up silently re-pointed "Leave anyway" at a
+ * destination the reader never chose (and a navigation under a pending CLOSE turned "Close anyway"
+ * into a leave). Not re-rendering still matters: an effect that navigates on every render would
+ * otherwise loop against the modal it opened.
  */
 
 import { useSyncExternalStore } from 'react'
@@ -97,8 +100,9 @@ export function useUnsaved(): UnsavedState {
  */
 export function holdIfUnsaved(cause: DropCause, run: () => void): boolean {
   if (state.files.length === 0) return false
+  if (state.question !== null) return true
   proceed = run
-  if (state.question?.cause !== cause) emit({ ...state, question: { cause } })
+  emit({ ...state, question: { cause } })
   return true
 }
 

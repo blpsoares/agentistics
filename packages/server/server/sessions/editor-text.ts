@@ -14,10 +14,22 @@
  * transcoding path: guessing an encoding is guessing which bytes the save will write, and a wrong
  * guess is the same silent corruption by another door.
  *
- * `ignoreBOM: true` KEEPS a leading byte-order mark in the string rather than consuming it, so the
- * save writes it back and the file stays byte-identical. Every string this returns re-encodes to
- * exactly the bytes it came from — that is the whole contract, and `editor-text.test.ts` asserts it
- * over the bytes.
+ * `ignoreBOM: true` KEEPS a leading byte-order mark in the string rather than consuming it. Every
+ * string this returns re-encodes to exactly the bytes it came from — that is the whole contract of
+ * THIS module, and `editor-text.test.ts` asserts it over the bytes.
+ *
+ * **What that does and does not promise about a save from the Studio.** The server half is exact:
+ * the string it hands out, PUT back unchanged, writes the same bytes. The editor in between is a
+ * second party with rules of its own, and two of them touch bytes nobody edited:
+ *
+ *  - Monaco holds a BOM BESIDE the text, not in it, so a bare `getValue()` drops it. The web save
+ *    reads through `packages/web/src/lib/editorSaveText.ts` (`preserveBOM: true`), and
+ *    `editorSaveText.test.ts` drives a BOM file through this route, a real Monaco text model and back,
+ *    asserting the bytes on disk.
+ *  - **STATED LIMIT: mixed line endings are normalised.** Monaco's model holds one EOL sequence, so a
+ *    file mixing `\r\n`, `\n` and `\r` is rewritten to one of them the moment it is opened, and a
+ *    save writes that. A file with one consistent ending round-trips byte-identically; one with mixed
+ *    endings does not, and no route on this side can repair what the editor never held.
  */
 export function decodeUtf8Lossless(buf: Uint8Array): string | null {
   try {

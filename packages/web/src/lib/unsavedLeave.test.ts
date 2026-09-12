@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import {
-  guardNavigator, navigationKeepsStudio, pathnameOf, unsavedLeaveText, type GuardableNavigator,
+  createPopGuard, guardNavigator, historyIndexOf, navigationKeepsStudio, navigationRetiresStudio,
+  pathnameOf, unsavedLeaveText, type GuardableNavigator, type PopEventLike, type PoppableWindow,
 } from './unsavedLeave'
+import { reopenedSessionRoute } from './sessionRoute'
 import { answerUnsaved, getUnsaved, holdIfUnsaved, reportUnsaved, resetUnsaved } from './unsavedBuffers'
 
 beforeEach(() => resetUnsaved())
@@ -33,12 +35,25 @@ describe('pathnameOf', () => {
   })
 })
 
+describe('navigationRetiresStudio', () => {
+  test("a reopen of the open session, by the route helper's own state, retires it", () => {
+    const { state } = reopenedSessionRoute('new-1', { id: 's1', harness: 'claude' }).options
+    expect(navigationRetiresStudio(state, ['s1', 'conv'])).toBe(true)
+  })
+  test('a reopen of another row, a new session, and no state at all retire nothing', () => {
+    expect(navigationRetiresStudio(reopenedSessionRoute('n', { id: 'other' }).options.state, ['s1'])).toBe(false)
+    expect(navigationRetiresStudio({ creating: {} }, ['s1'])).toBe(false)
+    expect(navigationRetiresStudio(undefined, ['s1'])).toBe(false)
+    expect(navigationRetiresStudio({ retires: '' }, [''])).toBe(false)
+  })
+})
+
 /** A history-shaped fake: `push`/`replace` record where they went and never use `this`. */
 function fakeHistory() {
   const went: string[] = []
   const nav = {
-    push: (to: { pathname: string }) => { went.push(`push ${to.pathname}`) },
-    replace: (to: { pathname: string }) => { went.push(`replace ${to.pathname}`) },
+    push: (to: { pathname: string }, _state?: unknown) => { went.push(`push ${to.pathname}`) },
+    replace: (to: { pathname: string }, _state?: unknown) => { went.push(`replace ${to.pathname}`) },
   }
   return { nav: nav as unknown as GuardableNavigator, went, raw: nav }
 }
@@ -46,9 +61,30 @@ function fakeHistory() {
 describe('guardNavigator, wired to the unsaved store the way the page wires it', () => {
   const arm = (nav: GuardableNavigator, keys: string[]) => guardNavigator(
     nav,
-    to => !navigationKeepsStudio(pathnameOf(to, '/sessions/s1'), keys),
+    (to, state) => !navigationKeepsStudio(pathnameOf(to, '/sessions/s1'), keys)
+      && !navigationRetiresStudio(state, keys),
     run => holdIfUnsaved('leave', run),
   )
+
+  test('a reopen of THIS session passes unasked — its row is already retired, staying keeps nothing', () => {
+    const h = fakeHistory()
+    arm(h.nav, ['s1'])
+    reportUnsaved('studio', ['README.md'])
+    const r = reopenedSessionRoute('new-1', { id: 's1' })
+    h.raw.push({ pathname: r.path }, r.options.state)
+    expect(h.went).toEqual(['push /sessions/new-1'])
+    expect(getUnsaved().question).toBeNull()
+  })
+
+  test('a reopen of ANOTHER row is held like any navigation — staying really keeps the buffers', () => {
+    const h = fakeHistory()
+    arm(h.nav, ['s1'])
+    reportUnsaved('studio', ['README.md'])
+    const r = reopenedSessionRoute('new-2', { id: 'other' })
+    h.raw.push({ pathname: r.path }, r.options.state)
+    expect(h.went).toEqual([])
+    expect(getUnsaved().question).toEqual({ cause: 'leave' })
+  })
 
   test('with nothing unsaved every navigation passes straight through', () => {
     const h = fakeHistory()
@@ -110,6 +146,130 @@ describe('guardNavigator, wired to the unsaved store the way the page wires it',
     expect(h.nav.push).toBe(wrapperA)
     restoreA()
     expect(h.nav.push).toBe(original)
+  })
+})
+
+describe('historyIndexOf', () => {
+  test("reads the router's idx and nothing else", () => {
+    expect(historyIndexOf({ usr: null, key: 'k', idx: 3 })).toBe(3)
+    expect(historyIndexOf({ idx: '3' })).toBeNull()
+    expect(historyIndexOf(null)).toBeNull()
+  })
+})
+
+/**
+ * A browser-shaped fake for `popstate` on `window`, reproducing what Chromium 151 was MEASURED to do
+ * there: listeners run in REGISTRATION order whatever their capture flag, and one of them may stop the
+ * rest. The ROUTER can be registered before or after the guard, which is the whole question.
+ */
+function fakeBrowser(paths: string[], at: number, routerFirst = false) {
+  let index = at
+  let routerIndex = at
+  const routerSaw: number[] = []
+  const listeners: Array<(e: PopEventLike) => void> = []
+  const router = () => { routerIndex = index; routerSaw.push(index) }
+  if (routerFirst) listeners.push(router)
+  const win: PoppableWindow = {
+    addEventListener: (_t, l) => { listeners.push(l) },
+    removeEventListener: (_t, l) => { const i = listeners.indexOf(l); if (i !== -1) listeners.splice(i, 1) },
+    history: { go: delta => { index += delta; pop() } },
+    location: { get pathname() { return paths[index]! } },
+  }
+  function pop() {
+    let stopped = false
+    for (const l of [...listeners]) {
+      l({ state: { idx: index }, stopImmediatePropagation: () => { stopped = true } })
+      if (stopped) return
+    }
+  }
+  const guard = createPopGuard(win)
+  const unlisten = guard.listen()
+  if (!routerFirst) listeners.push(router)
+  return {
+    guard, unlisten, routerSaw,
+    back: () => win.history.go(-1),
+    shown: () => routerIndex,
+    where: () => paths[index],
+  }
+}
+
+describe('createPopGuard', () => {
+  const armFor = (b: ReturnType<typeof fakeBrowser>, keys: string[]) => b.guard.arm({
+    lastIndex: b.shown,
+    hold: pathname => !navigationKeepsStudio(pathname, keys),
+    onHold: run => holdIfUnsaved('leave', run),
+  })
+
+  test('with nothing unsaved, Back reaches the router untouched', () => {
+    const b = fakeBrowser(['/tasks', '/sessions/s1'], 1)
+    armFor(b, ['s1'])
+    b.back()
+    expect(b.routerSaw).toEqual([0])
+    expect(b.where()).toBe('/tasks')
+  })
+
+  test('with a dirty buffer, Back is undone before the router hears it, and asked', () => {
+    const b = fakeBrowser(['/tasks', '/sessions/s1'], 1)
+    armFor(b, ['s1'])
+    reportUnsaved('studio', ['a.ts'])
+    b.back()
+    expect(b.routerSaw).toEqual([])
+    expect(b.where()).toBe('/sessions/s1')
+    expect(getUnsaved().question).toEqual({ cause: 'leave' })
+  })
+
+  test('"Leave anyway" replays the pop through the router, exactly once', () => {
+    const b = fakeBrowser(['/tasks', '/sessions/s1'], 1)
+    armFor(b, ['s1'])
+    reportUnsaved('studio', ['a.ts'])
+    b.back()
+    answerUnsaved(true)
+    expect(b.routerSaw).toEqual([0])
+    expect(b.where()).toBe('/tasks')
+  })
+
+  test('"Keep editing" leaves the page, the URL and the router where they were', () => {
+    const b = fakeBrowser(['/tasks', '/sessions/s1'], 1)
+    armFor(b, ['s1'])
+    reportUnsaved('studio', ['a.ts'])
+    b.back()
+    answerUnsaved(false)
+    expect(b.routerSaw).toEqual([])
+    expect(b.where()).toBe('/sessions/s1')
+  })
+
+  test('a pop to this same session page, one with no router index, and an unarmed guard all pass', () => {
+    const b = fakeBrowser(['/sessions/s1', '/sessions/s1'], 1)
+    armFor(b, ['s1'])
+    reportUnsaved('studio', ['a.ts'])
+    b.back()
+    expect(b.routerSaw).toEqual([0])
+    const c = fakeBrowser(['/tasks', '/sessions/s1'], 1)
+    c.guard.arm({ lastIndex: () => null, hold: () => true, onHold: run => holdIfUnsaved('leave', run) })
+    c.back()
+    expect(c.routerSaw).toEqual([0])
+    const d = fakeBrowser(['/tasks', '/sessions/s1'], 1)
+    armFor(d, ['s1'])()
+    d.back()
+    expect(d.routerSaw).toEqual([0])
+  })
+
+  test('a stale disarm does not disarm the page that armed after it (StrictMode mounts twice)', () => {
+    const b = fakeBrowser(['/tasks', '/sessions/s1'], 1)
+    const first = armFor(b, ['s1'])
+    armFor(b, ['s1'])
+    first()
+    reportUnsaved('studio', ['a.ts'])
+    b.back()
+    expect(b.routerSaw).toEqual([])
+  })
+
+  test('WHY main.tsx installs it: a guard registered AFTER the router is too late to hold anything', () => {
+    const b = fakeBrowser(['/tasks', '/sessions/s1'], 1, true)
+    armFor(b, ['s1'])
+    reportUnsaved('studio', ['a.ts'])
+    b.back()
+    expect(b.routerSaw[0]).toBe(0)
   })
 })
 

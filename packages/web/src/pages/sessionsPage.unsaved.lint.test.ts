@@ -23,6 +23,34 @@ const WEB_SRC = join(import.meta.dir, '..')
 const PAGE = stripComments(readFileSync(join(import.meta.dir, 'SessionsPage.tsx'), 'utf8'))
 const STUDIO = stripComments(readFileSync(join(WEB_SRC, 'components/sessions/Studio.tsx'), 'utf8'))
 const STORE = stripComments(readFileSync(join(WEB_SRC, 'lib/artifactsStore.ts'), 'utf8'))
+const GUARD = stripComments(readFileSync(join(WEB_SRC, 'components/sessions/UnsavedChangesGuard.tsx'), 'utf8'))
+
+/**
+ * The effect that arms the navigator guard: `useEffect(() => { … return guardNavigator(navigator,
+ * <hold using navigationKeepsStudio>, run => holdIfUnsaved('leave', run)) }, [navigator])`. A
+ * reviewer DELETED that whole effect and every test here stayed green — it is the link this file's
+ * own header names, so it is asserted over the source like the others.
+ */
+function navigatorGuardInstalled(src: string): boolean {
+  return /useEffect\(\(\) => \{[^}]*?return guardNavigator\(\s*navigator,\s*\(to, state\) => !navigationKeepsStudio\(pathnameOf\(to, window\.location\.pathname\), keys\.current\)\s*&& !navigationRetiresStudio\(state, keys\.current\),\s*run => holdIfUnsaved\('leave', run\),\s*\)\s*\}, \[navigator\]\)/
+    .test(src)
+}
+
+/** The Back/Forward half: the page ARMS the one pop guard, held through the same question. */
+function popGuardArmed(src: string): boolean {
+  return /useEffect\(\(\) => \{\s*if \(!routed\) return\s*return armHistoryPopGuard\(\{\s*lastIndex: \(\) => shownIndex\.current,\s*hold: pathname => !navigationKeepsStudio\(pathname, keys\.current\),\s*onHold: run => holdIfUnsaved\('leave', run\),\s*\}\)\s*\}, \[routed\]\)/
+    .test(src)
+    && /useEffect\(\(\) => \{\s*shownIndex\.current = historyIndexOf\(window\.history\.state\)\s*\}, \[location\?\.key\]\)/.test(src)
+}
+
+const MAIN = stripComments(readFileSync(join(WEB_SRC, 'main.tsx'), 'utf8'))
+
+/** Registered before the first render — after it, the router's listener runs first and it holds nothing. */
+function popGuardInstalledBeforeRender(src: string): boolean {
+  const install = src.search(/^installHistoryPopGuard\(\)$/m)
+  const render = src.indexOf('ReactDOM.createRoot(')
+  return install !== -1 && render !== -1 && install < render
+}
 
 /** The return that renders the pane: from its root's `ref={splitRef}` to the end of the file. */
 function paneReturn(src: string): string {
@@ -97,6 +125,31 @@ describe('the links the guard depends on', () => {
     walk(WEB_SRC)
     expect(offenders).toEqual([])
     expect(/export function closeNow/.test(STORE)).toBe(false)
+  })
+
+  test('the guard component installs the navigator guard and the Back/Forward guard', () => {
+    expect(navigatorGuardInstalled(GUARD)).toBe(true)
+    expect(popGuardArmed(GUARD)).toBe(true)
+    expect(popGuardInstalledBeforeRender(MAIN)).toBe(true)
+  })
+
+  test('the scan still sees a guard component that stopped installing either', () => {
+    const at = GUARD.indexOf('return guardNavigator(')
+    const effectStart = GUARD.lastIndexOf('useEffect(', at)
+    const effectEnd = GUARD.indexOf('}, [navigator])', at) + '}, [navigator])'.length
+    expect(effectStart).toBeGreaterThan(-1)
+    // The deletion the reviewer made: the whole effect gone.
+    expect(navigatorGuardInstalled(GUARD.slice(0, effectStart) + GUARD.slice(effectEnd))).toBe(false)
+    // Installed, but asking nothing.
+    expect(navigatorGuardInstalled(GUARD.replace("run => holdIfUnsaved('leave', run),\n    )\n  }, [navigator])", 'run => false,\n    )\n  }, [navigator])')))
+      .toBe(false)
+    // Prose naming it is not it.
+    expect(navigatorGuardInstalled(stripComments(`/* ${GUARD.slice(effectStart, effectEnd)} */`))).toBe(false)
+    expect(popGuardArmed(GUARD.replace('return armHistoryPopGuard(', 'return void armHistoryPopGuard('))).toBe(false)
+    // Installed after the render is installed too late.
+    const late = MAIN.replace(/^installHistoryPopGuard\(\)$/m, '') + '\ninstallHistoryPopGuard()\n'
+    expect(popGuardInstalledBeforeRender(late)).toBe(false)
+    expect(popGuardInstalledBeforeRender(MAIN.replace(/^installHistoryPopGuard\(\)$/m, ''))).toBe(false)
   })
 
   test('the scan still sees a close that skips the question, and a Studio that stopped reporting', () => {

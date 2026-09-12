@@ -8,10 +8,35 @@
  * `useBlocker` is not available (it throws outside one). Every in-app navigation — a `SideNav`
  * link, the bottom nav, a `navigate()` from a menu, a session row — reaches the history object
  * through `navigator.push` / `navigator.replace`, looked up at CALL time, so wrapping those two is
- * the one place all of them pass. What it cannot see is stated rather than discovered: the
- * browser's own Back/Forward (a `popstate` has already moved the URL by the time anything hears
- * it) and `navigate(-1)` (`go`, whose destination is unknown; nothing in this app calls it). A
- * reload, a closed tab and an external link are the `beforeunload` half, in the guard component.
+ * the one place all of them pass.
+ *
+ * WHY `popstate` IS HEARD TOO. The browser's own Back/Forward — on a phone, the back GESTURE, which
+ * is the primary way out of a screen — and `navigate(-1)` never touch `push`/`replace`: the URL has
+ * already moved when anything hears about it. `createPopGuard` hears the `popstate` BEFORE the
+ * router's own `handlePop`, stops it with `stopImmediatePropagation` — so the router's index never
+ * moves and the page never re-renders — puts the URL back with `history.go(-delta)`, and asks.
+ * Proceeding replays `history.go(delta)` and lets THAT pop through.
+ *
+ * "Before the router" is decided by REGISTRATION ORDER, not by the capture flag. The obvious route —
+ * a capture listener on `window`, relying on capture-before-bubble at the target — was measured NOT
+ * to work: in Chromium 151, `popstate` listeners on `window` run in the order they were added whatever
+ * their phase (on a DOM node the capture one does go first). The router adds its listener when
+ * `BrowserRouter` mounts and every page is a lazy chunk mounted after it, so a listener added by the
+ * page ran second — after the router had already rendered the destination and unmounted the very
+ * component holding the listener. So the listener is registered ONCE, from `main.tsx`, before the
+ * first render (`historyPopGuard.ts`), and a page only ARMS it. STATED LIMITS: the delta is read from
+ * the router's own `idx` in `history.state`, so an entry that carries none passes unasked; and the URL
+ * bar shows the destination for the moment between the pop and the undo.
+ *
+ * A reload, a closed tab and an external link are the `beforeunload` half, in the guard component.
+ *
+ * A REOPEN OF THE OPEN SESSION IS NOT HELD (`navigationRetiresStudio`). By the time its navigation
+ * exists the server has already retired the row the Studio belongs to, and the next poll removes it
+ * whatever the reader answers — so a "Keep editing" there would keep nothing for about five seconds
+ * and then drop the pane unasked. A control that answers falsely is worse than no control, so that
+ * navigation passes; the loss belongs to the reopen verb, which is where a question could still
+ * prevent it (STATED LIMIT: it does not ask today). A reopen of some OTHER row retires nothing here
+ * and is held like any navigation, because staying really does keep the buffers.
  */
 
 import type { DropCause } from './unsavedBuffers'
@@ -31,6 +56,17 @@ export function navigationKeepsStudio(pathname: string, keys: readonly string[])
   let id: string
   try { id = decodeURIComponent(m[1]!) } catch { return false }
   return keys.includes(id)
+}
+
+/**
+ * Whether a navigation's router STATE says it lands on a reopen of the session holding the Studio —
+ * `reopenedSessionRoute` stamps `retires` with the id the reopen was asked about. Such a navigation is
+ * never held: see this module's header.
+ */
+export function navigationRetiresStudio(state: unknown, keys: readonly string[]): boolean {
+  if (typeof state !== 'object' || state === null) return false
+  const retires = (state as { retires?: unknown }).retires
+  return typeof retires === 'string' && retires !== '' && keys.includes(retires)
 }
 
 /** The pathname a `navigator.push`/`replace` target names — a resolved path object or a string. */
@@ -59,7 +95,8 @@ export interface GuardableNavigator {
  */
 export function guardNavigator(
   nav: GuardableNavigator,
-  hold: (to: unknown) => boolean,
+  /** `to` and the router `state` it was pushed with (`navigator.push(to, state, opts)`). */
+  hold: (to: unknown, state: unknown) => boolean,
   onHold: (proceed: () => void) => boolean,
 ): () => void {
   const originals = { push: nav.push, replace: nav.replace }
@@ -68,7 +105,7 @@ export function guardNavigator(
     const run = () => { original.apply(nav, args) }
     // `onHold` answers whether it really held (nothing unsaved means it did not), so a guard that is
     // armed a render late can never swallow a navigation.
-    if (hold(args[0]) && onHold(run)) return
+    if (hold(args[0], args[1]) && onHold(run)) return
     run()
   }
   const wrapped = { push: wrap('push'), replace: wrap('replace') }
@@ -77,6 +114,81 @@ export function guardNavigator(
   return () => {
     if (nav.push === wrapped.push) nav.push = originals.push
     if (nav.replace === wrapped.replace) nav.replace = originals.replace
+  }
+}
+
+/** The router's own position in the session history (`createBrowserHistory` writes `idx`). */
+export function historyIndexOf(state: unknown): number | null {
+  if (typeof state !== 'object' || state === null) return null
+  const idx = (state as { idx?: unknown }).idx
+  return typeof idx === 'number' && Number.isInteger(idx) ? idx : null
+}
+
+export interface PopEventLike {
+  state: unknown
+  stopImmediatePropagation: () => void
+}
+
+export interface PoppableWindow {
+  addEventListener: (type: 'popstate', listener: (e: PopEventLike) => void, capture: boolean) => void
+  removeEventListener: (type: 'popstate', listener: (e: PopEventLike) => void, capture: boolean) => void
+  history: { go: (delta: number) => void }
+  location: { pathname: string }
+}
+
+/** One page's use of the pop guard: which entry is on screen, what to hold, and how to ask. */
+export interface PopGuardArming {
+  /** The router index of the entry the page is SHOWING — never `history.state`, which by pop time
+   *  already names the destination. */
+  lastIndex: () => number | null
+  hold: (pathname: string) => boolean
+  /** Answers whether it really held, as for `guardNavigator`, so nothing is stopped while nothing
+   *  is unsaved. */
+  onHold: (proceed: () => void) => boolean
+}
+
+export interface PopGuard {
+  /** Registers the ONE `popstate` listener. Must run before the router adds its own. */
+  listen: () => () => void
+  /** Arms the listener for one page; the returned disarm is a no-op once a newer arming took over. */
+  arm: (arming: PopGuardArming) => () => void
+}
+
+/**
+ * Holds a Back/Forward (or `navigate(-1)`) the armed page claims, the way `guardNavigator` holds a
+ * push. Two pops are its own and never reach a decision: the UNDO (swallowed, even if the page that
+ * caused it has disarmed since) and the REPLAY after "leave anyway" (let through, and the router then
+ * computes the same delta from its own unmoved index).
+ */
+export function createPopGuard(win: PoppableWindow): PopGuard {
+  let armed: PopGuardArming | null = null
+  let undoing = 0
+  let replaying = 0
+  const onPop = (e: PopEventLike) => {
+    if (undoing > 0) { undoing--; e.stopImmediatePropagation(); return }
+    if (replaying > 0) { replaying--; return }
+    const page = armed
+    if (page === null) return
+    const from = page.lastIndex()
+    const to = historyIndexOf(e.state)
+    if (from === null || to === null || from === to) return
+    if (!page.hold(win.location.pathname)) return
+    const delta = to - from
+    if (!page.onHold(() => { replaying++; win.history.go(delta) })) return
+    e.stopImmediatePropagation()
+    undoing++
+    win.history.go(-delta)
+  }
+  return {
+    listen: () => {
+      win.addEventListener('popstate', onPop, true)
+      return () => win.removeEventListener('popstate', onPop, true)
+    },
+    arm: arming => {
+      const mine = { ...arming }
+      armed = mine
+      return () => { if (armed === mine) armed = null }
+    },
   }
 }
 

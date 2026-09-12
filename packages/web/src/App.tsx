@@ -3314,6 +3314,7 @@ export default function AppLayout() {
           // until the next poll carries the new row. See `reopenedSessionRoute`.
           onOpened={id => {
             const r = reopenedSessionRoute(id, {
+              id: selectedSessionRow.id,
               harness: selectedSessionRow.harness,
               title: selectedSessionRow.title,
             })

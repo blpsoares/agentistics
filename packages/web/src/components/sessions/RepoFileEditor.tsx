@@ -96,6 +96,7 @@ import {
   type ReadFileResult, type RepoLang, type RepoMediaKind, type WriteFileResult,
 } from '../../lib/repoApi'
 import { repoMediaUrl } from '../../lib/attachmentUrl'
+import { editorSaveText } from '../../lib/editorSaveText'
 import { repoFailureText } from '../../lib/repoErrorText'
 import { formatBytes } from '../../lib/gallery'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -842,7 +843,8 @@ export function RepoFileEditor({
     if (editor === null || writingRef.current) return false
     writingRef.current = true
     const { sessionId: id, path: file, lang: reqLang } = argsRef.current
-    const content = editor.getValue()
+    // Never `editor.getValue()` bare: its default drops a leading BOM — see `lib/editorSaveText.ts`.
+    const content = editorSaveText(editor)
     if (before !== undefined) dispatch(before)
     dispatch({ kind: 'save-started' })
     const res = await writeRepoFile(id, file, content, pin, reqLang)
