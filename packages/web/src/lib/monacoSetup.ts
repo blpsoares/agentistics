@@ -14,9 +14,11 @@
  *
  * **The editor is composed in `monacoEntry.ts`, not imported from the `monaco-editor` barrel.** Read
  * that file's header for why: the barrel's TypeScript LANGUAGE SERVICE emits a 6.9 MB
- * `ts.worker.js` at build time whether a browser ever asks for it or not, and this feature has the
- * service switched off by design. Everything the barrel registers except that one language service
- * is registered there, grammars included — `.ts` and `.js` keep their syntax highlighting.
+ * `ts.worker.js` at build time whether a browser ever asks for it or not, and that service is not
+ * SWITCHED OFF here — it is ABSENT, never registered, which is why there is no
+ * `disableTypeScriptServices` call anywhere in this file to find. Everything the barrel registers
+ * except that one language service is registered there, grammars included — `.ts` and `.js` keep
+ * their syntax highlighting.
  *
  * **The import specifiers there are `monaco-editor/<path-under-esm/vs>`, NOT
  * `monaco-editor/esm/vs/...`.** monaco-editor 0.56 ships an `exports` map whose subpath pattern is
@@ -47,18 +49,19 @@ import CssWorker from 'monaco-editor/languages/features/css/css.worker?worker'
 import HtmlWorker from 'monaco-editor/languages/features/html/html.worker?worker'
 
 /**
- * **`loadMonaco()`'s PUBLIC TYPE IS THE BARREL'S, AND THAT IS DELIBERATE.** `RepoFileEditor.tsx`
- * annotates the resolved value as `typeof import('monaco-editor')` and this contract may not change
- * under it. What actually resolves is `monacoEntry`, which is that module minus two members —
- * `typescript` (the language service this change removes on purpose) and `lsp` (unreachable through
- * the package's `exports` map). Both are therefore `undefined` at RUNTIME while the type says
- * otherwise: the single narrow lie in this file, stated here rather than discovered.
+ * **THIS TYPE IS WHAT `loadMonaco()` ACTUALLY RESOLVES, AND IT USED NOT TO BE.** It was the BARREL's
+ * `typeof import('monaco-editor')`, which promises two members `monacoEntry` does not have:
+ * `typescript` (the language service that is not registered) and `lsp` (unreachable through the
+ * package's `exports` map). Both were typed REQUIRED and `undefined` at RUNTIME, so
+ * `monaco.typescript.typescriptDefaults…` TYPE-CHECKED and then threw inside the `.then()` — an
+ * unhandled rejection and an editor that silently never mounts, the blank-pane class this product
+ * has already been bitten by twice. Naming the module instead makes that read a compile error at the
+ * call site, and `monacoEntry.lint.test.ts` greps for it as the second lock.
  *
- * Nothing in the app touches either member — there is no other reader, which is what makes the
- * trade safe today. **If you reach for `monaco.typescript`, it is not there**: re-register the
- * feature in `monacoEntry.ts` (and with it 6.9 MB) rather than trusting this type.
+ * **If you need `monaco.typescript`**, re-register the feature in `monacoEntry.ts` (and with it
+ * 6.9 MB); this type then gains the member by itself, which is the point of deriving it.
  */
-type Monaco = typeof import('monaco-editor')
+type Monaco = typeof import('./monacoEntry')
 
 /**
  * The labels Monaco actually asks for, read off the package rather than guessed:
@@ -120,10 +123,13 @@ type MonacoEnvironmentHost = {
 function armWorkers() {
   const host = self as unknown as MonacoEnvironmentHost
   if (host.MonacoEnvironment?.getWorker) return
-  host.MonacoEnvironment = {
-    ...host.MonacoEnvironment,
+  // **AND IT PRESERVES THE OBJECT'S IDENTITY.** A spread installs a NEW object, so a CSP-hardened
+  // host holding a reference to its own `MonacoEnvironment` and setting `createTrustedTypesPolicy`
+  // on it AFTER us would be writing into a bag monaco no longer reads — the exact failure the merge
+  // above exists to prevent, one step later. Assigning INTO the existing object cannot diverge.
+  Object.assign((host.MonacoEnvironment ??= {}), {
     getWorker: (_workerId: string, label: string) => workerFor(label),
-  }
+  })
 }
 
 let pending: Promise<Monaco> | null = null
@@ -144,9 +150,7 @@ let pending: Promise<Monaco> | null = null
 export function loadMonaco(): Promise<Monaco> {
   if (pending) return pending
   armWorkers()
-  // The cast is the one documented on `Monaco` above: a real `monacoEntry` presented under the
-  // barrel's type, because that is the contract `RepoFileEditor.tsx` already depends on.
-  pending = (import('./monacoEntry') as unknown as Promise<Monaco>).catch(e => {
+  pending = import('./monacoEntry').catch(e => {
     pending = null
     throw e
   })

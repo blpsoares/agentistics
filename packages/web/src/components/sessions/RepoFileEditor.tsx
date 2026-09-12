@@ -86,7 +86,9 @@ import { formatBytes } from '../../lib/gallery'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { RepoNote } from './repoNote'
 
-type MonacoModule = typeof import('monaco-editor')
+// What `loadMonaco()` RESOLVES — `monacoEntry`, not the barrel. The barrel's type promised
+// `typescript` and `lsp`, which that module does not have; see `monacoSetup.ts`'s `Monaco`.
+type MonacoModule = typeof import('../../lib/monacoEntry')
 
 export interface RepoFileEditorProps {
   sessionId: string
