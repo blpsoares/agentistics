@@ -401,9 +401,19 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
   // A route may keep ITS OWN `Content-Security-Policy`, and only when it is the single allowlisted
   // one — see `response-policy.ts`. Everything else is set, not appended, so a route cannot forget
   // the baseline and cannot widen it either.
+  //
+  // `X-Frame-Options` rides the SAME check, and it has to: the allowlisted policy is the media
+  // routes' opaque-byte response (an image, a video, a PDF), and it deliberately carries no
+  // `frame-ancestors` — a sandboxed response with none of the application's own controls has
+  // nothing to clickjack, so any embedder is fine (`response-policy.ts` says why). `embed` above
+  // governs a DIFFERENT question — may an editor frame the DASHBOARD itself — and is false on
+  // every profile but `local`, so leaving XFO out of this check left `DENY` stamped onto every
+  // media response on `lan`/`public`: the CSP was fixed, the legacy header that "wins wherever it
+  // is honoured" was not, and a browser refuses to frame a PDF while firing no `error` event the
+  // pane can catch — a blank box, not a failure sentence.
   const keepCsp = keepsOwnCsp(res)
   for (const [k, v] of Object.entries(securityHeaders({ tls: TEAM_TLS, dev: !SERVE_STATIC, isApi, embed }))) {
-    if (keepCsp && k === 'Content-Security-Policy') continue
+    if (keepCsp && (k === 'Content-Security-Policy' || k === 'X-Frame-Options')) continue
     res.headers.set(k, v)
   }
   // A sliding-session refresh recorded by the auth gate. Appended (not set) so a route that

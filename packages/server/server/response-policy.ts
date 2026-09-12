@@ -28,6 +28,14 @@
  * content table in `artifact-media.ts`, where the browser is additionally forbidden by `nosniff`
  * (still stamped by the baseline) from deciding a type the extension did not. It is not for
  * anything that carries the application's own controls; there would be something to clickjack.
+ *
+ * `keepsOwnCsp` ALSO decides whether `handleRequest` may re-stamp `X-Frame-Options: DENY`, and
+ * that is not a second rule — it is the same one. `OPAQUE_MEDIA_CSP` carries no `frame-ancestors`
+ * on purpose (see the test asserting exactly that), so leaving `X-Frame-Options` alone whenever
+ * this CSP survives is what makes the two headers agree instead of the legacy one silently
+ * overriding the modern one everywhere but a `local` profile. Fixed by `index.ts`, which skips
+ * BOTH headers on the same `keepsOwnCsp(res)` check — a CSP allowed through with the framing
+ * blanket still nailed shut is not an allowance, it is a response that lies about what protects it.
  */
 
 /** The one policy `handleRequest` will leave alone. Strictly stricter than the baseline. */
