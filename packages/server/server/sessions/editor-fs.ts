@@ -415,8 +415,23 @@ export type { SearchResult }
  * repo; a NON-git directory gets a bounded plain walk instead — capped by FILE COUNT, not depth,
  * so a huge `node_modules`-shaped folder with no git repo behind it cannot make this hang, which
  * is the exact risk the spec calls out.
+ *
+ * `overrides` exists ONLY for tests — it lets the walk's file/dir caps and the grep's own hit cap
+ * be driven down to a handful of fixtures instead of needing PLAIN_WALK_FILE_LIMIT (5000) real
+ * files or SEARCH_LIMIT (200) real hits on disk to reproduce a boundary. Every production caller
+ * takes the module defaults.
+ *
+ * `truncated` is not only `capHits`' own verdict on the COMBINED, already-gathered hit list — the
+ * walk and the grep can each stop early for a reason `capHits` never sees (a walk cap cutting the
+ * file list handed to name-matching and to the plain grep, a file skipped for its size, or the
+ * grep's own hit-cap `break` landing exactly on the limit with nothing left over for `capHits` to
+ * cut). Any one of those means the scan did not cover the whole tree, so the result is partial
+ * regardless of what the final hit count happens to be.
  */
-export async function searchTree(root: string, q: string): Promise<SearchResult> {
+export async function searchTree(
+  root: string, q: string,
+  overrides: { fileLimit?: number; dirLimit?: number; grepLimit?: number } = {},
+): Promise<SearchResult> {
   const query = q.trim()
   if (!query) return { hits: [], truncated: false }
 
@@ -424,20 +439,31 @@ export async function searchTree(root: string, q: string): Promise<SearchResult>
   // The git path must never walk: `walkPlain` only runs when `root` is not a git work tree at
   // all. Walking once here and handing the SAME list to both the name match and (on fallback,
   // below) the content grep is what fixes the double-walk this search used to do.
-  const walked = files === null ? await walkPlain(root) : null
+  const walk = files === null ? await walkPlain(root, overrides) : null
+  const walked = walk?.files
   const nameHits = matchNames(files ?? walked!, query)
 
   let contentHits: ContentHit[]
+  let grepTruncated = false
   if (files !== null) {
     const gitHits = await gitGrepContent(root, query)
     // `null` means `git grep` itself failed for a real reason (not "no matches") — fall back to
     // a plain read of the very file list `git ls-files` already gave us, no second walk needed.
-    contentHits = gitHits ?? await grepPlain(root, files, query)
+    if (gitHits !== null) {
+      contentHits = gitHits
+    } else {
+      const grep = await grepPlain(root, files, query, overrides.grepLimit)
+      contentHits = grep.hits
+      grepTruncated = grep.truncated
+    }
   } else {
-    contentHits = await grepPlain(root, walked!, query)
+    const grep = await grepPlain(root, walked!, query, overrides.grepLimit)
+    contentHits = grep.hits
+    grepTruncated = grep.truncated
   }
 
-  return capHits([...nameHits, ...contentHits])
+  const capped = capHits([...nameHits, ...contentHits])
+  return { hits: capped.hits, truncated: capped.truncated || (walk?.truncated ?? false) || grepTruncated }
 }
 
 /**
@@ -463,6 +489,12 @@ const PLAIN_WALK_FILE_LIMIT = 5000
  */
 const PLAIN_WALK_DIR_LIMIT = 5000
 
+export interface WalkResult {
+  files: string[]
+  /** Either cap actually stopped the walk before every reachable file was seen. */
+  truncated: boolean
+}
+
 /**
  * Exported, and the caps are overridable, only so tests can prove the directory cap terminates
  * the walk without needing to build thousands of real directories on disk — every production
@@ -471,12 +503,13 @@ const PLAIN_WALK_DIR_LIMIT = 5000
 export async function walkPlain(
   root: string,
   limits: { fileLimit?: number; dirLimit?: number } = {},
-): Promise<string[]> {
+): Promise<WalkResult> {
   const fileLimit = limits.fileLimit ?? PLAIN_WALK_FILE_LIMIT
   const dirLimit = limits.dirLimit ?? PLAIN_WALK_DIR_LIMIT
   const out: string[] = []
   const stack = ['']
   let dirsVisited = 0
+  let cutOff = false
   while (stack.length > 0 && out.length < fileLimit && dirsVisited < dirLimit) {
     const rel = stack.pop()!
     const abs = rel === '' ? root : `${root}/${rel}`
@@ -491,10 +524,14 @@ export async function walkPlain(
       const childRel = rel === '' ? e.name : `${rel}/${e.name}`
       if (e.isDirectory()) stack.push(childRel)
       else out.push(childRel)
-      if (out.length >= fileLimit) break
+      if (out.length >= fileLimit) { cutOff = true; break }
     }
   }
-  return out
+  // `stack.length > 0` after the loop is the DIRECTORY cap's own signature: there was more to
+  // visit and the walk stopped anyway. `cutOff` catches the FILE cap even in the rare case where
+  // hitting it also happened to leave the stack empty — either way, something reachable from here
+  // was never looked at.
+  return { files: out, truncated: cutOff || stack.length > 0 }
 }
 
 /**
@@ -506,11 +543,27 @@ export async function walkPlain(
  */
 const GREP_MAX_FILE_BYTES = 1024 * 1024
 
-async function grepPlain(root: string, files: readonly string[], query: string): Promise<ContentHit[]> {
+interface GrepPlainResult {
+  hits: ContentHit[]
+  /** A file was skipped for its size, or the hit cap ended the scan before every file was read. */
+  truncated: boolean
+}
+
+/**
+ * `limit` defaults to `SEARCH_LIMIT` and is overridable ONLY for tests — see `searchTree`'s own
+ * `overrides` doc. Every production caller takes the module default.
+ */
+async function grepPlain(
+  root: string, files: readonly string[], query: string, limit: number = SEARCH_LIMIT,
+): Promise<GrepPlainResult> {
   const needle = query.toLowerCase()
   const hits: ContentHit[] = []
+  let truncated = false
   for (const rel of files) {
-    if (hits.length >= SEARCH_LIMIT) break
+    // The hit cap is checked BEFORE reading the next file, never only compared against the final
+    // count afterward — a scan that stops here has, by definition, not looked at whatever files
+    // remain, whether or not the eventual total lands exactly on `limit`.
+    if (hits.length >= limit) { truncated = true; break }
     const abs = `${root}/${rel}`
     let size: number
     try {
@@ -518,7 +571,7 @@ async function grepPlain(root: string, files: readonly string[], query: string):
     } catch {
       continue
     }
-    if (size > GREP_MAX_FILE_BYTES) continue
+    if (size > GREP_MAX_FILE_BYTES) { truncated = true; continue }
     let buf
     try {
       buf = await readFile(abs)
@@ -533,5 +586,5 @@ async function grepPlain(root: string, files: readonly string[], query: string):
       }
     }
   }
-  return hits
+  return { hits, truncated }
 }

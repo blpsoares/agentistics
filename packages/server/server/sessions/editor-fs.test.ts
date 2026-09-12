@@ -483,7 +483,7 @@ describe('searchTree', () => {
     expect(out.hits.some(h => h.kind === 'name' && h.path === 'x.txt')).toBe(true)
   })
 
-  test('a file above the plain-grep size cap is skipped, a smaller sibling still matches', async () => {
+  test('a file above the plain-grep size cap is skipped, a smaller sibling still matches — and the result is reported PARTIAL', async () => {
     const heavyDir = join(plainDir, 'heavyfile')
     mkdirSync(heavyDir)
     // Comfortably above the module's 1 MiB cap regardless of its exact value.
@@ -493,6 +493,46 @@ describe('searchTree', () => {
     const out = await searchTree(heavyDir, 'findme')
     expect(out.hits.some(h => h.kind === 'content' && h.path === 'small.txt')).toBe(true)
     expect(out.hits.some(h => h.kind === 'content' && h.path === 'big.txt')).toBe(false)
+    // A file was skipped for its size, never even opened to check for a match — the scan did not
+    // cover the whole tree, so the "complete" wording must not be shown over it.
+    expect(out.truncated).toBe(true)
+  })
+
+  test('the plain walk stopping at its file cap is reported as a PARTIAL result, not a complete one', async () => {
+    const heavyRoot = join(plainDir, 'walk-cap-dir')
+    mkdirSync(heavyRoot)
+    for (let i = 0; i < 6; i++) writeFileSync(join(heavyRoot, `f${i}.txt`), 'irrelevant\n')
+
+    // Overriding the walk's own file cap to a tiny number is what makes this reproducible without
+    // building PLAIN_WALK_FILE_LIMIT (5000) real files on disk — same arithmetic, smaller fixture.
+    const out = await searchTree(heavyRoot, 'f', { fileLimit: 3 })
+    expect(out.hits.length).toBeGreaterThan(0)
+    expect(out.truncated).toBe(true)
+  })
+
+  test('the plain grep stopping AT the hit cap is reported as PARTIAL, even when the final count lands exactly on the limit', async () => {
+    // This is the exact defect: `capHits` only sees `hits.length > limit`, so a grep that broke
+    // off internally at EXACTLY the cap (never producing anything for `capHits` to slice) read as
+    // complete. `grepLimit` overrides the module's own `SEARCH_LIMIT` so the boundary can be
+    // reproduced with a handful of files instead of 200 real ones.
+    const boundaryDir = join(plainDir, 'grep-boundary-dir')
+    mkdirSync(boundaryDir)
+    for (let i = 0; i < 5; i++) writeFileSync(join(boundaryDir, `g${i}.txt`), 'needle\n')
+
+    const out = await searchTree(boundaryDir, 'needle', { grepLimit: 2 })
+    expect(out.hits).toHaveLength(2)
+    expect(out.truncated).toBe(true)
+  })
+
+  test('a plain grep that finishes within its cap after scanning everything is reported COMPLETE', async () => {
+    const smallDir = join(plainDir, 'grep-complete-dir')
+    mkdirSync(smallDir)
+    writeFileSync(join(smallDir, 'one.txt'), 'needle\n')
+    writeFileSync(join(smallDir, 'two.txt'), 'no match here\n')
+
+    const out = await searchTree(smallDir, 'needle', { grepLimit: 200 })
+    expect(out.hits).toHaveLength(1)
+    expect(out.truncated).toBe(false)
   })
 
   test('a genuine git grep failure falls back to a plain content read instead of reporting no matches', async () => {
@@ -529,7 +569,7 @@ describe('walkPlain', () => {
     }
 
     const dirLimit = 5
-    const files = await walkPlain(heavyRoot, { dirLimit })
+    const { files, truncated } = await walkPlain(heavyRoot, { dirLimit })
 
     // The root itself is the first directory visited, leaving `dirLimit - 1` children walked —
     // deterministic regardless of `readdir`'s own ordering, since every child holds exactly one
@@ -538,6 +578,7 @@ describe('walkPlain', () => {
     // only the independent directory cap stops the walk.
     expect(files.length).toBe(dirLimit - 1)
     expect(files.length).toBeLessThan(totalDirs)
+    expect(truncated).toBe(true)
   })
 
   test('a tree smaller than the directory cap is walked completely', async () => {
@@ -548,7 +589,17 @@ describe('walkPlain', () => {
       mkdirSync(d)
       writeFileSync(join(d, 'marker.txt'), String(i))
     }
-    const files = await walkPlain(smallRoot, { dirLimit: 5 })
+    const { files, truncated } = await walkPlain(smallRoot, { dirLimit: 5 })
     expect(files).toHaveLength(3)
+    expect(truncated).toBe(false)
+  })
+
+  test('the file cap alone stops the walk and is reported truncated', async () => {
+    const manyRoot = join(root, 'manyfiles')
+    mkdirSync(manyRoot)
+    for (let i = 0; i < 6; i++) writeFileSync(join(manyRoot, `f${i}.txt`), String(i))
+    const { files, truncated } = await walkPlain(manyRoot, { fileLimit: 3 })
+    expect(files.length).toBe(3)
+    expect(truncated).toBe(true)
   })
 })
