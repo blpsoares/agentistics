@@ -19,10 +19,13 @@
  * `RepoSearchResults` does, which is what makes every sentence assertable.
  */
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  binaryText, diskVersionOf, initialSaveState, isDirty, loadStateFor, monacoOptions,
-  monacoThemeFor, nextSaveState, RepoConflictPrompt, RepoSaveStrip, RepoStaleBanner,
+  AUTOSAVE_FAILURE_LIMIT, autosaveStopped, binaryText, diskVersionOf, focusTrapTarget,
+  initialSaveState, isDirty, loadStateFor, monacoOptions, monacoThemeFor, nextSaveState,
+  RepoConflictPrompt, RepoSaveStrip, RepoStaleBanner,
   saveButtonState, saveEventFor, saveGate, saveStatus,
   type SaveEvent, type SaveState,
 } from './RepoFileEditor'
@@ -238,6 +241,52 @@ describe('the save state machine', () => {
     )
     expect(run(messy, { kind: 'loaded', mtimeMs: 7777 })).toEqual(initialSaveState(7777))
   })
+
+  test('OPENING ANOTHER FILE resets everything too — nothing of the old one may be reported', () => {
+    // A read that fails or turns out to be BINARY never dispatches `loaded`, so without this event
+    // the previous file's edit count and mtime pin survived: `onDirtyChange(true)` stayed latched and
+    // the host would warn about unsaved changes on a PNG.
+    const messy = run(
+      OPENED, { kind: 'edited' }, { kind: 'save-started' },
+      { kind: 'conflicted', diskContent: 'theirs', diskMtimeMs: 5000 },
+    )
+    const fresh = run(messy, { kind: 'reset' })
+    expect(fresh).toEqual(initialSaveState(0))
+    expect(isDirty(fresh)).toBe(false)
+    expect(fresh.phase.kind).toBe('idle')
+  })
+
+  test('consecutive save FAILURES are counted, and only a write that landed clears the count', () => {
+    let state = run(OPENED, { kind: 'edited' })
+    for (let i = 1; i <= 3; i++) {
+      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'read-only' })
+      expect(state.failedStreak).toBe(i)
+    }
+    const landed = run(state, { kind: 'save-started' }, { kind: 'saved', mtimeMs: 9 })
+    expect(landed.failedStreak).toBe(0)
+    // A conflict is a QUESTION, not a failure: it must not count toward giving up.
+    const conflicted = run(OPENED, { kind: 'edited' }, { kind: 'save-started' },
+      { kind: 'conflicted', diskContent: 'x', diskMtimeMs: 2 })
+    expect(conflicted.failedStreak).toBe(0)
+  })
+
+  test('a fresh read, and opening another file, both clear the count', () => {
+    const failing = run(
+      OPENED, { kind: 'edited' }, { kind: 'save-started' }, { kind: 'save-failed', text: 'x' },
+    )
+    expect(failing.failedStreak).toBe(1)
+    expect(run(failing, { kind: 'loaded', mtimeMs: 3 }).failedStreak).toBe(0)
+    expect(run(failing, { kind: 'reset' }).failedStreak).toBe(0)
+  })
+
+  test('TYPING does not clear the count — a refusal that cannot change is not changed by a keystroke', () => {
+    let state = run(OPENED, { kind: 'edited' })
+    for (let i = 0; i < AUTOSAVE_FAILURE_LIMIT; i++) {
+      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'read-only' })
+    }
+    expect(autosaveStopped(state)).toBe(true)
+    expect(autosaveStopped(run(state, { kind: 'edited' }, { kind: 'edited' }))).toBe(true)
+  })
 })
 
 // --- the gate ------------------------------------------------------------------------------------
@@ -268,6 +317,25 @@ describe('saveGate', () => {
 
   test('the pin a write carries is the state’s own — never a fresher one', () => {
     expect(saveGate(dirty)).toEqual({ allowed: true, mtimeMs: 1000 })
+  })
+
+  test('the two triggers differ in exactly one place: a refusal that keeps repeating', () => {
+    let state = dirty
+    for (let i = 0; i < AUTOSAVE_FAILURE_LIMIT; i++) {
+      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'read-only' })
+    }
+    // AUTOSAVE gives up — it would otherwise PUT every 1.5 s for as long as the tab is open, and the
+    // error it keeps replacing with `Saving…` is the one thing the reader needs to be able to read.
+    expect(saveGate(state, 'auto')).toEqual({ allowed: false, why: 'autosave-stopped' })
+    // The PERSON is never locked out: a file that becomes writable again must be savable without
+    // reopening the tab.
+    expect(saveGate(state, 'explicit')).toEqual({ allowed: true, mtimeMs: 1000 })
+    expect(saveGate(state)).toEqual({ allowed: true, mtimeMs: 1000 })
+  })
+
+  test('below the limit autosave still tries — one failure is not a permanent one', () => {
+    const once = run(dirty, { kind: 'save-started' }, { kind: 'save-failed', text: 'timeout' })
+    expect(saveGate(once, 'auto')).toEqual({ allowed: true, mtimeMs: 1000 })
   })
 })
 
@@ -354,6 +422,33 @@ describe('saveStatus', () => {
       expect(saveStatus(state, 'en').text).not.toBe(saveStatus(state, 'pt').text)
     }
   })
+
+  test('once autosave has GIVEN UP it says so, and names the way out', () => {
+    let state = dirty
+    for (let i = 0; i < AUTOSAVE_FAILURE_LIMIT; i++) {
+      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'This file is read-only.' })
+    }
+    const told = saveStatus(state, 'en', true)
+    expect(told.tone).toBe('bad')
+    expect(told.text).toContain('This file is read-only.')   // the server's own sentence survives
+    expect(told.text).toContain('Autosave')
+    expect(told.text).toContain('Save')                      // the manual retry is named
+    expect(saveStatus(state, 'pt', true).text).toContain('automático')
+  })
+
+  test('a reader with autosave OFF is never told autosave stopped — it was never running', () => {
+    let state = dirty
+    for (let i = 0; i < AUTOSAVE_FAILURE_LIMIT; i++) {
+      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'This file is read-only.' })
+    }
+    expect(saveStatus(state, 'en', false).text).toBe('This file is read-only.')
+    expect(saveStatus(state, 'en').text).toBe('This file is read-only.')
+  })
+
+  test('a single failure says nothing about autosave — it has not given up', () => {
+    const once = run(dirty, { kind: 'save-started' }, { kind: 'save-failed', text: 'Timed out.' })
+    expect(saveStatus(once, 'en', true).text).toBe('Timed out.')
+  })
 })
 
 describe('saveButtonState', () => {
@@ -375,6 +470,14 @@ describe('saveButtonState', () => {
     expect(titles.every(t => t.length > 0)).toBe(true)
     expect([OPENED, saving, conflicted].map(s => saveButtonState(s, 'en', false).enabled))
       .toEqual([false, false, false])
+  })
+
+  test('a save that keeps failing keeps the button LIVE — the manual retry is the way back', () => {
+    let state = dirty
+    for (let i = 0; i < AUTOSAVE_FAILURE_LIMIT; i++) {
+      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'read-only' })
+    }
+    expect(saveButtonState(state, 'en', false).enabled).toBe(true)
   })
 
   test('a STALE pin keeps the button live — pressing it re-asks the question', () => {
@@ -440,9 +543,13 @@ const DIRTY = run(OPENED, { kind: 'edited' })
 const SAVING = run(DIRTY, { kind: 'save-started' })
 const CONFLICTED = run(SAVING, { kind: 'conflicted', diskContent: 'theirs', diskMtimeMs: 5000 })
 
-function strip(state: SaveState, lang: 'pt' | 'en' = 'en', isMobile = false): string {
+function strip(
+  state: SaveState, lang: 'pt' | 'en' = 'en', isMobile = false, autosave = false,
+): string {
   return renderToStaticMarkup(
-    <RepoSaveStrip state={state} lang={lang} isMobile={isMobile} onSave={noop} />,
+    <RepoSaveStrip
+      state={state} lang={lang} isMobile={isMobile} autosave={autosave} onSave={noop}
+    />,
   )
 }
 
@@ -485,6 +592,15 @@ describe('the save strip', () => {
       expect(strip(state, 'en')).not.toBe(strip(state, 'pt'))
     }
   })
+
+  test('a stopped autosave is SAID on the strip, so it never merely looks like it is still trying', () => {
+    let state = DIRTY
+    for (let i = 0; i < AUTOSAVE_FAILURE_LIMIT; i++) {
+      state = run(state, { kind: 'save-started' }, { kind: 'save-failed', text: 'read-only' })
+    }
+    expect(strip(state, 'en', false, true)).toContain('Autosave')
+    expect(strip(state, 'en', false, false)).not.toContain('Autosave')
+  })
 })
 
 describe('the stale banner', () => {
@@ -513,6 +629,17 @@ describe('the stale banner', () => {
   test('44px targets on a phone', () => {
     expect(banner(true, 'en', true)).toContain('min-height:44px')
     expect(banner(true, 'en', false)).not.toContain('min-height:44px')
+  })
+
+  test('ONE live region while stale — the strip is it, so the same fact is not announced twice', () => {
+    // The strip is always there and already carries "Not saved — this file changed on disk."; the
+    // banner says the same thing in more words and adds the two buttons. Two `role="status"` regions
+    // mounted at once is one fact read out twice, in two wordings.
+    const stale = run(CONFLICTED, { kind: 'dismiss-conflict' })
+    const both = strip(stale) + banner(true)
+    expect((both.match(/role="status"/g) ?? []).length).toBe(1)
+    expect(banner(true)).not.toContain('role="status"')
+    expect(strip(stale)).toContain('role="status"')
   })
 })
 
@@ -573,6 +700,44 @@ describe('the conflict question', () => {
   test('localized, and the two languages differ', () => {
     expect(prompt('en')).not.toBe(prompt('pt'))
   })
+
+  test('a dialog claiming to be MODAL contains focus: it can hold it itself', () => {
+    // `aria-modal="true"` promises that nothing behind the dialog is reachable. Monaco is behind it
+    // and is keyboard-reachable by construction, so the dialog takes focus on open (the CONTAINER,
+    // not an answer — no answer may be pre-selected) and Tab is wrapped inside it.
+    const html = prompt()
+    expect(html).toContain('aria-modal="true"')
+    expect(html).toContain('tabindex="-1"')
+    expect(html).not.toContain('autofocus')
+  })
+})
+
+describe('focusTrapTarget — the Tab wrap a modal dialog owes its keyboard users', () => {
+  test('Tab past the last control returns to the first, and back past the first to the last', () => {
+    expect(focusTrapTarget(3, 2, false)).toBe(0)
+    expect(focusTrapTarget(3, 0, true)).toBe(2)
+  })
+
+  test('it steps one at a time in between', () => {
+    expect(focusTrapTarget(3, 0, false)).toBe(1)
+    expect(focusTrapTarget(3, 1, false)).toBe(2)
+    expect(focusTrapTarget(3, 2, true)).toBe(1)
+  })
+
+  test('from the container itself — focus nowhere in particular — Tab enters at the right end', () => {
+    expect(focusTrapTarget(3, -1, false)).toBe(0)
+    expect(focusTrapTarget(3, -1, true)).toBe(2)
+  })
+
+  test('a dialog with nothing focusable in it traps nothing, rather than focusing index 0', () => {
+    expect(focusTrapTarget(0, -1, false)).toBeNull()
+    expect(focusTrapTarget(0, 0, true)).toBeNull()
+  })
+
+  test('one control keeps the focus it has', () => {
+    expect(focusTrapTarget(1, 0, false)).toBe(0)
+    expect(focusTrapTarget(1, 0, true)).toBe(0)
+  })
 })
 
 // --- THE GUARANTEE, against a fake disk that behaves exactly like the server ----------------------
@@ -585,6 +750,12 @@ describe('the conflict question', () => {
  */
 function fakeDisk(content: string, mtimeMs: number) {
   const disk = { content, mtimeMs }
+  /**
+   * A refusal that has NOTHING to do with the pin — a read-only file, a path that left the session's
+   * folder, a `not-a-file`. It is the case no retry can resolve, which is what the autosave loop has
+   * to be bounded against.
+   */
+  let refusal: WriteFileResult | null = null
   return {
     disk,
     /** Somebody else — an agent, a terminal — writes to the file. */
@@ -592,7 +763,10 @@ function fakeDisk(content: string, mtimeMs: number) {
       disk.content = next
       disk.mtimeMs += 1000
     },
+    refusesEveryWrite(because: WriteFileResult) { refusal = because },
+    acceptsWritesAgain() { refusal = null },
     write(pin: number, next: string): WriteFileResult {
+      if (refusal !== null) return refusal
       if (pin !== disk.mtimeMs) {
         return {
           ok: false, failure: 'refused', status: 409, reason: 'conflict',
@@ -615,12 +789,23 @@ function driver(initialContent: string, initialMtime: number) {
   const fake = fakeDisk(initialContent, initialMtime)
   let state = initialSaveState(initialMtime)
   let buffer = initialContent
+  /** `editorRef.current !== null && !writingRef.current` — the two guards `writeNow` opens with. */
+  let writable = true
   const attempts: number[] = []
 
-  const write = (pin: number) => {
+  /**
+   * `writeNow`, with the ordering the guarantee rests on: the GUARD first, and only then the pin move
+   * the caller asked for (`keep-mine`). Dispatching that before knowing the write goes out is how the
+   * component would end up pinned to the disk mtime with a dirty buffer and NO open question — the
+   * one state in which the next save, autosave included, silently overwrites somebody else's change.
+   */
+  const write = (pin: number, before: SaveEvent | null = null): boolean => {
+    if (!writable) return false
+    if (before !== null) state = nextSaveState(state, before)
     attempts.push(pin)
     state = nextSaveState(state, { kind: 'save-started' })
     state = nextSaveState(state, saveEventFor(fake.write(pin, buffer), 'en'))
+    return true
   }
 
   return {
@@ -632,8 +817,10 @@ function driver(initialContent: string, initialMtime: number) {
       buffer = text
       state = nextSaveState(state, { kind: 'edited' })
     },
+    /** The editor is gone (unmounted) or a write is already out: `writeNow` returns without writing. */
+    detachEditor() { writable = false },
     save(trigger: 'explicit' | 'auto') {
-      const gate = saveGate(state)
+      const gate = saveGate(state, trigger)
       if (!gate.allowed) {
         if (gate.why === 'stale' && trigger === 'explicit') {
           state = nextSaveState(state, { kind: 'prompt-conflict' })
@@ -645,8 +832,7 @@ function driver(initialContent: string, initialMtime: number) {
     resaveOverDisk() {
       const version = diskVersionOf(state.phase)
       if (version === null) return
-      state = nextSaveState(state, { kind: 'keep-mine' })
-      write(version.diskMtimeMs)
+      write(version.diskMtimeMs, { kind: 'keep-mine' })
     },
     discardAndReload() {
       const version = diskVersionOf(state.phase)
@@ -777,5 +963,152 @@ describe('a save never silently overwrites somebody else’s change', () => {
     for (let i = 0; i < 10; i++) { d.save('auto'); d.save('explicit') }
     expect(d.attempts).toEqual([])
     expect(d.fake.disk.mtimeMs).toBe(1000)
+  })
+
+  test('the whole round trip: save over it, the agent writes AGAIN, and the next save still asks', () => {
+    const d = driver('one\n', 1000)
+    d.type('mine\n')
+    d.fake.writtenByAnother('theirs\n')
+    d.save('explicit')
+    d.resaveOverDisk()
+    expect(d.fake.disk.content).toBe('mine\n')            // the person's deliberate overwrite landed
+    expect(isDirty(d.state)).toBe(false)
+
+    // A resolved conflict does not buy a free pass for the NEXT one: the agent writes again, on top
+    // of the version that was just saved, and the following save is refused exactly as the first was.
+    d.fake.writtenByAnother('theirs again\n')
+    d.type('mine again\n')
+    d.save('explicit')
+    expect(d.fake.disk.content).toBe('theirs again\n')     // nothing written
+    expect(d.state.phase.kind).toBe('conflict')
+    expect(diskVersionOf(d.state.phase)?.diskContent).toBe('theirs again\n')
+
+    // …and the person's second deliberate overwrite lands on the version they were shown.
+    d.resaveOverDisk()
+    expect(d.fake.disk.content).toBe('mine again\n')
+    expect(d.state.phase.kind).toBe('saved')
+    expect(d.state.mtimeMs).toBe(d.fake.disk.mtimeMs)
+  })
+
+  test('"save over it" that cannot write moves NOTHING — the question stays open', () => {
+    // The silent-clobber state is: pinned to the disk mtime, buffer dirty, no open question. It is
+    // reachable the moment `keep-mine` is dispatched by a path that then fails to write — so the pin
+    // may only ever move together with the write that earns it.
+    const d = driver('one\n', 1000)
+    d.type('mine\n')
+    d.fake.writtenByAnother('theirs\n')
+    d.save('explicit')
+    expect(d.state.phase.kind).toBe('conflict')
+    const pinned = d.state.mtimeMs
+
+    d.detachEditor()
+    d.resaveOverDisk()
+
+    expect(d.attempts.length).toBe(1)                      // nothing was attempted
+    expect(d.state.mtimeMs).toBe(pinned)                   // the pin did not move
+    expect(d.state.phase.kind).toBe('conflict')            // the question is still being asked
+    expect(diskVersionOf(d.state.phase)?.diskContent).toBe('theirs\n')
+    expect(isDirty(d.state)).toBe(true)
+    expect(d.fake.disk.content).toBe('theirs\n')
+
+    // And the blind overwrite is still impossible from every automatic path.
+    for (let i = 0; i < 20; i++) d.save('auto')
+    expect(d.attempts.length).toBe(1)
+    expect(d.fake.disk.content).toBe('theirs\n')
+  })
+})
+
+describe('autosave gives up instead of retrying a refusal that cannot change', () => {
+  const READ_ONLY: WriteFileResult = {
+    ok: false, failure: 'refused', status: 403, reason: 'not-a-file',
+    message: 'This file cannot be written.',
+  }
+
+  test('20 autosave ticks over a save-failed attempt a BOUNDED number of writes', () => {
+    const d = driver('one\n', 1000)
+    d.fake.refusesEveryWrite(READ_ONLY)
+    d.type('mine\n')
+
+    for (let i = 0; i < 20; i++) d.save('auto')
+
+    expect(d.attempts.length).toBe(AUTOSAVE_FAILURE_LIMIT)
+    expect(d.state.phase.kind).toBe('failed')
+    expect(autosaveStopped(d.state)).toBe(true)
+    expect(saveGate(d.state, 'auto')).toEqual({ allowed: false, why: 'autosave-stopped' })
+  })
+
+  test('typing between the ticks does not re-arm it — the PUT storm is bounded either way', () => {
+    const d = driver('one\n', 1000)
+    d.fake.refusesEveryWrite(READ_ONLY)
+    for (let i = 0; i < 20; i++) { d.type(`mine ${i}\n`); d.save('auto') }
+    expect(d.attempts.length).toBe(AUTOSAVE_FAILURE_LIMIT)
+  })
+
+  test('a MANUAL save still works afterwards, and a file that becomes writable again is saved', () => {
+    const d = driver('one\n', 1000)
+    d.fake.refusesEveryWrite(READ_ONLY)
+    d.type('mine\n')
+    for (let i = 0; i < 20; i++) d.save('auto')
+    const gaveUp = d.attempts.length
+
+    d.save('explicit')                                     // the person presses Save anyway
+    expect(d.attempts.length).toBe(gaveUp + 1)
+    expect(d.state.phase.kind).toBe('failed')
+
+    d.fake.acceptsWritesAgain()                            // the file becomes writable again
+    d.save('explicit')
+    expect(d.fake.disk.content).toBe('mine\n')
+    expect(isDirty(d.state)).toBe(false)
+    expect(autosaveStopped(d.state)).toBe(false)           // …and autosave is armed again
+
+    d.type('mine once more\n')
+    d.save('auto')
+    expect(d.fake.disk.content).toBe('mine once more\n')
+  })
+
+  test('a CONFLICT never counts toward giving up — that question is still a person’s to answer', () => {
+    const d = driver('one\n', 1000)
+    d.type('mine\n')
+    d.fake.writtenByAnother('theirs\n')
+    d.save('auto')
+    expect(autosaveStopped(d.state)).toBe(false)
+    expect(saveGate(d.state, 'auto')).toEqual({ allowed: false, why: 'conflict-open' })
+  })
+})
+
+// --- the wiring no render can reach, pinned over the module's own source --------------------------
+
+/**
+ * Three facts live in the React wiring rather than in a pure function, and this repo has no jsdom to
+ * exercise them (`ConnectionCard.test.tsx`'s note). Greps over the module's own source are what the
+ * repo already does where a rule cannot otherwise be held (`backup-plan.test.ts`,
+ * `shell-isolation.test.ts`): they fail the build when the ordering is undone in a refactor, which
+ * is the whole job here.
+ */
+describe('the save wiring, asserted over the source', () => {
+  const src = readFileSync(join(import.meta.dir, 'RepoFileEditor.tsx'), 'utf8')
+
+  test('the PIN is moved in exactly one place: inside the write that earns it', () => {
+    // `resaveOverDisk` used to dispatch `keep-mine` and THEN call `writeNow`, whose own guards can
+    // return without writing — leaving the pin ahead of the write.
+    // `includes` rather than `not.toContain`, so a failure prints `true` instead of a 40 KB module.
+    expect(src.includes("dispatch({ kind: 'keep-mine' })")).toBe(false)
+    expect(src).toContain("writeNow(disk.diskMtimeMs, { kind: 'keep-mine' })")
+  })
+
+  test('opening another file resets the reducer before the read, whatever the read turns out to be', () => {
+    expect(src).toContain("dispatch({ kind: 'reset' })")
+  })
+
+  test('the conflict prompt keeps Escape to itself, and nothing behind it is reachable', () => {
+    // Sliced to the Escape handler's own body, and matched on the whole expression rather than the
+    // word: `stopPropagation` and `inert` both appear in this module's comments, so a bare grep for
+    // either is a test a comment can pass.
+    const onKey = src.slice(
+      src.indexOf('const onKey ='), src.indexOf("document.addEventListener('keydown'"),
+    )
+    expect(onKey).toContain('Escape')
+    expect(onKey).toContain('ev.stopPropagation()')
+    expect(src).toContain("inert={save.phase.kind === 'conflict'}")
   })
 })

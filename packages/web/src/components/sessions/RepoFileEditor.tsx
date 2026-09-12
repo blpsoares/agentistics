@@ -11,7 +11,27 @@
  *   the pin: a successful write (the server states the new mtime), adopting the disk version
  *   (`take-disk`), and a person choosing to write over it (`keep-mine`). A refusal never moves it —
  *   advancing the pin on a 409 would turn the next save into the blind overwrite this feature
- *   exists to prevent.
+ *   exists to prevent. And the pin moves only TOGETHER WITH the write that earns it: `keep-mine` is
+ *   handed to `writeNow` rather than dispatched beside it, because a pin that advanced while the
+ *   write was refused by its own guards would leave a dirty buffer pinned to the disk mtime with no
+ *   question open — the one silent clobber this file is built to make unreachable.
+ *
+ *   **THE ONE LIMIT, STATED: the comparison is an mtime, so it is only as fine as the filesystem's
+ *   clock.** `editor-fs.ts`'s `planFileWrite` compares `st.mtimeMs`, and on a mount whose mtime
+ *   granularity is coarse — **WSL2's `/mnt/c` DrvFs is exactly one, and this product's users run
+ *   WSL2** — an agent write that lands in the same tick as our read produces an IDENTICAL mtime, so
+ *   the pin still matches and that write IS overwritten, with no 409 and no prompt. Repos on ext4
+ *   (`/home/...`, where a session's worktree normally lives) have nanosecond mtimes and are not
+ *   affected. Everywhere the mtime moves at all, the guarantee above holds exactly as written. The
+ *   airtight version is a content hash carried beside the mtime, which is a change to the server's
+ *   own write contract and is deliberately NOT implemented here — a limit this product states is
+ *   worth more than a guarantee it quietly cannot keep.
+ *
+ * ONE INSTANCE IS ONE OPEN FILE, AND THE HOST MUST KEY IT BY PATH. `path`/`sessionId` changing is
+ * handled — the reducer is reset before the new read, whatever that read turns out to be, so a
+ * failed or BINARY read cannot leave the previous file's edit count latched into
+ * `onDirtyChange(true)` — but a `key` on the host's side is still what makes Monaco's own mount,
+ * scroll position and undo history belong to the file on screen. `ArtifactsAside` supplies it.
  *
  * THE STATE MACHINE IS PURE AND LIVES HERE (`nextSaveState` / `saveGate` / `saveEventFor`), the
  * same split `RepoSearchView` makes for its debounce: this repo has no jsdom and no
@@ -28,6 +48,15 @@
  * every second and a half) and a banner keeps both resolving actions one press away. An explicit
  * Ctrl+S while stale re-asks the question instead of writing.
  *
+ * AUTOSAVE GIVES UP, AND SAYS SO. A refusal that cannot change — a read-only file, a path that left
+ * the session's folder, `not-a-file` — is the same answer however many times it is asked, so after
+ * `AUTOSAVE_FAILURE_LIMIT` consecutive failures the automatic path stops: otherwise it is a `PUT`
+ * every 1.5 s for as long as the tab is open, and the status line flickers `Saving…` over the very
+ * sentence the reader needs to read. The MANUAL save is deliberately left open (a file that becomes
+ * writable again must be savable without reopening the tab), the strip says autosave has stopped
+ * rather than letting it look like it is still trying, and only a write that LANDED — or a fresh read
+ * — clears the count: a keystroke is no evidence that a refusal has changed.
+ *
  * FIVE FACTS, FIVE SENTENCES — the rule this product applies to harness capabilities, applied to a
  * file: still loading, a read that was refused, a BINARY file (never opened as text), a save that
  * failed, and a conflict. Each has its own wording; none of them is a shared empty box, and the
@@ -41,7 +70,10 @@
  * test would notice.
  */
 
-import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
+import {
+  useEffect, useReducer, useRef, useState,
+  type KeyboardEvent as ReactKeyboardEvent, type ReactNode,
+} from 'react'
 import { AlertTriangle, Check, File, Loader, RotateCcw, Save } from 'lucide-react'
 import type * as Monaco from 'monaco-editor'
 import { languageForPath } from '../../lib/monacoLanguage'
@@ -130,12 +162,26 @@ export interface SaveState {
    * be the one lie a dirty dot is there to prevent.
    */
   inFlightSeq: number | null
+  /**
+   * How many writes in a row have been REFUSED for a reason that is not a conflict. It is what
+   * bounds autosave: a read-only file answers the same way forever, and an automatic path that keeps
+   * asking spends a request every debounce window and makes its own error unreadable. Only a write
+   * that landed, or a fresh read, clears it — see `autosaveStopped`.
+   */
+  failedStreak: number
   phase: SavePhase
 }
 
 export type SaveEvent =
   /** The file was (re-)read: a fresh baseline, nothing unsaved, no phase. */
   | { kind: 'loaded'; mtimeMs: number }
+  /**
+   * A DIFFERENT file is being opened (or the same path in another session). Nothing of the previous
+   * one may survive into it — not the edit count, not the pin, not an open question — because a read
+   * that FAILS or turns out to be binary never dispatches `loaded`, and the leftovers would report a
+   * PNG as having unsaved changes.
+   */
+  | { kind: 'reset' }
   | { kind: 'edited' }
   | { kind: 'save-started' }
   | { kind: 'saved'; mtimeMs: number }
@@ -152,7 +198,9 @@ export type SaveEvent =
   | { kind: 'notice-cleared' }
 
 export function initialSaveState(mtimeMs: number): SaveState {
-  return { mtimeMs, editSeq: 0, savedSeq: 0, inFlightSeq: null, phase: { kind: 'idle' } }
+  return {
+    mtimeMs, editSeq: 0, savedSeq: 0, inFlightSeq: null, failedStreak: 0, phase: { kind: 'idle' },
+  }
 }
 
 export function isDirty(state: SaveState): boolean {
@@ -183,18 +231,27 @@ export function nextSaveState(state: SaveState, event: SaveEvent): SaveState {
     case 'loaded':
       return initialSaveState(event.mtimeMs)
 
+    // A pin of 0 can match no real file, and the buffer is clean, so nothing can be written from
+    // here: the next `loaded` supplies the real baseline, and a read that never arrives at one
+    // leaves a state that claims nothing.
+    case 'reset':
+      return initialSaveState(0)
+
     case 'edited':
       return { ...state, editSeq: state.editSeq + 1, phase: phaseAfterEdit(state.phase) }
 
     case 'save-started':
       return { ...state, inFlightSeq: state.editSeq, phase: { kind: 'saving' } }
 
+    // A write that LANDED is the only evidence that whatever was refusing them has stopped, so it is
+    // what re-arms autosave.
     case 'saved':
       return {
         ...state,
         mtimeMs: event.mtimeMs,
         savedSeq: state.inFlightSeq ?? state.savedSeq,
         inFlightSeq: null,
+        failedStreak: 0,
         phase: { kind: 'saved' },
       }
 
@@ -206,8 +263,15 @@ export function nextSaveState(state: SaveState, event: SaveEvent): SaveState {
         phase: { kind: 'conflict', diskContent: event.diskContent, diskMtimeMs: event.diskMtimeMs },
       }
 
+    // A CONFLICT is not counted here: it is a question waiting on a person, and the gate already
+    // refuses every automatic write while it is open. Only a refusal nobody was asked about counts.
     case 'save-failed':
-      return { ...state, inFlightSeq: null, phase: { kind: 'failed', text: event.text } }
+      return {
+        ...state,
+        inFlightSeq: null,
+        failedStreak: state.failedStreak + 1,
+        phase: { kind: 'failed', text: event.text },
+      }
 
     case 'dismiss-conflict':
       return state.phase.kind === 'conflict'
@@ -244,19 +308,40 @@ export function nextSaveState(state: SaveState, event: SaveEvent): SaveState {
 }
 
 /**
+ * How many consecutive refusals autosave treats as an answer rather than as a hiccup. Three: a blip
+ * recovers inside it, and a permanent refusal costs three requests instead of one every 1.5 s for as
+ * long as the file is open.
+ */
+export const AUTOSAVE_FAILURE_LIMIT = 3
+
+/**
+ * Has the AUTOMATIC path given up? It is the one rule that is about the trigger rather than about
+ * the buffer, and it is deliberately not a rule about the person: the Save button stays live, which
+ * is how a file that becomes writable again is saved without reopening the tab.
+ */
+export function autosaveStopped(state: SaveState): boolean {
+  return state.failedStreak >= AUTOSAVE_FAILURE_LIMIT
+}
+
+/** Who is asking. The only difference it makes is `autosave-stopped`; everything else is shared. */
+export type SaveTrigger = 'explicit' | 'auto'
+
+/**
  * May a write be attempted right now, and pinned to what? The ONE gate both Ctrl+S and the autosave
  * timer go through, which is what makes "autosave cannot resolve a conflict" structural rather than
- * a thing each caller remembers.
+ * a thing each caller remembers — and, since autosave's own giving-up lives here too, what makes the
+ * two triggers impossible to wire up with different rules.
  */
 export type SaveGate =
   | { allowed: true; mtimeMs: number }
-  | { allowed: false; why: 'clean' | 'in-flight' | 'conflict-open' | 'stale' }
+  | { allowed: false; why: 'clean' | 'in-flight' | 'conflict-open' | 'stale' | 'autosave-stopped' }
 
-export function saveGate(state: SaveState): SaveGate {
+export function saveGate(state: SaveState, trigger: SaveTrigger = 'explicit'): SaveGate {
   if (state.phase.kind === 'conflict') return { allowed: false, why: 'conflict-open' }
   if (state.phase.kind === 'stale') return { allowed: false, why: 'stale' }
   if (state.phase.kind === 'saving') return { allowed: false, why: 'in-flight' }
   if (!isDirty(state)) return { allowed: false, why: 'clean' }
+  if (trigger === 'auto' && autosaveStopped(state)) return { allowed: false, why: 'autosave-stopped' }
   return { allowed: true, mtimeMs: state.mtimeMs }
 }
 
@@ -286,8 +371,12 @@ export interface SaveStatus { text: string | null; tone: SaveTone }
  *
  * The ORDER is the point. A failure outranks "unsaved changes" (both are true; only one tells you
  * why), and a conflict outranks both — and neither of those may ever be drawn as "Saved".
+ *
+ * `autosave` is here for ONE sentence: once the automatic path has given up, a reader who trusts it
+ * has to be told, or a file that quietly stops saving itself looks exactly like one that is still
+ * trying. It is said only when autosave is actually ON — the same rule the stale banner follows.
  */
-export function saveStatus(state: SaveState, lang: RepoLang): SaveStatus {
+export function saveStatus(state: SaveState, lang: RepoLang, autosave = false): SaveStatus {
   const pt = lang === 'pt'
   switch (state.phase.kind) {
     case 'saving':
@@ -298,8 +387,13 @@ export function saveStatus(state: SaveState, lang: RepoLang): SaveStatus {
         text: pt ? 'Não salvo — o arquivo mudou no disco.' : 'Not saved — this file changed on disk.',
         tone: 'warn',
       }
-    case 'failed':
-      return { text: state.phase.text, tone: 'bad' }
+    case 'failed': {
+      if (!autosave || !autosaveStopped(state)) return { text: state.phase.text, tone: 'bad' }
+      const gaveUp = pt
+        ? ' O salvamento automático parou de tentar — use Salvar para tentar de novo.'
+        : ' Autosave has stopped trying — press Save to try again.'
+      return { text: `${state.phase.text}${gaveUp}`, tone: 'bad' }
+    }
     default:
       if (isDirty(state)) return { text: pt ? 'Não salvo' : 'Unsaved changes', tone: 'dim' }
       return state.phase.kind === 'saved'
@@ -320,7 +414,9 @@ export function saveButtonState(state: SaveState, lang: RepoLang, isMobile: bool
   title: string
 } {
   const pt = lang === 'pt'
-  const gate = saveGate(state)
+  // The button IS the explicit trigger, and asking the gate as anything else would let autosave's own
+  // giving-up disable the one control that is supposed to survive it.
+  const gate = saveGate(state, 'explicit')
   if (gate.allowed) {
     const plain = pt ? 'Salvar' : 'Save'
     return { enabled: true, title: isMobile ? plain : `${plain} (Ctrl+S)` }
@@ -348,6 +444,13 @@ export function saveButtonState(state: SaveState, lang: RepoLang, isMobile: bool
         title: pt
           ? 'O arquivo mudou no disco — toque para escolher o que fazer.'
           : 'This file changed on disk — press to choose what to do.',
+      }
+    // Unreachable from `'explicit'` above, and answered rather than left to a `default`: giving up is
+    // the AUTOMATIC path's decision, and the one thing still worth doing by hand is trying again.
+    case 'autosave-stopped':
+      return {
+        enabled: true,
+        title: pt ? 'Tentar salvar de novo' : 'Try saving again',
       }
   }
 }
@@ -411,6 +514,16 @@ const AUTOSAVE_DEBOUNCE_MS = 1500
 /** The "Saved" notice is an acknowledgement, not a record; it goes on its own. */
 const SAVED_NOTICE_MS = 1500
 
+/**
+ * Which file a read belongs to. ONE function, used by the render and by the effect that stores the
+ * result: two hand-written copies of the same template literal is one typo away from a key that
+ * never matches itself, which presents as an editor that never mounts at all. `\n` cannot occur in a
+ * session id, so the two halves cannot run together.
+ */
+function fileKeyOf(sessionId: string, path: string): string {
+  return `${sessionId}\n${path}`
+}
+
 function readThemeAttr(): string | null {
   return typeof document === 'undefined' ? null : document.documentElement.getAttribute('data-theme')
 }
@@ -420,7 +533,20 @@ export function RepoFileEditor({
 }: RepoFileEditorProps) {
   const isMobile = useIsMobile()
   const pt = lang === 'pt'
-  const [load, setLoad] = useState<LoadState>({ kind: 'loading' })
+  /**
+   * The read AND the file it belongs to, in one piece of state.
+   *
+   * A path change must never be observable as "the previous file, still ready": the mount effect
+   * below would then create a model out of the OLD file's text under the NEW path, one render before
+   * the new read replaces it. Deriving `load` from the pair makes that unobservable rather than
+   * merely brief — and the host is expected to key this component by path anyway (see the header),
+   * which is exactly the kind of unstated dependency this removes.
+   */
+  const fileKey = fileKeyOf(sessionId, path)
+  const [read, setRead] = useState<{ key: string; state: LoadState }>(
+    { key: fileKey, state: { kind: 'loading' } },
+  )
+  const load: LoadState = read.key === fileKey ? read.state : { kind: 'loading' }
   const [save, dispatch] = useReducer(nextSaveState, initialSaveState(0))
   /**
    * The theme is read off `<html data-theme>`, the one place `App.tsx` writes it, and followed with
@@ -452,7 +578,7 @@ export function RepoFileEditor({
   const argsRef = useRef({ sessionId, path, lang: lang as RepoLang })
   argsRef.current = { sessionId, path, lang }
   const dirtyRef = useRef(false)
-  const requestSaveRef = useRef<(trigger: 'explicit' | 'auto') => void>(() => {})
+  const requestSaveRef = useRef<(trigger: SaveTrigger) => void>(() => {})
   const options = monacoOptions({ isMobile, theme: monacoThemeFor(themeAttr) })
   const optionsRef = useRef(options)
   optionsRef.current = options
@@ -465,13 +591,18 @@ export function RepoFileEditor({
   // dashboard's language would silently discard an unsaved buffer.
   useEffect(() => {
     let cancelled = false
-    setLoad({ kind: 'loading' })
+    // The reset goes out BEFORE the read, and regardless of how the read turns out. Only `ready`
+    // dispatches `loaded`, so without it a failed or BINARY read left the previous file's edit count
+    // and mtime pin in place — `onDirtyChange(true)` latched, and the host warning about unsaved
+    // changes on a PNG.
+    dispatch({ kind: 'reset' })
+    setRead({ key: fileKeyOf(sessionId, path), state: { kind: 'loading' } })
     void readRepoFile(sessionId, path, argsRef.current.lang).then(res => {
       if (cancelled) return
       const next = loadStateFor(res, argsRef.current.lang)
       contentRef.current = next.kind === 'ready' ? next.content : ''
       if (next.kind === 'ready') dispatch({ kind: 'loaded', mtimeMs: next.mtimeMs })
-      setLoad(next)
+      setRead({ key: fileKeyOf(sessionId, path), state: next })
     })
     return () => { cancelled = true }
   }, [sessionId, path])
@@ -562,29 +693,45 @@ export function RepoFileEditor({
   // --- autosave ------------------------------------------------------------
   // The debounce is the effect's own cleanup: every edit produces a new state object, which restarts
   // the window. The GATE is what keeps the guarantee — a conflict or a stale pin refuses, so an
-  // automatic save can never answer a question that was asked of a person.
+  // automatic save can never answer a question that was asked of a person — and it is asked as
+  // `'auto'`, which is also what stops a permanently refused write being retried forever: without it
+  // a read-only file cost a PUT every debounce window for as long as the tab stayed open.
   useEffect(() => {
     if (!autosave) return
-    if (!saveGate(save).allowed) return
+    if (!saveGate(save, 'auto').allowed) return
     const timer = setTimeout(() => requestSaveRef.current('auto'), AUTOSAVE_DEBOUNCE_MS)
     return () => clearTimeout(timer)
   }, [autosave, save])
 
-  const writeNow = async (pin: number) => {
+  /**
+   * One write, pinned to `pin`, with `before` — the event that MOVES THE PIN — dispatched only once
+   * the write is actually going out.
+   *
+   * That ordering is the whole point of the parameter. `resaveOverDisk` used to dispatch `keep-mine`
+   * itself and then call this function, whose two guards can return without writing anything: the
+   * residue was a dirty buffer pinned to the disk mtime with no question open, i.e. the next save —
+   * autosave included — overwriting the other party's change with no prompt at all. Passing the event
+   * in makes "the pin moved but nothing was written" unreachable rather than merely unlikely.
+   *
+   * Returns whether a write was attempted, so a caller can tell a refusal from a silence.
+   */
+  const writeNow = async (pin: number, before?: SaveEvent): Promise<boolean> => {
     const editor = editorRef.current
-    if (editor === null || writingRef.current) return
+    if (editor === null || writingRef.current) return false
     writingRef.current = true
     const { sessionId: id, path: file, lang: reqLang } = argsRef.current
     const content = editor.getValue()
+    if (before !== undefined) dispatch(before)
     dispatch({ kind: 'save-started' })
     const res = await writeRepoFile(id, file, content, pin, reqLang)
     writingRef.current = false
     dispatch(saveEventFor(res, reqLang))
+    return true
   }
 
-  const requestSave = (trigger: 'explicit' | 'auto') => {
+  const requestSave = (trigger: SaveTrigger) => {
     if (writingRef.current) return
-    const gate = saveGate(saveRef.current)
+    const gate = saveGate(saveRef.current, trigger)
     if (gate.allowed) { void writeNow(gate.mtimeMs); return }
     // An explicit ask over a pin we KNOW is stale re-asks the question. An automatic one does
     // nothing at all: autosave may never be the thing that re-raises a dialog.
@@ -592,12 +739,17 @@ export function RepoFileEditor({
   }
   requestSaveRef.current = requestSave
 
-  /** "Save over it" — the person's own decision to overwrite the version that appeared. */
+  /**
+   * "Save over it" — the person's own decision to overwrite the version that appeared.
+   *
+   * The pin move travels WITH the write (see `writeNow`). When the write cannot be attempted the
+   * question is simply left open, which is the honest answer: nothing was written, so nothing about
+   * the baseline has changed.
+   */
   const resaveOverDisk = () => {
     const disk = diskVersionOf(saveRef.current.phase)
     if (disk === null) return
-    dispatch({ kind: 'keep-mine' })
-    void writeNow(disk.diskMtimeMs)
+    void writeNow(disk.diskMtimeMs, { kind: 'keep-mine' })
   }
 
   /** "Discard and reload" — their edit goes, the disk version takes its place. */
@@ -653,6 +805,7 @@ export function RepoFileEditor({
         state={save}
         lang={lang}
         isMobile={isMobile}
+        autosave={autosave}
         onSave={() => requestSave('explicit')}
       />
 
@@ -670,7 +823,15 @@ export function RepoFileEditor({
           there is no scroll chain to break out of here. `contain` is set anyway, because this is the
           panel's new scrolling region as far as the rest of the layout is concerned, and the rule
           this workspace keeps is about the region, not about who implements its scrolling. */}
-      <div ref={hostRef} style={{ flex: 1, minHeight: 0, minWidth: 0, overscrollBehavior: 'contain' }} />
+      {/* `inert` while the question is open is the other half of the prompt's `aria-modal`: Monaco is
+          a keyboard-reachable region sitting behind it, and a dialog that claims to be modal while
+          Tab walks into the editor underneath is claiming something untrue. The prompt contains Tab
+          among its own controls; this is what makes "nothing behind it" a fact. */}
+      <div
+        ref={hostRef}
+        inert={save.phase.kind === 'conflict'}
+        style={{ flex: 1, minHeight: 0, minWidth: 0, overscrollBehavior: 'contain' }}
+      />
 
       {save.phase.kind === 'conflict' && (
         <RepoConflictPrompt
@@ -701,14 +862,16 @@ const TONE_COLOR: Record<SaveTone, string> = {
   bad: 'var(--accent-red)',
 }
 
-export function RepoSaveStrip({ state, lang, isMobile, onSave }: {
+export function RepoSaveStrip({ state, lang, isMobile, autosave, onSave }: {
   state: SaveState
   lang: 'pt' | 'en'
   isMobile: boolean
+  /** Only so a stopped autosave can be SAID; the strip decides nothing about saving. */
+  autosave: boolean
   onSave: () => void
 }) {
   const pt = lang === 'pt'
-  const status = saveStatus(state, lang)
+  const status = saveStatus(state, lang, autosave)
   const button = saveButtonState(state, lang, isMobile)
   const dirty = isDirty(state)
 
@@ -777,6 +940,11 @@ export function RepoSaveStrip({ state, lang, isMobile, onSave }: {
  * Dismissing the question must not hide the fact: the pin is old, the next save will be refused,
  * and — when autosave is on — it has STOPPED, which is the one thing a reader who trusts autosave
  * has to be told rather than left to infer from a file that quietly stops saving itself.
+ *
+ * It is NOT a live region. `RepoSaveStrip`'s status line is the one this component has, it is always
+ * mounted, and while this banner is up it already carries the same fact ("Not saved — this file
+ * changed on disk"). Two `role="status"` regions appearing together announce one fact twice, in two
+ * different wordings, which is how a reader learns to stop listening to both.
  */
 export function RepoStaleBanner({ lang, isMobile, autosave, onResave, onDiscard }: {
   lang: 'pt' | 'en'
@@ -788,7 +956,6 @@ export function RepoStaleBanner({ lang, isMobile, autosave, onResave, onDiscard 
   const pt = lang === 'pt'
   return (
     <div
-      role="status"
       style={{
         display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8,
         padding: isMobile ? '8px 10px' : '6px 10px',
@@ -823,12 +990,35 @@ export function RepoStaleBanner({ lang, isMobile, autosave, onResave, onDiscard 
 }
 
 /**
+ * Which control inside a contained dialog `Tab` should reach next, given how many there are and
+ * where focus is now (`-1` = on the dialog's own container, which is where it lands on open).
+ *
+ * It is a function for the reason every other decision in this file is one: the trap itself is a DOM
+ * handler and this repo has no jsdom, so the wrap — the only part that can be wrong — is asserted
+ * here instead of believed. `null` is a real answer: a dialog with nothing focusable in it traps
+ * nothing, rather than focusing an element that does not exist.
+ */
+export function focusTrapTarget(count: number, current: number, backwards: boolean): number | null {
+  if (count <= 0) return null
+  if (current < 0) return backwards ? count - 1 : 0
+  return (current + (backwards ? -1 : 1) + count) % count
+}
+
+/**
  * The conflict itself — a QUESTION, with no default answer and no pre-selected button.
  *
  * Both resolving choices lose something, and which loss is acceptable is not a thing this code can
  * know: one overwrites whatever just landed, the other throws away what the person typed. So
  * neither is styled as the safe one, and each says what it costs on its own line. `Escape` is
- * "keep editing", the only choice that destroys nothing.
+ * "keep editing", the only choice that destroys nothing — and it is kept to THIS dialog
+ * (`stopPropagation`, the rule `ArtifactsAside`'s own popover handler already follows): the host is
+ * exactly the kind of panel that grows an Escape-to-close, and one keypress closing the panel AND
+ * unmounting the buffer the person just chose to keep is the accident that costs their edit.
+ *
+ * IT CONTAINS FOCUS, because it claims `aria-modal`. On open, focus moves to the dialog's own
+ * CONTAINER — never to an answer, which would pre-select one of two losses — Tab wraps among the
+ * dialog's controls (`focusTrapTarget`), and the editor behind it is `inert` while it is up. A modal
+ * whose Tab walks into Monaco underneath is a promise the markup does not keep.
  */
 export function RepoConflictPrompt({ path, lang, isMobile, autosave, onResave, onDiscard, onDismiss }: {
   path: string
@@ -840,13 +1030,41 @@ export function RepoConflictPrompt({ path, lang, isMobile, autosave, onResave, o
   onDismiss: () => void
 }) {
   const pt = lang === 'pt'
+  const dialogRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (typeof document === 'undefined') return
-    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') onDismiss() }
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key !== 'Escape') return
+      // This dialog answers Escape, and nothing above it gets a second go at the same keypress.
+      ev.stopPropagation()
+      onDismiss()
+    }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [onDismiss])
+
+  // Focus leaves whatever had it — Monaco, the Save button — and lands on the dialog itself, which is
+  // what makes the Tab wrap below the whole of the keyboard's reach while the question is open.
+  useEffect(() => { dialogRef.current?.focus() }, [])
+
+  const focusables = (): HTMLElement[] => {
+    const root = dialogRef.current
+    if (root === null) return []
+    return Array.from(root.querySelectorAll<HTMLElement>('button:not([disabled])'))
+  }
+
+  const onTab = (ev: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (ev.key !== 'Tab') return
+    const items = focusables()
+    const active = typeof document === 'undefined' ? null : document.activeElement
+    const target = focusTrapTarget(
+      items.length, items.indexOf(active as HTMLElement), ev.shiftKey,
+    )
+    if (target === null) return
+    ev.preventDefault()
+    items[target]?.focus()
+  }
 
   return (
     <div
@@ -858,9 +1076,14 @@ export function RepoConflictPrompt({ path, lang, isMobile, autosave, onResave, o
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={pt ? 'Este arquivo mudou no disco' : 'This file changed on disk'}
+        // The container holds focus itself so that no ANSWER has to: `tabIndex={-1}` makes it
+        // focusable without putting it in the tab order.
+        tabIndex={-1}
+        onKeyDown={onTab}
         onClick={ev => ev.stopPropagation()}
         style={{
           width: '100%', maxWidth: 420, maxHeight: '100%', overflowY: 'auto',
