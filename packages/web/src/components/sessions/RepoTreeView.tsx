@@ -41,7 +41,6 @@
  * LATEST tree rather than one a closure captured before an `await`.
  */
 
-import type { ReactNode } from 'react'
 import { AlertTriangle, ChevronDown, ChevronRight, File, Folder, FolderOpen, Loader } from 'lucide-react'
 import {
   applyChildren, applyError, flattenVisible, setLoading, toggleExpanded,
@@ -50,6 +49,7 @@ import {
 import { fetchTree, type RepoLang, type TreeListResult } from '../../lib/repoApi'
 import { repoFailureText } from '../../lib/repoErrorText'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { RepoNote } from './repoNote'
 
 export interface RepoTreeViewProps {
   sessionId: string
@@ -145,7 +145,7 @@ export function RepoTreeView({ sessionId, tree, onTreeChange, onOpenFile, lang }
 
   if (state === 'failed') {
     return (
-      <Note
+      <RepoNote
         icon={<AlertTriangle size={15} style={{ color: 'var(--accent-red)' }} />}
         text={tree.error ?? (pt ? 'Não foi possível ler esta pasta.' : 'This folder could not be read.')}
       />
@@ -154,7 +154,7 @@ export function RepoTreeView({ sessionId, tree, onTreeChange, onOpenFile, lang }
 
   if (state === 'empty') {
     return (
-      <Note
+      <RepoNote
         icon={<Folder size={15} />}
         text={pt
           ? 'Esta pasta está vazia. Arquivos ignorados pelo git não são listados.'
@@ -267,23 +267,5 @@ function Row({ row, indent, isMobile, onActivate }: {
         {row.name}
       </span>
     </button>
-  )
-}
-
-/** The one empty-region shape, so the three sentences differ only in what they SAY. */
-function Note({ text, icon }: { text: string; icon: ReactNode }) {
-  return (
-    <div style={{
-      flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-      padding: '20px 18px',
-    }}>
-      <p style={{
-        margin: 0, fontSize: 12, lineHeight: 1.6, textAlign: 'center', color: 'var(--text-tertiary)',
-        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
-      }}>
-        {icon}
-        {text}
-      </p>
-    </div>
   )
 }

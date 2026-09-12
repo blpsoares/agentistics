@@ -37,6 +37,7 @@ import { AlertTriangle, AlignLeft, ArrowLeft, File, FileSearch, Loader, Search, 
 import { searchRepo, type RepoLang, type SearchHit, type SearchResult } from '../../lib/repoApi'
 import { repoFailureText } from '../../lib/repoErrorText'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { RepoNote } from './repoNote'
 
 export interface RepoSearchViewProps {
   sessionId: string
@@ -281,7 +282,7 @@ export function RepoSearchResults({ state, query, lang, onOpenFile }: RepoSearch
       }}
     >
       {state.phase === 'idle' && (
-        <Note
+        <RepoNote
           icon={<Search size={15} />}
           text={pt
             ? 'Digite para buscar os arquivos desta sessão por nome e pelo conteúdo.'
@@ -290,7 +291,7 @@ export function RepoSearchResults({ state, query, lang, onOpenFile }: RepoSearch
       )}
 
       {state.phase === 'short' && (
-        <Note
+        <RepoNote
           icon={<Search size={15} />}
           text={pt
             ? `Digite pelo menos ${MIN_QUERY_LEN} caracteres para buscar.`
@@ -299,7 +300,7 @@ export function RepoSearchResults({ state, query, lang, onOpenFile }: RepoSearch
       )}
 
       {state.phase === 'searching' && (
-        <Note
+        <RepoNote
           icon={<Loader size={15} className="ag-working-spin" />}
           text={pt ? 'Buscando…' : 'Searching…'}
         />
@@ -307,14 +308,14 @@ export function RepoSearchResults({ state, query, lang, onOpenFile }: RepoSearch
 
       {/* A failure is NOT an empty result. The sentence is the server's own wherever it wrote one. */}
       {state.phase === 'failed' && (
-        <Note
+        <RepoNote
           icon={<AlertTriangle size={15} style={{ color: 'var(--accent-red)' }} />}
           text={state.text}
         />
       )}
 
       {state.phase === 'results' && state.hits.length === 0 && (
-        <Note
+        <RepoNote
           icon={<FileSearch size={15} />}
           text={pt
             ? `Nada corresponde a “${query}”. Arquivos ignorados pelo git não são pesquisados.`
@@ -465,24 +466,6 @@ function HitRow({ hit, isMobile, lang, onOpen }: {
         </span>
       )}
     </button>
-  )
-}
-
-/** The one empty-region shape, so the five sentences differ only in what they SAY. */
-function Note({ text, icon }: { text: string; icon: ReactNode }) {
-  return (
-    <div style={{
-      flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-      padding: '20px 18px',
-    }}>
-      <p style={{
-        margin: 0, fontSize: 12, lineHeight: 1.6, textAlign: 'center', color: 'var(--text-tertiary)',
-        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
-      }}>
-        {icon}
-        {text}
-      </p>
-    </div>
   )
 }
 
