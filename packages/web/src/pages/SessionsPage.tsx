@@ -133,11 +133,21 @@ export default function SessionsPage() {
    *
    * `editorEnabled` is the server's own answer — the capability AND the user's switch, combined by
    * `sessions/editor-gate.ts` and reported on `GET /api/team/session`. It is never re-derived here
-   * from `capabilities.localShell` plus a preference, and when it is not `true` the Repository tab
-   * is ABSENT rather than a tab that refuses. `editorAutosave` is a plain preference, loaded with
+   * from `capabilities.localShell` plus a preference, and when it is not `true` the Studio is
+   * ABSENT rather than an entry that refuses. `editorAutosave` is a plain preference, loaded with
    * the rest in `App.tsx`; absent reads as OFF for both.
+   *
+   * **`!isCentral` IS PART OF THE GATE, AND THIS IS THE ONE PLACE IT IS APPLIED.** The whole
+   * `/api/fleet` prefix is refused on a central, so every request the Studio makes is refused there
+   * — while `editor-gate.ts` carries no central term at all, so a central on a `local` profile with
+   * the preference on reports `true`. The desktop button in `App.tsx` has always spelled the term
+   * out; the two entries on this page did not, and a phone got a Studio row that could only fail.
+   * Folding it in HERE rather than at each entry is what makes that impossible to forget again: this
+   * value is the aside's `editorEnabled` prop as well, so the strip entry and the layer mount inside
+   * `ArtifactsAside` — which has no notion of a central and must not grow one — are closed by the
+   * same term.
    */
-  const editorEnabled = ctx.editorEnabled === true
+  const editorEnabled = ctx.editorEnabled === true && !isCentral
   const editorAutosave = ctx.editorAutosave
 
   /**
@@ -267,6 +277,16 @@ export default function SessionsPage() {
   const [artifactsOlder, setArtifactsOlder] = useState<string | undefined>(undefined)
   /** The conversation's turns, for the LIVE tab — the same ones the chat renders. */
   const [artifactTurns, setArtifactTurns] = useState<readonly LiveTurn[]>([])
+  /**
+   * The session wrote through commands whose paths cannot be read AT ALL, so those files are in no
+   * count anywhere.
+   *
+   * `SessionChat` has always computed it (`hasUnlistedWrites`) and for one release nothing read it:
+   * its two surfaces went with the Files tab, and a computed-and-discarded honesty flag is worse
+   * than either keeping it or deleting the producer. Re-homed beside the aside's header count, which
+   * is the thing it qualifies — see `artifactShortfall`.
+   */
+  const [artifactsUnlisted, setArtifactsUnlisted] = useState(false)
 
   /**
    * WHICH of the recorded paths are still readable files with content — the server's answer, because
@@ -278,27 +298,39 @@ export default function SessionsPage() {
    */
   const [onDisk, setOnDisk] = useState<Map<string, { bytes: number; scope: 'project' | 'temp' }>>(new Map())
   /**
+   * The route's `outside` sentence, already localized and carrying a COUNT rather than the paths.
+   *
+   * IT QUALIFIES OPENING, NOT LISTING, and a previous pass dropped it on the opposite reading. The
+   * server's own words are `N file(s) this session wrote are outside its own folder and cannot be
+   * OPENED here` (`fleet-web.ts`), and opening is still live in the aside: the gallery's produced
+   * block, and a WROTE row in the live feed whose path was dropped — which renders as plain text
+   * with nothing else to explain it, the exact report that made this sentence exist. The aside's
+   * header count is short for the same reason. So it is re-homed beside that count, VERBATIM: the
+   * server worded it and a second wording here would be a second answer to one question.
+   */
+  const [outsideNote, setOutsideNote] = useState<string | undefined>(undefined)
+  /**
    * `onDisk` is now a FILTER and nothing else — what the aside drew as a per-row size and scope went
    * with the Files and Docs tabs. The read stays because the filter does: the aside's gallery and its
    * live feed both link to paths, and a link whose only outcome is a refusal is worse than no link.
-   *
-   * The route's `outside` sentence is no longer read here, and that is a decision rather than an
-   * oversight. It said "the session also wrote files outside this folder, which cannot be LISTED" —
-   * a qualification OF THE LIST, composed in those terms by the server, and with no list left it
-   * qualifies nothing. A sentence about a list that does not exist is worse than its absence, and it
-   * cannot be reworded from here. The route is untouched, so rehoming it later costs one line.
    */
   useEffect(() => {
-    if (!selected) { setOnDisk(new Map()); return }
+    if (!selected) { setOnDisk(new Map()); setOutsideNote(undefined); return }
     let alive = true
+    // The sentence holds a count about ONE session, so it is cleared the moment the session changes
+    // — unlike `onDisk`, which is deliberately kept so the list is never empty for the length of a
+    // request. A count carried over from the previous session is a wrong claim, not a stale one.
+    setOutsideNote(undefined)
     const read = async () => {
       try {
         const r = await fetch(`/api/fleet/artifacts?id=${encodeURIComponent(selected.id)}&lang=${pt ? 'pt' : 'en'}`)
         if (!r.ok || !alive) return
         const d = await r.json() as {
           files?: { raw: string; bytes: number; scope: 'project' | 'temp' }[]
+          outside?: string
         }
         setOnDisk(new Map((d.files ?? []).map(f => [f.raw, { bytes: f.bytes, scope: f.scope }])))
+        setOutsideNote(d.outside)
       } catch { /* the list simply stays as it was */ }
     }
     void read()
@@ -348,6 +380,7 @@ export default function SessionsPage() {
     setArtifactsLoading(a.loading)
     setArtifactsUnavailable(a.unavailable)
     setArtifactsOlder(a.older)
+    setArtifactsUnlisted(a.unlisted)
     if (selected) setArtifactCount(selected.id, a.artifacts.length)
   }, [selected])
 
@@ -520,6 +553,10 @@ export default function SessionsPage() {
       loading={artifactsLoading}
       {...(artifactsUnavailable ? { unavailable: artifactsUnavailable } : {})}
       {...(artifactsOlder ? { older: artifactsOlder } : {})}
+      // WHY THE HEADER COUNT IS SHORT — the two facts, each to the surface that qualifies the
+      // claim. `outsideNote` is the server's sentence, passed through untouched.
+      unlistedWrites={artifactsUnlisted}
+      {...(outsideNote ? { outsideNote } : {})}
       turns={artifactTurns}
       // The repository explorer's gate and its autosave switch. The gate decides whether the tab
       // exists at all — see `ArtifactsAsideProps`.
@@ -1018,7 +1055,9 @@ export default function SessionsPage() {
                      machine-wide chrome and the Studio is about the SESSION you have open, which
                      only this menu has.
                      ABSENT when the gate is closed, never greyed — the same `editorEnabled` the
-                     aside reads, the server's own already-resolved answer. The `new` badge is the
+                     aside reads, the server's own already-resolved answer NARROWED BY `!isCentral`
+                     where it is declared above: the `/api/fleet` prefix is refused on a central, and
+                     this row used to be the one entry that offered the Studio there. The `new` badge is the
                      pair to the desktop button's two marks, as far as one row of a 240px menu can
                      carry: the beta caveat is on the Studio's own top bar, one tap away. */
                   ...(editorEnabled ? [{

@@ -229,3 +229,49 @@ describe('the fourth copy of the empty-region Note is gone', () => {
     expect(code('// function Note(...) used to live here')).not.toMatch(/function Note\s*\(/)
   })
 })
+
+/**
+ * THE HEADER COUNT CARRIES ITS OWN CAVEATS — the other thing in this file that can go dead silently.
+ *
+ * `N files · M new` is the only surviving statement of how many files a session wrote, and it
+ * undercounts twice over: writes whose paths cannot be read at all, and writes outside the session's
+ * folder that cannot be OPENED here. Both sentences had surfaces on the Files and Docs tabs, both
+ * lost them when those tabs went, and one of the two producers went on computing for a release with
+ * nothing reading it. `noUnusedLocals` is off in this package, so a prop that stops being rendered
+ * breaks nothing and says nothing.
+ *
+ * The wording and the ORDER live in `artifactShortfall` (`lib/sessionArtifacts.ts`), which has its
+ * own tests; what is asserted here is that this panel still spends it, and spends it in the HEADER —
+ * the one piece of chrome every tab shares, which is why it covers the gallery and the live feed too.
+ */
+describe('the two caveats on the header count are rendered, not merely received', () => {
+  it('both props are declared and destructured', () => {
+    expect(has('unlistedWrites?: boolean')).toBe(true)
+    expect(has('outsideNote?: string')).toBe(true)
+    expect(src).toMatch(/export function ArtifactsAside\(\{[\s\S]*?unlistedWrites, outsideNote,[\s\S]*?\}: ArtifactsAsideProps\)/)
+  })
+
+  it('the sentences come from `artifactShortfall`, never composed here', () => {
+    expect(has("import { artifactShortfall, type Artifact } from '../../lib/sessionArtifacts'")).toBe(true)
+    expect(has('const shortfall = artifactShortfall({')).toBe(true)
+    // The server's `outside` is passed through, not inspected or reworded.
+    expect(has('{ outside: outsideNote }')).toBe(true)
+  })
+
+  it('and they are spent INSIDE the header, after the count', () => {
+    const headerAt = src.indexOf('const header = (')
+    const countAt = src.indexOf('{artifacts.length} {pt ?')
+    const linesAt = src.indexOf('{shortfall.map(line => (')
+    expect(headerAt).toBeGreaterThan(-1)
+    expect(countAt).toBeGreaterThan(headerAt)
+    expect(linesAt).toBeGreaterThan(countAt)
+    // Inside the header element, not after it: the tab body begins at the tabs array.
+    expect(linesAt).toBeLessThan(src.indexOf('const tabs:'))
+  })
+
+  it('the scan still sees the render going away', () => {
+    expect(code('{/* {shortfall.map(line => (<p>{line}</p>))} */}'))
+      .not.toContain('{shortfall.map(line => (')
+    expect(code('// const shortfall = artifactShortfall({')).not.toContain('const shortfall =')
+  })
+})

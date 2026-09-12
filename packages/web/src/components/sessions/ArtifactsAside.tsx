@@ -45,7 +45,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { asideCache, asideKey } from '../../lib/asideCache'
 import { focusMissNotice, isFocusedRow, rowsCarry, ROW_FLASH } from '../../lib/noteFocus'
 import { Activity, BarChart3, Bot, Brain, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, ExternalLink, Eye, FileEdit, FileText, FolderTree, GitBranch, GitPullRequest, Image, LayoutGrid, Loader, PanelRightClose, Pencil, Plug, Plus, Send, Sparkles, Terminal, Trash2, Workflow, X } from 'lucide-react'
-import type { Artifact } from '../../lib/sessionArtifacts'
+import { artifactShortfall, type Artifact } from '../../lib/sessionArtifacts'
 import {
   countSkills, groupSkills, shortName, skillInvocation, type SkillEntry,
 } from '../../lib/skillGroups'
@@ -201,6 +201,20 @@ export interface ArtifactsAsideProps {
   unavailable?: string
   /** Already-localized: the conversation behind these lists is a WINDOW onto a longer one. */
   older?: string
+  /**
+   * THE COUNT IN THE HEADER IS SHORT, AND THESE TWO SAY WHY — see `artifactShortfall`.
+   *
+   * `unlistedWrites`: the session wrote through commands whose paths cannot be read at all, so
+   * those files are in NO count. The browser's own reading of turns it already has
+   * (`hasUnlistedWrites`).
+   *
+   * `outsideNote`: already localized BY THE SERVER and rendered VERBATIM — a count in a sentence,
+   * never the paths (`fleet-web.ts`'s `listSessionArtifacts`). It qualifies OPENING, which is still
+   * live here in three places: the gallery's produced block, the live feed's WROTE rows, and the
+   * header count itself. Absent draws no line, which is the ordinary case.
+   */
+  unlistedWrites?: boolean
+  outsideNote?: string
   onClose: () => void
   /**
    * The conversation's turns, for the LIVE tab.
@@ -367,6 +381,7 @@ function TabGrid({ tabs, active, pt, isMobile, anchor, onPick, onClose }: {
 
 export function ArtifactsAside({
   sessionId, cwd, lang, artifacts, loading, unavailable, older, turns, onClose,
+  unlistedWrites, outsideNote,
   tabRequest, session, onOpenTask, onTaskChanged, metrics, editorEnabled, editorAutosave,
 }: ArtifactsAsideProps) {
   const pt = lang === 'pt'
@@ -663,33 +678,60 @@ export function ArtifactsAside({
   }, [feed.length, tab])
 
   const created = artifacts.filter(a => a.kind === 'new').length
+  /**
+   * WHAT THE COUNT BESIDE IT DOES NOT COVER, and it goes HERE rather than on a tab.
+   *
+   * `N files · M new` is the only surviving statement of how many files this session wrote — the two
+   * lists that used to carry these sentences are gone — so an unqualified count is the claim that
+   * needs qualifying, and the sentence belongs against the number it is about. The header is also
+   * the one piece of chrome every tab shares, which is what makes it cover the two surfaces that
+   * still OPEN a file and can still come up short: the gallery's produced block, and a WROTE row in
+   * the live feed whose path was dropped (it renders as plain text, with nothing else to explain
+   * it).
+   *
+   * Order and wording are `artifactShortfall`'s, never composed here.
+   */
+  const shortfall = artifactShortfall({
+    ...(unlistedWrites === true ? { unlisted: true } : {}),
+    ...(outsideNote ? { outside: outsideNote } : {}),
+    lang,
+  })
 
   const header = (
     <header style={{
-      display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
+      display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0,
       padding: '10px 12px', borderBottom: '1px solid var(--border)',
     }}>
-      <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.3, color: 'var(--text-primary)' }}>
-        {pt ? 'Conteúdo' : 'Contents'}
-      </span>
-      {artifacts.length > 0 && (
-        <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-          {artifacts.length} {pt ? (artifacts.length === 1 ? 'arquivo' : 'arquivos') : (artifacts.length === 1 ? 'file' : 'files')}
-          {created > 0 && ` · ${created} ${pt ? (created === 1 ? 'novo' : 'novos') : 'new'}`}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.3, color: 'var(--text-primary)' }}>
+          {pt ? 'Conteúdo' : 'Contents'}
         </span>
-      )}
-      <button
-        onClick={onClose}
-        aria-label={pt ? 'Fechar artefatos' : 'Close artifacts'}
-        title={pt ? 'Fechar o painel' : 'Close the panel'}
-        style={{
-          marginLeft: 'auto', display: 'flex', width: 26, height: 26, borderRadius: 7,
-          alignItems: 'center', justifyContent: 'center', border: 'none',
-          background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer',
-        }}
-      >
-        <PanelRightClose size={15} />
-      </button>
+        {artifacts.length > 0 && (
+          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+            {artifacts.length} {pt ? (artifacts.length === 1 ? 'arquivo' : 'arquivos') : (artifacts.length === 1 ? 'file' : 'files')}
+            {created > 0 && ` · ${created} ${pt ? (created === 1 ? 'novo' : 'novos') : 'new'}`}
+          </span>
+        )}
+        <button
+          onClick={onClose}
+          aria-label={pt ? 'Fechar artefatos' : 'Close artifacts'}
+          title={pt ? 'Fechar o painel' : 'Close the panel'}
+          style={{
+            marginLeft: 'auto', display: 'flex', width: 26, height: 26, borderRadius: 7,
+            alignItems: 'center', justifyContent: 'center', border: 'none',
+            background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer',
+          }}
+        >
+          <PanelRightClose size={15} />
+        </button>
+      </div>
+      {shortfall.map(line => (
+        <p key={line} style={{
+          margin: 0, fontSize: 10.5, lineHeight: 1.45, color: 'var(--text-tertiary)',
+        }}>
+          {line}
+        </p>
+      ))}
     </header>
   )
 
@@ -1680,9 +1722,15 @@ export function ArtifactsAside({
         by a tab switch; inside the `open ? … : …` branch below it would be torn down by opening a
         document from the live feed, which is the one remaining path that replaces this panel's whole
         tree. Both take unsaved Monaco buffers with them, and an unsaved buffer exists in exactly one
-        place in the world. Up here, nothing below can unmount it: `Layer` hides it, `inert` takes it
-        out of the keyboard's reach, and `visibility` (never `display`) keeps it MEASURING, which is
-        the one state Monaco's `automaticLayout` cannot recover from on its own.
+        place in the world. Up here, nothing below can unmount it: `Layer` composites it away with
+        `opacity: 0`, which a descendant cannot undo from inside (opacity is not inherited — a child's
+        `opacity: 1` composites within a parent's `0` and stays invisible), and `inert` takes it out
+        of the keyboard's reach and out of the hit-testing. **`visibility` is NOT the mechanism and
+        may not become one**: it IS inherited and overridable, so an inner `visibility: visible`
+        re-shows itself through a hidden ancestor — which shipped once and painted the file tree over
+        the tab the reader had switched to (`Layer`'s own doc records the reproduction). Neither
+        `display: none` nor `content-visibility` may be used either: the layer has to keep MEASURING,
+        which is the one state Monaco's `automaticLayout` cannot recover from on its own.
       */}
       {studioMounted && (
         <Layer shown={inStudio}>

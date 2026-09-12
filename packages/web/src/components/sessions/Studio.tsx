@@ -493,7 +493,11 @@ export function StudioBar({ isMobile, lang, onExit }: {
  *
  * So the hide is `opacity: 0`, which a descendant cannot reverse (it is not inherited — it composites
  * the whole subtree), plus `pointer-events: none` for the clicks `opacity` leaves live and `inert`
- * for the keyboard and the accessibility tree. **`display: none` is the one thing this component
+ * for the keyboard, the accessibility tree AND hit-testing — `inert`, not `pointer-events`, is what
+ * makes the last of those a guarantee, because a descendant CAN set `pointer-events: auto` and
+ * become the hit target again while an inherited `inert` cannot be lifted from inside. That puts a
+ * browser-support floor under this component (`inert`: Safari 16.4, Chrome 102, Firefox 112), which
+ * is stated on the style itself. **`display: none` is the one thing this component
  * exists to avoid**: a display-less box measures ZERO, and a zero-sized Monaco is the one state its
  * `automaticLayout` then has to recover from — which is why the layer has to keep measuring while it
  * is hidden.
@@ -518,7 +522,20 @@ export function Layer({ shown, children }: { shown: boolean; children: ReactNode
       style={{
         position: 'absolute', inset: 0, minWidth: 0,
         display: 'flex', flexDirection: 'column',
-        // NOT `visibility` — see the note above. These three cannot be undone from inside.
+        // NOT `visibility` — see the note above.
+        //
+        // TWO of these three cannot be undone from inside, and they are not the two you would guess.
+        // `opacity: 0` composites the whole subtree to nothing and is not inherited, so a child's
+        // `opacity: 1` composites WITHIN it and stays invisible. `inert` IS inherited and a
+        // descendant has no way to lift it, which is what actually keeps the hidden layer out of the
+        // keyboard, the accessibility tree AND hit-testing. `pointer-events: none` is the weak leg:
+        // it is inherited but a descendant may set `pointer-events: auto` and become the hit target
+        // again, so it is a cheap first line and never the guarantee.
+        //
+        // THE FLOOR IS `inert`: Safari 16.4 (March 2023), Chrome 102, Firefox 112. On anything older
+        // the hidden layer is invisible and unfocusable only as far as `opacity` and
+        // `pointer-events` reach — a descendant that re-enables pointer events would be clickable
+        // while invisible. Stated rather than discovered.
         opacity: shown ? 1 : 0,
         pointerEvents: shown ? undefined : 'none',
       }}

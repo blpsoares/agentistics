@@ -22,15 +22,22 @@ export default function SessionsSettings() {
   // had no capability model — read as permitted, the same reading the rest of the app uses.
   const shellCapable = ctx.capabilities?.localShell !== false
 
-  // The repository explorer's own switch, shaped exactly like the shell's above and read the same
-  // way. It rides the SAME capability — `sessions/editor-gate.ts` records why there is no separate
-  // `localEditor` flag — but it is a SEPARATE preference: wanting a shell is not the same ask as
-  // wanting a read/write file editor.
+  // The Studio's own switch, shaped exactly like the shell's above and read the same way. It rides
+  // the SAME capability — `sessions/editor-gate.ts` records why there is no separate `localEditor`
+  // flag — but it is a SEPARATE preference: wanting a shell is not the same ask as wanting a
+  // read/write file editor.
+  //
+  // THE USER-FACING NAME IS "STUDIO" ("Agentistics Studio" where a longer form reads naturally), and
+  // this screen is the only place the feature can be turned on — so its copy is the one that must
+  // not name a surface the reader will go looking for and not find. It said "the Repository tab"
+  // long after the tab became a MODE that takes the whole aside. The internal names stay
+  // repository-shaped on purpose (`repoApi.ts`, `/api/fleet/tree*`, `editorEnabled`): those describe
+  // a repository, which is what they read.
   const [editorEnabled, setEditorEnabled] = useState<boolean | null>(null)
   const [editorSaving, setEditorSaving] = useState(false)
   const editorCapable = ctx.capabilities?.localShell !== false
   // Autosave is a CONVENIENCE, not a gate: no capability guards it, because it can only ever
-  // narrow what `editorEnabled` already gates. It still has to reach the Repository tab without a
+  // narrow what `editorEnabled` already gates. It still has to reach the Studio without a
   // reload, so the change is MIRRORED into the app context — but the switch is RENDERED from this
   // page's own read, `boolean | null` exactly like `shellEnabled` above and for a sharper version of
   // the same reason. `ctx.editorAutosave` is a plain `boolean` that App seeds `false` and only
@@ -101,7 +108,7 @@ export default function SessionsSettings() {
     const next = !editorAutosave
     setAutosaveSaving(true)
     setEditorAutosave(next)
-    ctx.setEditorAutosave(next)  // keeps the Repository tab in sync, no reload needed
+    ctx.setEditorAutosave(next)  // keeps the Studio in sync, no reload needed
     fetch('/api/preferences', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -203,14 +210,15 @@ export default function SessionsSettings() {
 
       <Divider />
 
-      <SectionHeader label={pt ? 'Explorador de repositório' : 'Repository explorer'} />
+      {/* A PRODUCT NAME, so it is not localized — the same word in both languages. */}
+      <SectionHeader label="Agentistics Studio" />
 
       <PrefRow
-        label={pt ? 'Habilitar o explorador de repositório' : 'Enable the repository explorer'}
+        label={pt ? 'Habilitar o Studio' : 'Enable the Studio'}
         sub={editorCapable
           ? (pt
-            ? 'Desligado por padrão. Ligar mostra a aba "Repositório" com a árvore de arquivos e um editor de verdade, direto no painel.'
-            : 'Off by default. Turning it on shows the "Repository" tab with the file tree and a real editor, from the dashboard.')
+            ? 'Desligado por padrão. Ligar dá a cada sessão um botão "Studio": a árvore de arquivos e um editor de verdade, ocupando o painel lateral inteiro.'
+            : 'Off by default. Turning it on gives each session a "Studio" button: the file tree and a real editor, taking over the whole side panel.')
           : (pt
             ? 'Indisponível: o perfil de exposição desta instância não permite ler nem escrever arquivos do host — o interruptor só pode restringir, nunca reabrir.'
             : 'Unavailable: this instance’s exposure profile does not allow reading or writing host files — the switch can only narrow, never re-open.')}
@@ -245,11 +253,11 @@ export default function SessionsSettings() {
             : 'This instance’s profile already denies host file access; nothing here can re-open it.')
           : editorEnabled
             ? (pt
-              ? 'Seu perfil permite e você está com isso LIGADO. Cada sessão ganha uma aba "Repositório" no painel lateral, com leitura e escrita na pasta da própria sessão.'
-              : 'Your profile allows this and you have it ON. Each session gets a "Repository" tab in the side panel, reading and writing inside that session’s own folder.')
+              ? 'Seu perfil permite e você está com isso LIGADO. Cada sessão ganha o Studio no painel lateral, com leitura e escrita na pasta da própria sessão.'
+              : 'Your profile allows this and you have it ON. Each session gets the Studio in the side panel, reading and writing inside that session’s own folder.')
             : (pt
-              ? 'Seu perfil permite isso, e você está com isso DESLIGADO. Com o explorador desligado a aba nem aparece, e /api/fleet/tree* responde 403 — o servidor é quem decide.'
-              : 'Your profile allows this, and you have it OFF. With the explorer off the tab is absent entirely, and /api/fleet/tree* answers 403 — the server is what decides.')}
+              ? 'Seu perfil permite isso, e você está com isso DESLIGADO. Com o Studio desligado nem o botão aparece, e /api/fleet/tree* responde 403 — o servidor é quem decide.'
+              : 'Your profile allows this, and you have it OFF. With the Studio off not even the button appears, and /api/fleet/tree* answers 403 — the server is what decides.')}
       </div>
 
       <Divider />

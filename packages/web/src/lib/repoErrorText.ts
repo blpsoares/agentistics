@@ -29,9 +29,13 @@ import type { RepoFailure, RepoLang, RepoUnreachable } from './repoApi'
 
 /** The route-level gates. They carry a code and no sentence, so the sentence is ours. */
 const GATE_TEXT: Record<string, { en: string; pt: string }> = {
+  // "Studio" and not "repository explorer": this sentence NAMES the screen that turns the feature
+  // on, and that screen's own section is called Agentistics Studio. A refusal that sends a reader
+  // to Settings → Sessions to look for something that is not written there is a dead end with a
+  // direction on it.
   editor_disabled: {
-    en: 'The repository explorer is off on this machine. Turn it on in Settings → Sessions.',
-    pt: 'O explorador de repositório está desligado nesta máquina. Ligue em Configurações → Sessões.',
+    en: 'The Studio is off on this machine. Turn it on in Settings → Sessions.',
+    pt: 'O Studio está desligado nesta máquina. Ligue em Configurações → Sessões.',
   },
   fleet_central: {
     en: 'A central aggregates other machines and hosts none of their sessions, so there is no repository here to open.',

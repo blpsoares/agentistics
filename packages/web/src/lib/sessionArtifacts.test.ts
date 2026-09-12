@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { artifactsFromTurns, hasUnlistedWrites } from './sessionArtifacts'
+import { artifactShortfall, artifactsFromTurns, hasUnlistedWrites } from './sessionArtifacts'
 
 const turn = (tools: { name: string; detail?: string }[], pending = false) =>
   ({ role: 'assistant' as const, text: '', tools, ...(pending ? { pending: true } : {}) })
@@ -140,5 +140,45 @@ describe('a harness that does not speak Claude', () => {
       .toHaveLength(1)
     expect(artifactsFromTurns([{ tools: [{ name: 'manage_task', detail: 'complete' }] }]))
       .toEqual([])
+  })
+})
+
+describe('why the count is short', () => {
+  /** The server's own sentence, as `listSessionArtifacts` words it. */
+  const OUTSIDE_EN = '3 file(s) this session wrote are outside its own folder and cannot be opened here.'
+  const OUTSIDE_PT = '3 arquivo(s) que esta sessão escreveu estão fora da pasta dela e não podem ser abertos aqui.'
+
+  it('says NOTHING when there is nothing to qualify — the ordinary case costs no line', () => {
+    expect(artifactShortfall({ lang: 'en' })).toEqual([])
+    expect(artifactShortfall({ lang: 'pt' })).toEqual([])
+    expect(artifactShortfall({ unlisted: false, lang: 'en' })).toEqual([])
+  })
+
+  it('passes the server\'s sentence through VERBATIM, in either language', () => {
+    expect(artifactShortfall({ outside: OUTSIDE_EN, lang: 'en' })).toEqual([OUTSIDE_EN])
+    // The server localizes it; this side never inspects it, so a pt sentence is carried as given.
+    expect(artifactShortfall({ outside: OUTSIDE_PT, lang: 'pt' })).toEqual([OUTSIDE_PT])
+    expect(artifactShortfall({ outside: OUTSIDE_PT, lang: 'en' })).toEqual([OUTSIDE_PT])
+  })
+
+  it('words the unlistable writes itself, and differently per language', () => {
+    const en = artifactShortfall({ unlisted: true, lang: 'en' })
+    const pt = artifactShortfall({ unlisted: true, lang: 'pt' })
+    expect(en).toHaveLength(1)
+    expect(pt).toHaveLength(1)
+    expect(en[0]).not.toBe(pt[0])
+    expect(en[0]).toContain('cannot be read')
+    expect(pt[0]).toContain('não dá para ler')
+  })
+
+  it('says BOTH when both hold, the unnameable ones first', () => {
+    const out = artifactShortfall({ unlisted: true, outside: OUTSIDE_EN, lang: 'en' })
+    expect(out).toHaveLength(2)
+    expect(out[0]).toContain('cannot be read')
+    expect(out[1]).toBe(OUTSIDE_EN)
+  })
+
+  it('an empty `outside` is an absent one — the server omits the field rather than sending ""', () => {
+    expect(artifactShortfall({ outside: '', lang: 'en' })).toEqual([])
   })
 })
