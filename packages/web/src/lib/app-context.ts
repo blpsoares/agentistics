@@ -200,6 +200,12 @@ export interface AppContext {
    *  not `true` the Studio is ABSENT, never a greyed-out entry. */
   editorEnabled?: boolean
 
+  /** Re-reads `/api/team/session` and re-publishes everything above from a fresh answer — the ONE
+   *  way `SessionsSettings` can make `editorEnabled` (and `shellEnabled`, `chatEnabled`, …) catch up
+   *  with a preference it just changed, without a reload and without re-deriving the resolved flag
+   *  itself. Optional so a caller built for tests need not fabricate a live fetch. */
+  refreshTeamSession?: () => Promise<void>
+
   /** The user's own autosave switch INSIDE the repository explorer's editor. A convenience, not a
    *  gate: it is a plain preference read from `/api/preferences` like `chatSoundEnabled`, and it
    *  is deliberately NOT coupled to `editorEnabled` — that one is a security gate riding a

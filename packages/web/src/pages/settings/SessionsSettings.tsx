@@ -106,6 +106,10 @@ export default function SessionsSettings() {
       body: JSON.stringify({ editorEnabled: next }),
     })
       .then(r => { if (!r.ok) throw new Error('save failed') })
+      // `ctx.editorEnabled` is the SERVER's own resolved flag (`editorGate.ts`), never re-derived
+      // here — so reaching every Studio entry without a reload means asking the server again, in
+      // BOTH directions of this switch, rather than mirroring `next` into context as a guess.
+      .then(() => ctx.refreshTeamSession?.())
       .catch(() => setEditorEnabled(!next))  // put the switch back; nothing was saved
       .finally(() => setEditorSaving(false))
   }

@@ -106,6 +106,55 @@ describe('the one producer is `App.tsx`, and it goes through this module', () =>
 })
 
 /**
+ * AND THE SWITCH REACHES THIS PUBLISHED VALUE WITHOUT A RELOAD, IN BOTH DIRECTIONS.
+ *
+ * `App.tsx` used to read `/api/team/session` once, at boot, with `[]` deps — so flipping the
+ * preference in `SessionsSettings` (which PUTs `/api/preferences` and only updates its OWN local
+ * toggle) never reached `ctx.editorEnabled`: every Studio entry stayed exactly as it was at boot
+ * while the settings screen's own sentence claimed the opposite. There is no jsdom here, so what a
+ * toggle actually DOES to the published context cannot be rendered — it is asserted the same way the
+ * producer above is: over the source, comments stripped.
+ */
+describe('the switch reaches `ctx.editorEnabled` live — re-fetch, never re-derive', () => {
+  const WEB = join(import.meta.dir, '..')
+  const RAW = readFileSync(join(WEB, 'App.tsx'), 'utf8')
+  const IMPORTS = RAW.split('\n').filter(l => l.startsWith('import ')).join('\n')
+  const CTX = (() => {
+    const start = RAW.indexOf('const appCtx: AppContext = {')
+    const end = RAW.indexOf('\n  }\n', start)
+    return stripComments(RAW.slice(start, end))
+  })()
+  const SESSIONS_SETTINGS = stripComments(
+    readFileSync(join(WEB, 'pages/settings/SessionsSettings.tsx'), 'utf8'),
+  )
+
+  it('App builds a reusable refresh and runs it at boot', () => {
+    expect(IMPORTS.includes("import { resolveTeamSessionRefresh } from './lib/teamSessionRefresh'")).toBe(true)
+    expect(RAW.includes('const refreshTeamSession = useCallback(() => {')).toBe(true)
+    expect(RAW.includes('useEffect(() => { void refreshTeamSession() }, [refreshTeamSession])')).toBe(true)
+    // A failed re-fetch must not wipe out what is already known (`central`, `capabilities`, …) —
+    // `resolveTeamSessionRefresh` is what carries that rule, not a bare fallback object here.
+    expect(RAW.includes('setTeamSession(prev => resolveTeamSessionRefresh(prev, s,')).toBe(true)
+    expect(RAW.includes('setTeamSession(prev => resolveTeamSessionRefresh(prev, null,')).toBe(true)
+  })
+
+  it('App publishes it on the context, so any page can ask for a fresh answer', () => {
+    expect(CTX.includes('refreshTeamSession,')).toBe(true)
+  })
+
+  it("SessionsSettings' toggle asks for a fresh answer after a successful save — ON and OFF alike", () => {
+    // `toggleEditor` computes `next = !editorEnabled` and PUTs it either way, so one call site
+    // covers both directions of the switch — there is only one place this could be missing.
+    expect(SESSIONS_SETTINGS.includes('const toggleEditor = () => {')).toBe(true)
+    expect(SESSIONS_SETTINGS.includes('.then(() => ctx.refreshTeamSession?.())')).toBe(true)
+  })
+
+  it('the scan still sees the refresh call going away', () => {
+    expect(stripComments('// .then(() => ctx.refreshTeamSession?.())')).not.toContain('ctx.refreshTeamSession?.()')
+  })
+})
+
+/**
  * AND THE ONE SCREEN THAT CAN TURN IT ON SAYS SO.
  *
  * `SessionsSettings` is where a user flips the switch, so it is the one place a false sentence about

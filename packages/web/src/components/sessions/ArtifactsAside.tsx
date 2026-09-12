@@ -93,6 +93,8 @@ import {
 import { ArtifactDoc } from './ArtifactDoc'
 import { GalleryTab } from './GalleryTab'
 import { Layer, Studio } from './Studio'
+import { holdIfUnsaved } from '../../lib/unsavedBuffers'
+import { studioGateJustClosed, studioGateMounted, studioGateShown } from '../../lib/studioGateHold'
 // The FOURTH copy of this shape lived here, byte-identical to the three the repository
 // explorer's own views had already folded into `repoNote.tsx`. Imported under the name this
 // file's own call sites already use: one shape, one place for it to change.
@@ -448,14 +450,37 @@ export function ArtifactsAside({
    */
   const [studioOpened, setStudioOpened] = useState(false)
   useEffect(() => { if (studio) setStudioOpened(true) }, [studio])
-  /** Mounted: the gate is open AND the reader has been here. Never merely "the gate is open". */
-  const studioMounted = editorEnabled === true && (studio || studioOpened)
+  /**
+   * THE GATE CLOSING WHILE THE STUDIO IS OPEN MUST ASK FIRST, exactly like the panel's own close
+   * (`artifactsStore.ts`'s `closeArtifacts`) — `editorEnabled` used to be frozen at boot, so a
+   * switch turned off in Settings could never reach a Studio already open here, and this whole path
+   * was unreachable. Now that it is live (`App.tsx`'s `refreshTeamSession`), a `true -> not true`
+   * edge is a genuine close attempt on Monaco buffers that exist in exactly one place in the world,
+   * so it goes through the same `holdIfUnsaved` question rather than unmounting underneath a reader
+   * mid-keystroke. `gateHeld` is what keeps `studioMounted`/`inStudio` reading as "still open" for as
+   * long as that question is unanswered (or answered "keep") — see `studioGateHold.ts`.
+   */
+  const [gateHeld, setGateHeld] = useState(false)
+  const wasEditorEnabled = useRef(editorEnabled)
+  useEffect(() => {
+    const was = wasEditorEnabled.current
+    wasEditorEnabled.current = editorEnabled
+    if (studioGateJustClosed(was, editorEnabled, studio || studioOpened)) {
+      const exitStudioNow = () => { setStudio(false); setStudioOpened(false); setGateHeld(false) }
+      if (holdIfUnsaved('close', exitStudioNow)) setGateHeld(true)
+      else exitStudioNow()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorEnabled])
+  /** Mounted: the gate is open (or a close on it is being held) AND the reader has been here. */
+  const studioMounted = studioGateMounted(editorEnabled, gateHeld, studio, studioOpened)
   /**
    * SHOWN, which is narrower than `studio`. The switch can be turned off in another surface while
    * this panel still has the Studio open, and `editorEnabled` is re-read on every render — so the
-   * panel falls back to its own chrome rather than drawing a frame with nothing behind it.
+   * panel falls back to its own chrome rather than drawing a frame with nothing behind it, unless a
+   * drop on it is being HELD (`gateHeld`), in which case the question needs the Studio to stay put.
    */
-  const inStudio = studio && editorEnabled === true
+  const inStudio = studioGateShown(editorEnabled, gateHeld, studio)
 
   /**
    * Honour a requested tab, once per request.

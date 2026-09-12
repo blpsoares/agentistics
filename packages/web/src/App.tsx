@@ -19,6 +19,7 @@ import { usePlanBasis } from './hooks/usePlanBasis'
 import { planScopeHarnesses, planScopeNote, sessionPlanFactor } from './lib/costBasis'
 import { bootLoading } from './lib/bootPhase'
 import { editorEnabledFor } from './lib/editorGate'
+import { resolveTeamSessionRefresh } from './lib/teamSessionRefresh'
 import { DEFAULT_CARD_ORDER, migrateCardOrder, type CardId } from './lib/cardOrder'
 import { BillingIntroModal } from './components/BillingIntroModal'
 import type { LoadProgress } from './hooks/useData'
@@ -1425,12 +1426,26 @@ export default function AppLayout() {
   }, [])
   useEffect(() => { if (teamSession?.central) reloadIam() }, [teamSession?.central, reloadIam])
 
-  useEffect(() => {
-    fetch('/api/team/session')
+  /**
+   * Re-reads the session so every capability+preference the server resolves — `editorEnabled`
+   * (through `editorGate.ts`), `shellEnabled`, `chatEnabled`, `central`, … — can catch up without a
+   * reload. This used to be a mount-only effect, so a switch flipped in Settings (`SessionsSettings`)
+   * never reached a page that had already read the old answer: the settings screen itself updated
+   * (it re-reads `/api/preferences` on its own), but every Studio entry stayed gone, or stayed
+   * present, exactly as it was at boot. The browser must not re-derive the resolved flag from a
+   * capability plus a preference itself — that is what `editorGate.ts`'s own header warns against —
+   * so the fix is to ask the SERVER again rather than mirror a guess into context.
+   *
+   * `resolveTeamSessionRefresh` is what keeps a transient failure from wiping out everything already
+   * known (`central`, `capabilities`, …) back to the bare boot default — see its own header.
+   */
+  const refreshTeamSession = useCallback(() => {
+    return fetch('/api/team/session')
       .then(r => r.ok ? (r.json() as Promise<TeamSessionState>) : null)
-      .then(s => setTeamSession(s ?? { required: false, authed: true }))
-      .catch(() => setTeamSession({ required: false, authed: true }))
+      .then(s => setTeamSession(prev => resolveTeamSessionRefresh(prev, s, { required: false, authed: true })))
+      .catch(() => setTeamSession(prev => resolveTeamSessionRefresh(prev, null, { required: false, authed: true })))
   }, [])
+  useEffect(() => { void refreshTeamSession() }, [refreshTeamSession])
 
   useEffect(() => {
     fetch('/api/team/status')
@@ -3029,6 +3044,9 @@ export default function AppLayout() {
     // central term, so the server says `true` there while the whole `/api/fleet` prefix is refused.
     // Publishing the narrowed value closes every consumer at once — see `lib/editorGate.ts`.
     editorEnabled: editorEnabledFor(teamSession?.editorEnabled, isCentral),
+    // The one way a page can make the line above catch up after `SessionsSettings` flips the
+    // preference: ask the server again, never mirror the toggle's own guess into context.
+    refreshTeamSession,
     editorAutosave, setEditorAutosave,
     me: iam?.account,
     teams: teamsList,
