@@ -9,55 +9,19 @@
  * The PATH rule itself (`isImagePath`, `splitImageAttachments`) now lives in `@agentistics/core` and
  * is re-exported here unchanged: the server reads a delivered message with it to record what that
  * message carried, and a second copy would let the record and the render disagree.
+ *
+ * The MARKER rule (`splitImageMarkers`) lives there too, for the same reason: the server counts a
+ * turn's own leading markers to check them against its `imagePasteIds` and its companion entry
+ * (`attachment-companion.ts`) before it will ever hand back a real thumbnail, and a second copy of
+ * the count here could disagree with the one that gated the resolution.
  */
 
 import type { AttachmentMessage, AttachmentSend } from '@agentistics/core'
 
-export { isImagePath, splitImageAttachments, type SplitAttachments } from '@agentistics/core'
-
-/**
- * `[Image #4]` — what the HARNESS writes where an image was, and it is not prose.
- *
- * A separate rule from `splitImageAttachments` because it answers about a different kind of thing.
- * That one finds a PATH the composer typed, which names a file this product can open. This one
- * finds a MARKER Claude Code substituted into the turn it recorded: an ordinal and nothing else, so
- * there is no file behind it and never will be — the honest render is a chip saying which image it
- * was, not a thumbnail we cannot produce.
- *
- * It exists because of what a QUEUED prompt looks like on arrival. A harness that is mid-turn holds
- * what arrives and commits the queue as ONE turn (see `echoMatch.ts`), so two prompts sent a minute
- * apart come back merged, with every image of both collected at the front:
- *
- *     [Image #4] [Image #5] [Image #6]1. a visao geral...
- *
- * — markers running straight into the first word, which is how a message with three screenshots on
- * it read as a message beginning with square brackets. The merging itself is the harness's, not
- * ours, and cannot be undone from here; the markers are ours to draw properly.
- *
- * LEADING ONLY, like `splitMessage`, and for a stronger reason than symmetry: this repo's own
- * conversations quote these markers while discussing them, so a rule matching anywhere would eat a
- * line somebody actually wrote. Every marker measured on real transcripts sits at the very start.
- */
-export interface SplitMarkers {
-  /** The ordinals, in the order the harness numbered them. */
-  markers: number[]
-  /** What is left once the leading run is removed. */
-  text: string
-}
-
-const LEADING_MARKER = /^\s*\[Image #(\d+)\]/
-
-export function splitImageMarkers(text: string): SplitMarkers {
-  const markers: number[] = []
-  let rest = text
-  for (;;) {
-    const m = LEADING_MARKER.exec(rest)
-    if (!m) break
-    markers.push(Number(m[1]))
-    rest = rest.slice(m[0].length)
-  }
-  return { markers, text: markers.length > 0 ? rest.trim() : text }
-}
+export {
+  isImagePath, splitImageAttachments, type SplitAttachments,
+  splitImageMarkers, type SplitMarkers,
+} from '@agentistics/core'
 
 
 // --- a marker that CAN find its file ----------------------------------------
@@ -147,26 +111,35 @@ function resolveFromMessages(
 }
 
 /**
- * When the last turn a PERSON wrote before `index` was recorded, in ms — or `null` when there is
- * none in view.
+ * When the last turn a PERSON wrote before `index` was recorded, in ms.
  *
  * The lower bound of the messages a marker turn may be made of (see `resolveMarkerPaths`). A turn
  * the HARNESS wrote under the user's role — a system note, a background task line — is not a
  * message anybody sent, so it closes no interval. A person's turn with no timestamp closes it
- * without saying where, and that is answered with `Infinity`: nothing after an unknown boundary can
- * be proven to belong to this turn, so nothing resolves, and the chip stays.
+ * without saying where, and NEITHER CASE MAY EVER READ AS "NO BOUND": both are answered with
+ * `Infinity`, because nothing after an unknown boundary can be proven to belong to this turn, so
+ * nothing resolves, and the chip stays.
+ *
+ * This used to return `null` when the loop ran off the front of `turns` — a person's earlier turn
+ * that is simply OUT OF VIEW, which is the ordinary case after a long agentic run: the chat view
+ * caps a read at 400 turns, and `resolveMarkerPaths` reads `null` as "no bound", accepting every
+ * message before this one INCLUDING a previous person turn's, wherever it actually was. A wrong
+ * pairing there is not merely a wrong chip, it can be a WRONG THUMBNAIL when the counts happen to
+ * agree. "Out of view" and "no message could exist before this" are indistinguishable from here —
+ * `turns` is a window, not the whole conversation — so both answer the same way the harness's own
+ * unstamped turn already does: an unknown boundary is `Infinity`, never a bound of nothing at all.
  */
 export function previousPersonTurnMs(
   turns: readonly { role: 'user' | 'assistant'; at?: string; system?: string; task?: unknown }[],
   index: number,
-): number | null {
+): number {
   for (let i = Math.min(index, turns.length) - 1; i >= 0; i--) {
     const t = turns[i]!
     if (t.role !== 'user' || t.system !== undefined || t.task !== undefined) continue
     const ms = t.at ? Date.parse(t.at) : Number.NaN
     return Number.isFinite(ms) ? ms : Number.POSITIVE_INFINITY
   }
-  return null
+  return Number.POSITIVE_INFINITY
 }
 
 /**

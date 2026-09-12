@@ -231,24 +231,6 @@ export async function readFleet(lang: CliLang, view?: FleetViewRequest): Promise
 }
 
 /**
- * Record what a delivered ANSWER carried, keyed by its conversation — off the reply path.
- *
- * The prompt case does the same inside its own deferred block, which already resolves the row for
- * the pending queue. An answer has no queue, so it gets this; both end in `attachmentMessageOf`.
- * Deferred for the reason that block states: the row lookup is a fleet read, and the person is
- * watching the send.
- */
-function noteDeliveredAttachments(host: StartHost, id: string, atMs: number, text: string): void {
-  void (async () => {
-    try {
-      const row = (await host.sessions?.())?.sessions.find(r => r.id === id || r.conversationId === id)
-      const carried = attachmentMessageOf((row ? conversationOfRow(row) : null) ?? '', atMs, text)
-      if (carried) await recordAttachmentMessage(carried)
-    } catch { /* the answer went; a thumbnail is not worth failing it over */ }
-  })()
-}
-
-/**
  * Perform one verb on one row — through the host, so every refusal the cockpit makes is made here.
  *
  * `resume` is the exception in shape rather than in principle: the host's reopen takes the
@@ -280,15 +262,16 @@ export async function runFleetAction(
   switch (req.action) {
     case 'approve': {
       if (!host.answerSession) return { ok: false, message: s.sessionsNoHost }
-      // Taken BEFORE the answer is typed — see `AttachmentMessage.atMs`.
-      const sentAtMs = Date.now()
       // `text` rides along for the FREE-TEXT option, where picking is only the first of three
       // steps — see `answerSession`. Every other option ignores it.
-      const out = await host.answerSession(req.id, req.choice, text)
-      // The composer's attachments ride an answer too (see `SessionChat`'s `send`), so an answer
-      // that carried images is recorded exactly like a prompt that did.
-      if (out.ok && text !== '') noteDeliveredAttachments(host, req.id, sentAtMs, text)
-      return out
+      //
+      // AN ANSWER'S ATTACHMENTS ARE DELIBERATELY NOT RECORDED HERE. A free-text answer lands in the
+      // transcript as a pure `tool_result` under an `AskUserQuestion` — nobody's turn, and never a
+      // marker turn — so a record stamped for it matches no marker, sits inside the WINDOW of the
+      // next actual marker turn, and forces that turn's count to disagree with its own markers:
+      // a turn that would otherwise resolve draws a chip instead. It also cost a background fleet
+      // read on every text answer for a record nothing could ever use.
+      return await host.answerSession(req.id, req.choice, text)
     }
     case 'prompt': {
       if (!host.promptSession) return { ok: false, message: s.sessionsNoHost }

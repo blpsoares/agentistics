@@ -6,6 +6,7 @@ import {
   forgetChatTailContent, forgetChatTailPaths, readChatWindow, readRecentChatTurns,
   resolveChatTranscriptPath,
 } from './chat-tail'
+import { ATTACHMENT_DIR } from './attachment-web'
 
 const SESSION_ID = 'a1b2c3d4-e5f6-4789-a0b1-c2d3e4f56789'
 
@@ -404,6 +405,110 @@ describe('readChatWindow — the cap is a fact about the READ, and it says so', 
     const path = join(root, 'exact.jsonl')
     await writeFile(path, `${[userLine('a'), userLine('b')].join('\n')}\n`)
     expect((await readChatWindow(path, 2)).older).toBe(false)
+  })
+})
+
+describe('a marker turn resolves through its own companion — attachment-companion.ts', () => {
+  let root: string
+  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'chat-companion-')) })
+  afterEach(async () => { await rm(root, { recursive: true, force: true }) })
+
+  const a = join(ATTACHMENT_DIR, '7f06ed4a-image.png')
+  const b = join(ATTACHMENT_DIR, '005d6e1c-image.png')
+
+  const marker = (text: string, promptId: string, pasteIds: number[]) => line({
+    type: 'user',
+    promptId,
+    imagePasteIds: pasteIds,
+    message: { content: [{ type: 'text', text }] },
+  })
+
+  const companion = (promptId: string, paths: string[]) => line({
+    type: 'user',
+    promptId,
+    isMeta: true,
+    turnCompanion: true,
+    message: { content: paths.map(p => ({ type: 'text', text: `[Image: source: ${p}]` })) },
+  })
+
+  test('exact match: the turn carries the resolved paths, and the companion draws no turn of its own', async () => {
+    const path = join(root, 'a.jsonl')
+    await writeFile(path, [
+      marker('[Image #1] [Image #2]look at this', 'p1', [1, 2]),
+      companion('p1', [a, b]),
+    ].join('\n') + '\n')
+    const out = (await readChatWindow(path, 10)).turns
+    // ONE turn — the marker's. The companion is plumbing, not a message; it must never appear as
+    // its own "an image was attached" chip once its paths have been folded into the turn beside it.
+    expect(out.length).toBe(1)
+    expect(out[0]!.imagePaths).toEqual([a, b])
+    expect(out[0]!.text).toBe('[Image #1] [Image #2]look at this')
+  })
+
+  test('a count mismatch resolves nothing — the chip stays, never a wrong thumbnail', async () => {
+    const path = join(root, 'b.jsonl')
+    await writeFile(path, [
+      // The companion names three paths; the turn claims only two markers and two pasteIds.
+      marker('[Image #1] [Image #2]oi', 'p2', [1, 2]),
+      companion('p2', [a, b, join(ATTACHMENT_DIR, 'extra.png')]),
+    ].join('\n') + '\n')
+    const out = (await readChatWindow(path, 10)).turns
+    expect(out.length).toBe(1)
+    expect(out[0]!.imagePaths).toBeUndefined()
+  })
+
+  test('a companion path outside the attachments directory is not served, and the turn does not resolve', async () => {
+    const path = join(root, 'c.jsonl')
+    await writeFile(path, [
+      marker('[Image #1] [Image #2]oi', 'p3', [1, 2]),
+      companion('p3', [a, '/etc/passwd']),
+    ].join('\n') + '\n')
+    const out = (await readChatWindow(path, 10)).turns
+    expect(out.length).toBe(1)
+    expect(out[0]!.imagePaths).toBeUndefined()
+  })
+
+  test('a marker turn with no companion at all falls back untouched — no imagePaths field', async () => {
+    const path = join(root, 'd.jsonl')
+    await writeFile(path, marker('[Image #1]sozinho', 'p4', [1]) + '\n')
+    const out = (await readChatWindow(path, 10)).turns
+    expect(out.length).toBe(1)
+    expect(out[0]!.imagePaths).toBeUndefined()
+    expect(out[0]!.text).toBe('[Image #1]sozinho')
+  })
+
+  /**
+   * THE PIN: a conversation this change may never touch behaves EXACTLY as the original
+   * implementation, compared against that behaviour directly rather than against the new code run
+   * twice — a prior attempt at this fix compared the new code against itself and a reviewer caught
+   * it. `turnCompanion` also marks a skill's loaded body beside the turn that invoked it
+   * (`chat-envelope.ts`'s `META_KINDS`), which is unrelated to images and must still become the
+   * ordinary "a skill was loaded" system note it always has.
+   */
+  test('a non-image turnCompanion (a skill load) is unaffected — still the system note it always was', async () => {
+    const path = join(root, 'skill.jsonl')
+    await writeFile(path, line({
+      type: 'user',
+      promptId: 'p5',
+      isMeta: true,
+      turnCompanion: true,
+      message: { content: 'Base directory for this skill: /opt/elsewhere/thing' },
+    }) + '\n')
+    const out = (await readChatWindow(path, 10)).turns
+    expect(out).toEqual([
+      { role: 'user', text: 'a skill was loaded', system: 'a skill was loaded' },
+    ])
+  })
+
+  test('the same resolution reaches the six-row tail reader, not only the full chat window', async () => {
+    const path = join(root, 'tail.jsonl')
+    await writeFile(path, [
+      marker('[Image #1]oi', 'p6', [1]),
+      companion('p6', [a]),
+    ].join('\n') + '\n')
+    const out = await readRecentChatTurns(path, 6)
+    expect(out.length).toBe(1)
+    expect(out[0]!.imagePaths).toEqual([a])
   })
 })
 

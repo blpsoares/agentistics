@@ -81,6 +81,13 @@ export interface ChatTurn {
    * carried no time; the stamp is then simply not drawn, never replaced by "now".
    */
   at?: string
+  /**
+   * The real files behind this turn's `[Image #N]` markers, ALREADY resolved on the server through
+   * the harness's own companion entry — see `chat-turn.ts`'s own doc on the field. Preferred over
+   * `resolveMarkerPaths`'s own heuristic whenever present; that heuristic remains the fallback for
+   * a turn this was not resolved for.
+   */
+  imagePaths?: string[]
 }
 
 export interface ChatBubbleProps {
@@ -334,11 +341,14 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
   // composer typed; without this it ran into the first word of the prose (see `splitImageMarkers`).
   const { markers, text } = splitImageMarkers(prose)
 
-  // A marker DOES have a file behind it when agentop is the one that sent it: it wrote the image to
-  // this machine and recorded which session it typed the path into. `resolveMarkerPaths` hands back
-  // the files only when the record accounts for the markers EXACTLY — otherwise null, and the chip
-  // stays, because a wrong thumbnail is false and convincing where a chip is merely useless.
-  const markerImages = resolveMarkerPaths({
+  // THE SERVER'S OWN LINK WINS WHEN IT HAS ONE. Claude Code writes a marker turn's images into a
+  // companion entry beside it — see `chat-turn.ts`'s `imagePaths` — which the server already
+  // resolved and validated exactly, so there is nothing left to infer here. Only a turn this was
+  // NOT resolved for (an older read, a companion that did not survive a truncated window, a turn
+  // whose companion could not account for it exactly) falls back to `resolveMarkerPaths`'s own
+  // heuristic over what agentop itself sent — otherwise null, and the chip stays, because a wrong
+  // thumbnail is false and convincing where a chip is merely useless.
+  const markerImages = turn.imagePaths ?? resolveMarkerPaths({
     markers,
     turnAtMs: turn.at ? Date.parse(turn.at) || 0 : 0,
     sends: attachmentSends ?? [],

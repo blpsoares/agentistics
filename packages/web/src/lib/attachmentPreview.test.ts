@@ -154,7 +154,9 @@ describe('resolving against delivered messages', () => {
       .toEqual(['/a/a.png', '/a/b.png', '/a/c.png'])
   })
 
-  test('with no previous person turn in view, the window alone bounds it', () => {
+  test('resolveMarkerPaths’ own contract: an explicit `null` bound accepts everything in the window', () => {
+    // `previousPersonTurnMs` itself never produces `null` any more (see its own header) — this pins
+    // `resolveMarkerPaths`’ documented meaning of the value in isolation, for any caller that does.
     expect(resolveMarkerPaths({ markers: [1], turnAtMs: T, sends: [], messages: [msg(T - 10, ['/a/a.png'])], sinceMs: null }))
       .toEqual(['/a/a.png'])
   })
@@ -214,7 +216,10 @@ describe('previousPersonTurnMs', () => {
       { role: 'user' as const, at: at(T) },
     ]
     expect(previousPersonTurnMs(turns, 4)).toBe(T - 900)
-    expect(previousPersonTurnMs(turns, 0)).toBe(null)
+    // Nothing before index 0 — out of view, same as never having a bound. See the function's own
+    // header: this used to be `null`, which `resolveMarkerPaths` reads as "no bound" and would have
+    // let a message from before this window pair with a marker that is not its own.
+    expect(previousPersonTurnMs(turns, 0)).toBe(Number.POSITIVE_INFINITY)
   })
   test('a person turn with no usable time closes the interval without saying where', () => {
     expect(previousPersonTurnMs([{ role: 'user' }, { role: 'user', at: at(T) }], 1)).toBe(Number.POSITIVE_INFINITY)

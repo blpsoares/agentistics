@@ -28,12 +28,18 @@ import type { AttachmentMessage, AttachmentSend } from '@agentistics/core'
 export const ATTACHMENT_DIR = join(AGENTISTICS_DATA_DIR, 'attachments')
 
 /**
- * What was sent, and where to — the record that lets a `[Image #4]` marker find its file.
+ * What was sent, and where to — the FALLBACK record for a `[Image #4]` marker Claude Code's OWN
+ * transcript does not already answer.
  *
  * A harness that is mid-turn queues an arriving message and substitutes markers for its images, so
  * the PATH that normally survives into the transcript is gone and the chat can only draw a chip.
- * The file is still here; the link was what was missing. The RULE that reads it back lives beside the marker
- * parsing it serves, in the web's `attachmentPreview.ts` — one file owns markers end to end.
+ * The file is still here; the link was what was missing. For Claude Code, the link is now usually
+ * the harness's OWN answer: it writes a `turnCompanion` entry beside the marker turn naming exactly
+ * which files it was — see `attachment-companion.ts`, resolved in `chat-tail.ts` before a turn ever
+ * reaches the browser. THIS log is what a turn falls back to when that companion is missing or
+ * cannot account for it exactly (an older turn from before this log existed, one whose companion did
+ * not survive a truncated read window) — asked through the web's `attachmentPreview.ts`'s
+ * `resolveMarkerPaths`, which sits beside the marker parsing it serves.
  *
  * APPEND-ONLY JSONL. TWO KINDS OF LINE, and the second one is the one that answers the question:
  *
