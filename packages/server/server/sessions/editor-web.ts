@@ -13,7 +13,7 @@ import {
   createTreeEntry, deleteTreeEntry, listChildren, readTreeFile, readTreeMedia, renameTreeEntry,
   resolveSessionDirectory, searchTree, writeTreeFile,
   type CreateRefusal, type DeleteRefusal, type EntryRefusal, type ReadFileRefusal,
-  type ReadMediaRefusal, type RenameRefusal, type WriteFileRefusal,
+  type ReadMediaRefusal, type RenameRefusal, type TextRefusal, type WriteFileRefusal,
 } from './editor-fs'
 import { planRange } from './editor-media'
 import { OPAQUE_MEDIA_CSP } from '../response-policy'
@@ -46,7 +46,7 @@ const DIR_REFUSAL: Record<SessionDirRefusal, { en: string; pt: string }> = {
  */
 type GenericRefusal =
   | EntryRefusal | ReadFileRefusal | WriteFileRefusal | CreateRefusal | RenameRefusal | DeleteRefusal
-  | ReadMediaRefusal
+  | ReadMediaRefusal | TextRefusal
   | 'conflict'
 
 const GENERIC_REFUSAL: Record<GenericRefusal, { en: string; pt: string }> = {
@@ -90,6 +90,18 @@ const GENERIC_REFUSAL: Record<GenericRefusal, { en: string; pt: string }> = {
     en: 'This file is larger than this panel will display.',
     pt: 'Este arquivo é maior do que este painel exibe.',
   },
+  // Said on the read AND on the write. It names the likely encodings because "not valid UTF-8" alone
+  // sends the reader looking for a broken file, and it says WHY it is not opened, because the only
+  // thing this panel could show is a copy with the undecodable characters replaced — and saving that
+  // copy is what used to destroy the original bytes.
+  'not-utf8': {
+    en: 'This file is not UTF-8 text (it may be Latin-1, Windows-1252 or UTF-16), so it is not opened here: '
+      + 'the editor would replace the characters it cannot read, and saving would write that over the file. '
+      + 'Open it with an editor that knows its encoding.',
+    pt: 'Este arquivo não é texto UTF-8 (pode ser Latin-1, Windows-1252 ou UTF-16), então não é aberto aqui: '
+      + 'o editor trocaria os caracteres que não consegue ler, e salvar gravaria isso por cima do arquivo. '
+      + 'Abra-o num editor que conheça a codificação dele.',
+  },
 }
 
 /**
@@ -100,7 +112,14 @@ const GENERIC_REFUSAL: Record<GenericRefusal, { en: string; pt: string }> = {
  * the REASON CODE, so the same code can never mean 404 through one door and 409 through another.
  */
 const CONFLICT_SHAPED: ReadonlySet<GenericRefusal> = new Set(['already-exists', 'not-empty', 'conflict'])
-const statusFor = (reason: GenericRefusal): number => (CONFLICT_SHAPED.has(reason) ? 409 : 404)
+/**
+ * The one CONTENT-shaped refusal the text routes have: the path resolved perfectly well and the
+ * answer is about what is in the file, which is what 415 says (the bytes route's `not-media` below
+ * is the same shape). A 404 would send the reader looking for a file that is right there.
+ */
+const statusFor = (reason: GenericRefusal): number => (
+  reason === 'not-utf8' ? 415 : CONFLICT_SHAPED.has(reason) ? 409 : 404
+)
 
 /**
  * The two refusals the bytes route adds, which `statusFor`'s 404 would misreport: the path resolved

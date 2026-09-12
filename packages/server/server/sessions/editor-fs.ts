@@ -16,6 +16,7 @@ import { planSessionDirectory, type SessionDirPlan } from './editor-directory'
 import { containedInRoot, resolveTreePath } from './editor-path'
 import { childrenFromDirents, collapseToChildren, type TreeChild } from './editor-list'
 import { looksBinary } from './artifact-web'
+import { decodeUtf8Lossless } from './editor-text'
 import type { MediaKind } from './artifact-media'
 import { planMediaView } from './editor-media'
 import { planFileWrite } from './editor-conflict'
@@ -165,6 +166,18 @@ async function runGit(cwd: string, args: string[]): Promise<{ ok: boolean; out: 
 export type ReadFileRefusal = EntryRefusal | 'not-a-file'
 
 /**
+ * A file whose bytes are not valid UTF-8 — Latin-1, cp1252, UTF-16 without a NUL in its first
+ * chunk. Refused by BOTH the read and the write, see `editor-text.ts`.
+ *
+ * NOT READABLE EITHER, and that is a decision rather than an omission. The only text this module
+ * could send is a lossy one, with U+FFFD where the undecodable bytes are: a picture of a file that
+ * is not the file, offered in the same pane that edits files. A read-only variant would be a second
+ * editor mode the client has to honour everywhere a buffer can be saved from (autosave, the
+ * conflict's "keep mine", a hidden tab), and a refusal is the one answer that cannot be saved back.
+ */
+export type TextRefusal = 'not-utf8'
+
+/**
  * The binary variant's two media fields, and why they are two rather than one.
  *
  * `media` is set ONLY when the Studio will render the file, and is the kind it will render it as.
@@ -183,7 +196,7 @@ export type ReadFilePlan =
     media?: MediaKind
     mediaOverLimit?: { media: MediaKind; limit: number }
   }
-  | { ok: false; reason: ReadFileRefusal }
+  | { ok: false; reason: ReadFileRefusal | TextRefusal }
 
 export async function readTreeFile(root: string, requestedPath: string): Promise<ReadFilePlan> {
   const planned = resolveTreePath(root, requestedPath)
@@ -217,7 +230,9 @@ export async function readTreeFile(root: string, requestedPath: string): Promise
   if (looksBinary(buf)) {
     return { ok: true, binary: true, name, size: st.size }
   }
-  return { ok: true, content: buf.toString('utf8'), mtimeMs: st.mtimeMs }
+  const content = decodeUtf8Lossless(buf)
+  if (content === null) return { ok: false, reason: 'not-utf8' }
+  return { ok: true, content, mtimeMs: st.mtimeMs }
 }
 
 export type ReadMediaRefusal = ReadFileRefusal | 'not-media' | 'too-big'
@@ -259,7 +274,7 @@ export async function readTreeMedia(root: string, requestedPath: string): Promis
   }
 }
 
-export type WriteFileRefusal = EntryRefusal | 'not-a-file'
+export type WriteFileRefusal = EntryRefusal | 'not-a-file' | TextRefusal
 
 export type WriteFilePlan =
   | { ok: true; mtimeMs: number }
@@ -282,12 +297,20 @@ export async function writeTreeFile(
   }
   if (!st.isFile()) return { ok: false, reason: 'not-a-file' }
 
+  // THE BYTES ON DISK ARE CHECKED BEFORE EITHER ANSWER, not only on the read. The read refusing a
+  // non-UTF-8 file is what keeps the Studio from offering a Save; this is what makes the write itself
+  // safe — against a client that asks this route directly, and against a file that was valid UTF-8
+  // when it was opened and was rewritten in another encoding since (that one is also a conflict, and
+  // a conflict's "current content" decoded lossily is exactly the text a "keep theirs" would save).
+  const disk = await readFile(real)
+  const diskText = decodeUtf8Lossless(disk)
+  if (diskText === null) return { ok: false, reason: 'not-utf8' }
+
   const plan = planFileWrite({ expectedMtimeMs, diskMtimeMs: st.mtimeMs })
   if (!plan.ok) {
     // The write is refused BEFORE it happens. What comes back is the CURRENT disk content, read
     // fresh — the caller's editor shows it, and nothing here has touched the file.
-    const buf = await readFile(real)
-    return { ok: false, reason: 'conflict', content: buf.toString('utf8'), mtimeMs: plan.diskMtimeMs }
+    return { ok: false, reason: 'conflict', content: diskText, mtimeMs: plan.diskMtimeMs }
   }
 
   await writeFile(real, content, 'utf8')

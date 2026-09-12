@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { handleEditorTreeRoute } from './editor-web'
@@ -50,9 +50,9 @@ const hostWith = (id: string, cwd: string): StartHost => ({
   }),
 })
 
-async function call(req: Request, host: StartHost) {
+async function call(req: Request, host: StartHost, lang: 'en' | 'pt' = 'en') {
   const url = new URL(req.url)
-  const res = await handleEditorTreeRoute(req, url, host, 'en')
+  const res = await handleEditorTreeRoute(req, url, host, lang)
   expect(res).not.toBeNull()
   return { status: res!.status, body: await res!.json() }
 }
@@ -99,6 +99,29 @@ describe('handleEditorTreeRoute', () => {
     }), hostWith('s1', repo))
     expect(put2.status).toBe(409)
     expect(put2.body).toMatchObject({ ok: false, reason: 'conflict', content: 'export const a = 2\n' })
+  })
+
+  test('a non-UTF-8 file: GET and PUT are both 415 with a sentence in each language, and the bytes survive', async () => {
+    const LATIN1 = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a])
+    const target = join(repo, 'latin1.txt')
+    writeFileSync(target, LATIN1)
+    try {
+      for (const lang of ['en', 'pt'] as const) {
+        const get = await call(new Request(`http://x/api/fleet/tree/file?id=s1&path=latin1.txt&lang=${lang}`), hostWith('s1', repo), lang)
+        expect(get.status).toBe(415)
+        expect(get.body).toMatchObject({ ok: false, reason: 'not-utf8' })
+        expect(get.body.content).toBeUndefined()
+        expect(get.body.message).toContain(lang === 'pt' ? 'não é texto UTF-8' : 'not UTF-8 text')
+      }
+      const put = await call(new Request('http://x/api/fleet/tree/file?id=s1&path=latin1.txt', {
+        method: 'PUT', body: JSON.stringify({ content: LATIN1.toString('utf8'), mtimeMs: statSync(target).mtimeMs }),
+      }), hostWith('s1', repo))
+      expect(put.status).toBe(415)
+      expect(put.body).toMatchObject({ ok: false, reason: 'not-utf8' })
+      expect([...readFileSync(target)]).toEqual([...LATIN1])
+    } finally {
+      rmSync(target, { force: true })
+    }
   })
 
   test('POST /api/fleet/tree/entry creates a file, GET /api/fleet/tree/search finds it by name', async () => {

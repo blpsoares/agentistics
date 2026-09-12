@@ -289,6 +289,65 @@ describe('writeTreeFile', () => {
   })
 })
 
+/**
+ * A FILE THAT IS NOT UTF-8 IS NEVER SAVED BACK MANGLED — asserted over the BYTES ON DISK.
+ *
+ * A status code is not evidence here: the defect this pins returned `ok: true` and a strip saying
+ * "Saved" while it replaced `0xE9` with `EF BF BD`. So every test reads the file back and compares
+ * it byte for byte with what was there before anything was asked of it.
+ */
+describe('a file whose bytes are not valid UTF-8', () => {
+  const LATIN1 = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]) // "café\n" in Latin-1 — no NUL anywhere
+
+  test('the read refuses it with its own reason, and sends no lossy text', async () => {
+    writeFileSync(join(plainDir, 'latin1.txt'), LATIN1)
+    const r = await readTreeFile(plainDir, 'latin1.txt')
+    expect(r).toEqual({ ok: false, reason: 'not-utf8' })
+    expect(Buffer.compare(readFileSync(join(plainDir, 'latin1.txt')), LATIN1)).toBe(0)
+  })
+
+  test('a write with the CURRENT mtime — the exact path that used to corrupt it — is refused, bytes intact', async () => {
+    const target = join(plainDir, 'latin1-write.txt')
+    writeFileSync(target, LATIN1)
+    // What the editor used to hold: the lenient decode, U+FFFD where the byte was.
+    const lossy = LATIN1.toString('utf8')
+    const out = await writeTreeFile(plainDir, 'latin1-write.txt', lossy, statSync(target).mtimeMs)
+    expect(out).toEqual({ ok: false, reason: 'not-utf8' })
+    expect([...readFileSync(target)]).toEqual([...LATIN1])
+  })
+
+  test('a STALE mtime over a non-UTF-8 file is refused the same way — no lossy "current content"', async () => {
+    const target = join(plainDir, 'latin1-stale.txt')
+    writeFileSync(target, LATIN1)
+    const out = await writeTreeFile(plainDir, 'latin1-stale.txt', 'mine\n', statSync(target).mtimeMs - 999999)
+    expect(out).toEqual({ ok: false, reason: 'not-utf8' })
+    expect(Buffer.compare(readFileSync(target), LATIN1)).toBe(0)
+  })
+
+  test('a file rewritten in Latin-1 AFTER it was opened as UTF-8 is not overwritten either', async () => {
+    const target = join(plainDir, 'reencoded.txt')
+    writeFileSync(target, 'café\n', 'utf8')
+    const read = await readTreeFile(plainDir, 'reencoded.txt')
+    expect(read.ok).toBe(true)
+    writeFileSync(target, LATIN1)
+    // Even handed the mtime it has NOW (a client that re-stat'ed, or two writes inside one tick).
+    const out = await writeTreeFile(plainDir, 'reencoded.txt', 'café edited\n', statSync(target).mtimeMs)
+    expect(out).toEqual({ ok: false, reason: 'not-utf8' })
+    expect(Buffer.compare(readFileSync(target), LATIN1)).toBe(0)
+  })
+
+  test('valid UTF-8 with a BOM and CRLF still reads, and writes back BYTE-IDENTICAL', async () => {
+    const target = join(plainDir, 'bom-crlf.txt')
+    const bytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('ação ✓\r\n😀\r\n', 'utf8')])
+    writeFileSync(target, bytes)
+    const read = await readTreeFile(plainDir, 'bom-crlf.txt')
+    if (!read.ok || read.binary) throw new Error('expected a text read')
+    const out = await writeTreeFile(plainDir, 'bom-crlf.txt', read.content, read.mtimeMs)
+    expect(out.ok).toBe(true)
+    expect(Buffer.compare(readFileSync(target), bytes)).toBe(0)
+  })
+})
+
 describe('createTreeEntry', () => {
   test('creates an empty file', async () => {
     const out = await createTreeEntry(plainDir, 'created.txt', 'file')
