@@ -41,7 +41,7 @@ import {
   type ArtifactLayout,
 } from '../lib/artifactLayout'
 import { closeArtifacts, openArtifacts, setArtifactCount, useArtifacts } from '../lib/artifactsStore'
-import { setRightAsideEdge } from '../lib/rightAsideEdge'
+import { restingLeftEdge, setRightAsideEdge } from '../lib/rightAsideEdge'
 import type { SessionDrilldownProps } from '../components/SessionDrilldown'
 import type { Artifact } from '../lib/sessionArtifacts'
 import { liveEvents, type LiveTurn } from '../lib/artifactTabs'
@@ -1003,11 +1003,24 @@ export default function SessionsPage() {
    * module's own doc comment for why this is not folded into `artifactsStore`.
    *
    * Re-measured on every cause the edge can move: the aside's OWN box changing size (the drag
-   * handle above, or the open/close width transition — `ResizeObserver` on `artOuter` itself) and
-   * the ROOM around it changing without the aside's own box changing size at all (a sidebar drag or
-   * a window resize shrinks `splitRef`, which shifts an `overlay` aside's `right: 0` position with
-   * no size change of its own — `ResizeObserver` would miss that, `splitRoom` catches it, because it
-   * is already recomputed for exactly that set of causes; see `panelWidth`, above).
+   * handle above, or the `split` shell's own width transition — `ResizeObserver` on `artOuter`
+   * itself) and the ROOM around it changing without the aside's own box changing size at all (a
+   * sidebar drag or a window resize shrinks `splitRef`, which shifts an `overlay` aside's `right: 0`
+   * position with no size change of its own — `ResizeObserver` would miss that, `splitRoom` catches
+   * it, because it is already recomputed for exactly that set of causes; see `panelWidth`, above).
+   *
+   * **The `overlay` shell (below `SPLIT_MIN_WIDTH`) opens on `transform` alone — `width` never
+   * changes — so `ResizeObserver` never fires for it at all**, reported by review as a Critical: the
+   * one synchronous `report()` this effect used to make was also the LAST one, taken while the aside
+   * still sat translated off-screen (its mount-time `translateX(100%)`), and nothing corrected it
+   * until an unrelated cause re-ran the effect — the Filtros panel then measured "plenty of room"
+   * against a box that had since visually slid into view, reproducing the original occlusion on an
+   * ordinary first open. Two changes close it: `report()` reads `restingLeftEdge`, which discounts
+   * the box's own `translateX` and so answers with the SETTLED position regardless of where the
+   * slide currently sits (correct even at that very first off-screen frame); and the effect also
+   * re-measures on the box's own `transitionend`/`transitioncancel` (filtered to the `transform`
+   * property, so an unrelated child transition cannot trigger it) and whenever `asideIn` itself
+   * flips, as a second line of defense for whatever `restingLeftEdge` cannot see.
    *
    * `getBoundingClientRect()`, not the observer's own `contentRect` — that rect is relative to the
    * element's OWN padding box, not the viewport, so it cannot answer "where is this on screen."
@@ -1019,13 +1032,27 @@ export default function SessionsPage() {
       setRightAsideEdge(null)
       return
     }
-    const report = () => setRightAsideEdge(el.getBoundingClientRect().left)
+    const report = () => {
+      const rect = el.getBoundingClientRect()
+      setRightAsideEdge(restingLeftEdge(rect.left, getComputedStyle(el).transform))
+    }
     report()
-    if (typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(report)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [isMobile, artShell, splitRoom])
+    const onTransformSettled = (e: TransitionEvent) => {
+      if (e.propertyName === 'transform') report()
+    }
+    el.addEventListener('transitionend', onTransformSettled)
+    el.addEventListener('transitioncancel', onTransformSettled)
+    let ro: ResizeObserver | undefined
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(report)
+      ro.observe(el)
+    }
+    return () => {
+      ro?.disconnect()
+      el.removeEventListener('transitionend', onTransformSettled)
+      el.removeEventListener('transitioncancel', onTransformSettled)
+    }
+  }, [isMobile, artShell, splitRoom, asideIn])
   useEffect(() => () => setRightAsideEdge(null), [])
 
   /**
