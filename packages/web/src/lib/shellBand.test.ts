@@ -1,6 +1,7 @@
 import { describe, expect, it, test } from 'bun:test'
 import {
-  BAND_MAX_FRACTION, BAND_MIN_PX, DEFAULT_BAND_PREFS, clampBandHeight, readBandPrefs, shellErrorText,
+  BAND_MIN_PX, BAND_SNAP_THRESHOLD_PX, DEFAULT_BAND_PREFS, clampBandHeight, readBandPrefs,
+  resolveBandHeight, shellErrorText,
   bandGeometry, shellApiUrl, shellWatching, shellWhere, writeBandGeometry, writeBandPrefs, type BandPrefs,
 } from './shellBand'
 
@@ -36,11 +37,14 @@ describe('the band geometry', () => {
     expect(clampBandHeight(-40, 900)).toBe(BAND_MIN_PX)
   })
 
-  it('it never takes more than its share of the viewport', () => {
-    expect(clampBandHeight(10_000, 900)).toBe(Math.round(900 * BAND_MAX_FRACTION))
+  // UX PASS ITEM 7: the old fixed 70%-of-viewport ceiling is gone — the band may be dragged all
+  // the way up to the measured centre column's own height (never more).
+  it('the ceiling is the measured column, not a fraction of it', () => {
+    expect(clampBandHeight(10_000, 900)).toBe(900)
+    expect(clampBandHeight(500, 900)).toBe(500)
   })
 
-  it('a viewport too short for the floor still yields the floor, never a negative box', () => {
+  it('a column too short for the floor still yields the floor, never a negative box', () => {
     // The ceiling would be below the floor here; a max/min written the other way round returns a
     // height the flex column cannot lay out.
     expect(clampBandHeight(200, 100)).toBe(BAND_MIN_PX)
@@ -48,6 +52,49 @@ describe('the band geometry', () => {
 
   it('a height that is not a number falls back to the floor', () => {
     expect(clampBandHeight(Number.NaN, 900)).toBe(BAND_MIN_PX)
+  })
+
+  it('an unmeasured column (0, NaN) never becomes a ceiling', () => {
+    expect(clampBandHeight(5000, 0)).toBe(5000)
+    expect(clampBandHeight(5000, Number.NaN)).toBe(5000)
+  })
+})
+
+describe('resolveBandHeight — the free-resize snap (design item 7)', () => {
+  it('an ordinary height, well short of the column, is never full', () => {
+    expect(resolveBandHeight(400, 900)).toEqual({ height: 400, full: false })
+  })
+
+  it('within the snap threshold of the column\'s own top, it SNAPS to fill it exactly', () => {
+    const wanted = 900 - BAND_SNAP_THRESHOLD_PX // right at the edge of the threshold
+    expect(resolveBandHeight(wanted, 900)).toEqual({ height: 900, full: true })
+  })
+
+  it('one pixel short of the threshold is still an ordinary height', () => {
+    const wanted = 900 - BAND_SNAP_THRESHOLD_PX - 1
+    expect(resolveBandHeight(wanted, 900)).toEqual({ height: wanted, full: false })
+  })
+
+  it('asking for MORE than the column still snaps to exactly the column\'s height', () => {
+    expect(resolveBandHeight(10_000, 900)).toEqual({ height: 900, full: true })
+  })
+
+  it('dragging DOWN from full releases it, symmetrically — same function, no separate rule', () => {
+    // The next drag starts from the column's own height (what `full` rendered) and moves down by
+    // more than the threshold: back to an ordinary height, not full.
+    const startedFull = resolveBandHeight(900, 900)
+    expect(startedFull.full).toBe(true)
+    const draggedDown = resolveBandHeight(startedFull.height - BAND_SNAP_THRESHOLD_PX - 20, 900)
+    expect(draggedDown.full).toBe(false)
+  })
+
+  it('an unmeasured column never snaps — there is nothing to snap TO', () => {
+    expect(resolveBandHeight(5000, 0)).toEqual({ height: 5000, full: false })
+    expect(resolveBandHeight(5000, Number.NaN)).toEqual({ height: 5000, full: false })
+  })
+
+  it('the floor still applies underneath the snap logic', () => {
+    expect(resolveBandHeight(10, 900)).toEqual({ height: BAND_MIN_PX, full: false })
   })
 })
 
@@ -120,6 +167,18 @@ describe('the band prefs are a per-viewer convenience and never a hard dependenc
     const prefs: BandPrefs = { open: true, height: 260 }
     writeBandPrefs(prefs, s)
     expect(readBandPrefs(s)).toEqual(prefs)
+  })
+
+  // design item 7
+  it('round-trips `full` too, omitted (not `false`) when it was never set', () => {
+    const s = memory()
+    writeBandPrefs({ open: true, height: 900, full: true }, s)
+    expect(readBandPrefs(s)).toEqual({ open: true, height: 900, full: true })
+
+    const s2 = memory()
+    writeBandPrefs({ open: true, height: 260 }, s2)
+    expect(readBandPrefs(s2)).toEqual({ open: true, height: 260 })
+    expect('full' in readBandPrefs(s2)).toBe(false)
   })
 
   it('no stored value reads as CLOSED — the band is never opened by a machine nobody asked', () => {
