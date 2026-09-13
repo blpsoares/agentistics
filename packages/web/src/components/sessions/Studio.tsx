@@ -111,6 +111,7 @@ import { copyText } from '../../lib/clipboard'
 import { overlayPadding } from '../../lib/mobileOverlay'
 import { liveEvents, type LiveEvent, type LiveTurn } from '../../lib/artifactTabs'
 import { clearUnsaved, reportUnsaved } from '../../lib/unsavedBuffers'
+import { useStudioSearchRequest } from '../../lib/studioSearchRequest'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { ConfirmModal } from '../../pages/settings/primitives'
 import { BetaTag } from '../BetaTag'
@@ -538,6 +539,21 @@ export function Studio({
   const pt = lang === 'pt'
   const [tree, setTree] = useState<TreeNode>(makeRootNode())
   const [view, setView] = useState<View>('tree')
+  /**
+   * Ctrl+Shift+F / Cmd+Shift+F (design item 8) switches to the whole-tree content search from
+   * ANYWHERE — the global shortcut (App.tsx) and each Monaco instance's own registered command
+   * (`RepoFileEditor.tsx`) both reach this ONE mounted Studio through `lib/studioSearchRequest.ts`,
+   * since neither of them is anywhere near it in the React tree (the Studio is mounted once per
+   * session and portaled into whichever slot shows it). `0` is "no request has ever been made" —
+   * the same "absent, not a stale default" shape `artifactsStore.ts`'s own `tabRequest` uses — so
+   * the initial render, which always calls this hook, never itself flips the view.
+   */
+  const searchRequest = useStudioSearchRequest()
+  useEffect(() => {
+    if (searchRequest === 0) return
+    setView('search')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchRequest])
   const [tabs, setTabs] = useState<OpenTab[]>([])
   /**
    * REPORT WHAT IS UNSAVED to the page's guard — see the file header. Keyed on this INSTANCE, not on

@@ -77,6 +77,8 @@ import { isPanelShown, rightSlotShowing, usePanelSlots } from './lib/panelSlots'
 import { getCentralMachine } from './lib/centralMachinePick'
 import { targetLabel } from './lib/terminalTarget'
 import { headerSwitcherEntries, type HeaderSwitcherGates, type HeaderSwitcherPanel } from './lib/sessionHeaderSwitcher'
+import { shouldHandleGlobally } from './lib/studioShortcuts'
+import { runStudioShortcut } from './lib/studioSearchRequest'
 import { SessionsAside } from './components/nav/SessionsAside'
 import { SessionsRail } from './components/nav/SessionsRail'
 import { getPinnedIds } from './lib/pinnedSessions'
@@ -3379,6 +3381,36 @@ export default function AppLayout() {
     refreshDeniedRepoLabels,
     a11y,
   }
+
+  /**
+   * THE TWO GLOBAL STUDIO SHORTCUTS (design items 8 and 11) — `Ctrl/Cmd+B` opens or closes the
+   * Studio wherever it lives, `Ctrl/Cmd+Shift+F` opens it (in its last slot) and switches to a
+   * whole-tree content search. Registered on `document` rather than on some element, because
+   * neither shortcut has a natural "focused" owner — the reader could be reading the conversation,
+   * sitting in the tree, or anywhere else on the page.
+   *
+   * GATED to the Sessions workspace, a session actually selected, and the editor gate open — the
+   * same three facts that decide whether the Studio's own header entry exists at all
+   * (`selectedFleetSession && appCtx.editorEnabled`, a few hundred lines below). Outside that, both
+   * shortcuts are simply not bound: there is no Studio to reach, and stealing `Ctrl+B` on, say, the
+   * dashboard would be binding a key nobody asked for there.
+   *
+   * `shouldHandleGlobally` (`lib/studioShortcuts.ts`) is the ONE gate — never re-derived here — and
+   * `runStudioShortcut` (`lib/studioSearchRequest.ts`) is the SAME function each Monaco instance's
+   * own registered command calls (`RepoFileEditor.tsx`), so a keystroke typed inside a file and one
+   * typed anywhere else in the workspace can never disagree about what either shortcut does.
+   */
+  useEffect(() => {
+    if (!inSessionsWorkspace || !selectedFleetSession || appCtx.editorEnabled !== true) return
+    const onKey = (e: KeyboardEvent) => {
+      const shortcut = shouldHandleGlobally(e, e.target as { tagName?: string; isContentEditable?: boolean } | null)
+      if (shortcut === null) return
+      e.preventDefault()
+      runStudioShortcut(shortcut)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [inSessionsWorkspace, selectedFleetSession, appCtx.editorEnabled])
 
   /**
    * The sessions workspace's ONE bar: the selected session's title, the filters, the view tabs and

@@ -104,6 +104,7 @@ import { formatBytes } from '../../lib/gallery'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { RepoNote } from './repoNote'
 import { insertMention, mentionTargetForSelection } from '../../lib/mentionInsert'
+import { runStudioShortcut } from '../../lib/studioSearchRequest'
 import type { HarnessId } from '@agentistics/core'
 
 // What `loadMonaco()` RESOLVES — `monacoEntry`, not the barrel. The barrel's type promised
@@ -1088,6 +1089,23 @@ export function RepoFileEditor({
         editor.addCommand(
           monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
           () => requestSaveRef.current('explicit'),
+        )
+
+        /**
+         * THE TWO GLOBAL STUDIO SHORTCUTS (design items 8 and 11), registered here TOO because
+         * Monaco swallows an unregistered `Ctrl/Cmd+B` or `Ctrl/Cmd+Shift+F` before the
+         * `document`-level listener in App.tsx ever sees it — this editor owns the keyboard the
+         * moment it has focus. `runStudioShortcut` is the SAME function that listener calls, so a
+         * keystroke typed while a file is open and one typed anywhere else in the workspace can
+         * never disagree about what either shortcut does.
+         */
+        editor.addCommand(
+          monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyB,
+          () => runStudioShortcut('toggle'),
+        )
+        editor.addCommand(
+          monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF,
+          () => runStudioShortcut('search'),
         )
 
         /**
