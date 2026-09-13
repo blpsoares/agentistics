@@ -37,7 +37,7 @@ import { ApprovalCard } from './ApprovalCard'
 import { ChatBubble, type ChatTurn } from './ChatBubble'
 import { WorkingNote } from './WorkingNote'
 import { useTerminalStream } from '../../hooks/useTerminalStream'
-import { isImagePath, openComposerLightbox } from '../../lib/attachmentPreview'
+import { isImagePath, openComposerLightbox, previousPersonTurnMs } from '../../lib/attachmentPreview'
 import { promptCountLabel } from '../../lib/promptCount'
 import { splitImageAttachments } from '../../lib/attachmentPreview'
 import { attachmentUrl } from '../../lib/attachmentUrl'
@@ -80,7 +80,7 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { handleComposerDrop } from '../../lib/mentionInsert'
 import { REPO_DRAG_MIME, readRepoDrag } from '../../lib/repoDrag'
 
-import type { AttachmentSend, HarnessId } from '@agentistics/core'
+import type { AttachmentMessage, AttachmentSend, HarnessId } from '@agentistics/core'
 
 interface ChatPayload {
   turns: ChatTurn[]
@@ -95,6 +95,8 @@ interface ChatPayload {
    * substituted for a path can find its file again. Absent when nothing was ever attached here.
    */
   attachmentSends?: AttachmentSend[]
+  /** What each delivered message CARRIED, for this conversation — see `AttachmentMessage`. */
+  attachmentMessages?: AttachmentMessage[]
 }
 
 export interface SessionChatProps {
@@ -1521,6 +1523,9 @@ export function SessionChat({ session, row, lang, act, onArtifacts, onReopened }
               lang={lang}
               harness={session.harness}
               {...(payload?.attachmentSends ? { attachmentSends: payload.attachmentSends } : {})}
+              {...(payload?.attachmentMessages
+                ? { attachmentMessages: payload.attachmentMessages, markerSinceMs: previousPersonTurnMs(turns, i) }
+                : {})}
               anchorId={turnAnchorId('turn', i)}
               {...(canPrompt ? { onReply: onReplyToTurn } : {})}
               {

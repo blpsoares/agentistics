@@ -28,8 +28,8 @@ import type { StartHost } from '../cli-start'
 import type { CliLang } from '../cli-lang'
 import { controlStrings } from '@agentistics/tui/control/i18n'
 import type { ChatTurn } from './chat-turn'
-import type { AttachmentSend } from '@agentistics/core'
-import { readAttachmentSends } from './attachment-web'
+import type { AttachmentMessage, AttachmentSend } from '@agentistics/core'
+import { readAttachmentLog } from './attachment-web'
 import { transcriptReaderFor } from './harness-transcript'
 import { conversationOfRow } from './row-conversation'
 import { pendingFor, type PendingPrompt } from './pending-prompts'
@@ -44,6 +44,11 @@ export interface ChatPayload {
    * serves and resolves only when the record accounts for a turn's markers exactly.
    */
   attachmentSends?: AttachmentSend[]
+  /**
+   * What each delivered message CARRIED, keyed by this CONVERSATION — the record that answers the
+   * question `attachmentSends` could only approximate by upload time. See `AttachmentMessage`.
+   */
+  attachmentMessages?: AttachmentMessage[]
   /**
    * Already-localized reason there is no conversation to show.
    *
@@ -214,10 +219,11 @@ export async function readSessionChat(
   // Read once per chat load, not per turn: the log is one small append-only file and the view
   // resolves against it locally. Omitted when there is nothing recorded, so a machine that never
   // attached anything carries no field at all.
-  const sends = await readAttachmentSends(id)
+  const { sends, messages } = await readAttachmentLog({ sessionId: id, conversationId })
   return {
     turns: read.turns,
     ...(sends.length > 0 ? { attachmentSends: sends } : {}),
+    ...(messages.length > 0 ? { attachmentMessages: messages } : {}),
     live,
     ...(pending.length > 0 ? { pending } : {}),
     ...(read.older
