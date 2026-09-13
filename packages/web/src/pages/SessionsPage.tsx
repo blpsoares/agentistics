@@ -40,7 +40,10 @@ import {
   ASIDE_ANIM_MS, ASIDE_EASE, edgeHint, panelWidth, resolveArtifactLayout,
   type ArtifactLayout,
 } from '../lib/artifactLayout'
-import { closeArtifacts, openArtifacts, setArtifactCount, useArtifacts } from '../lib/artifactsStore'
+import {
+  closeArtifacts, openArtifacts, setArtifactCount, useArtifacts, useStudioShown,
+} from '../lib/artifactsStore'
+import { studioMenuRow } from '../lib/studioMenuRow'
 import type { SessionDrilldownProps } from '../components/SessionDrilldown'
 import type { Artifact } from '../lib/sessionArtifacts'
 import { liveEvents, type LiveTurn } from '../lib/artifactTabs'
@@ -375,6 +378,8 @@ export default function SessionsPage() {
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
   }, [artWidth])
   const art = useArtifacts()
+  /** The Studio button's own on-state — see `artifactsStore.ts`'s `useStudioShown` and its mirror in `App.tsx`. */
+  const studioOpen = useStudioShown()
   const onArtifacts = useCallback((a: { artifacts: Artifact[]; loading: boolean; unavailable?: string; older?: string; unlisted: boolean; turns: readonly LiveTurn[] }) => {
     setArtifacts(a.artifacts)
     setArtifactTurns(a.turns)
@@ -1191,16 +1196,19 @@ export default function SessionsPage() {
                  aside reads, the server's own already-resolved answer with a CENTRAL already
                  subtracted where the app publishes it (`lib/editorGate.ts`): the `/api/fleet`
                  prefix is refused on a central, and this row used to be the one entry that
-                 offered the Studio there. The `new` badge is the
-                 pair to the desktop button's two marks, as far as one row of a 240px menu can
-                 carry: the beta caveat is on the Studio's own top bar, one tap away. */
-              ...(editorEnabled ? [{
-                id: 'studio',
-                label: 'Studio',
-                icon: <FolderTree size={15} />,
-                badge: pt ? 'novo' : 'new',
-                onSelect: () => openArtifacts('studio'),
-              }] : []),
+                 offered the Studio there.
+                 NO `badge` ANY MORE (see §2 of the slots/references design): the desktop button
+                 dropped its `NewTag` for a dot that clears after the first open, and a row with
+                 no icon corner to put a dot on just drops the mark rather than keeping a word the
+                 other nav lost. The beta caveat stays on the Studio's own top bar, one tap away.
+                 `on: studioOpen` mirrors the desktop button's pressed state — the same
+                 `useStudioShown` flag, so a reader who opened the Studio from THIS row and then
+                 came back to the menu finds it marked current. Built by `studioMenuRow`
+                 (above `SessionsPage`) rather than as a literal here, so its `on` wiring is
+                 asserted directly — see `SessionsPage.test.tsx`. */
+              ...(editorEnabled
+                ? [studioMenuRow(studioOpen, <FolderTree size={15} />, () => openArtifacts('studio'))]
+                : []),
             ]}
           />
         )}

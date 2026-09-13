@@ -142,8 +142,10 @@ test('and it is the only reading of `ctx.editorEnabled` on this page', () => {
 })
 
 test('both Studio entries on this page are gated on that one value', () => {
-  // The mobile session-menu row, and the prop the aside's strip entry and layer mount read.
-  expect(/\.\.\.\(editorEnabled \? \[\{\s*\n\s*id: 'studio',/.test(SRC)).toBe(true)
+  // The mobile session-menu row (built by `studioMenuRow`, `lib/studioMenuRow.ts` — see
+  // `studioMenuRow.test.ts` for its own `on: studioOpen` wiring test), and the prop the aside's
+  // strip entry and layer mount read.
+  expect(/\.\.\.\(editorEnabled\s*\n?\s*\?\s*\[studioMenuRow\(/.test(SRC)).toBe(true)
   expect(has('editorEnabled={editorEnabled}')).toBe(true)
 })
 

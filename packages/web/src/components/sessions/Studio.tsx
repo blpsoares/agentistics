@@ -95,7 +95,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
-  AlertTriangle, ArrowLeft, Check, ChevronLeft, FilePlus, Loader, PanelLeftClose, PanelLeftOpen,
+  AlertTriangle, ArrowLeft, Check, FilePlus, Loader, PanelLeftClose, PanelLeftOpen,
   Plus, Search, X,
 } from 'lucide-react'
 import {
@@ -109,6 +109,7 @@ import { clearUnsaved, reportUnsaved } from '../../lib/unsavedBuffers'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { ConfirmModal } from '../../pages/settings/primitives'
 import { BetaTag } from '../BetaTag'
+import { FileIcon, fileIconHueOnActiveTab, fileIconId } from './fileIcon'
 import { RepoFileEditor } from './RepoFileEditor'
 import { RepoSearchView } from './RepoSearchView'
 import { RepoTreeView, treeViewState } from './RepoTreeView'
@@ -717,11 +718,18 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
 /**
  * THE STUDIO'S OWN TOP EDGE — and the only chrome it has.
  *
- * The Studio covers the aside's header and its tab strip (see the file header), so the way back has
- * to be here. It NAMES where it goes rather than drawing a bare arrow: `ArrowLeft` already means
- * "back to the tree" on `TabStrip` two rows down, and one glyph for two different backs in one panel
- * is a control people press to find out what it does. The word is the aside's own heading, so the
- * destination on the button is the heading the reader lands on.
+ * The Studio covers the aside's header and its tab strip (see the file header), so the way out has
+ * to be here.
+ *
+ * IT IS A CLOSE, NEVER A LINK NAMED AFTER ANOTHER PANEL — and that is a fix, not the original
+ * design. This used to read "‹ Conteúdo": today the Studio is a MODE of `ArtifactsAside` and `onExit`
+ * puts that panel's own chrome back, so the button named the destination it happened to land on. But
+ * the design this component is built toward (see
+ * `docs/superpowers/specs/2026-09-12-studio-slots-and-references-design.md` §1) makes the Studio a
+ * PANEL of its own, openable without the Contents tab ever having been open at all — a control that
+ * always says "Conteúdo" would be lying on that path from the day it ships. `X` plus "Fechar
+ * Studio"/"Close Studio" says only what is true in both worlds: this closes the Studio. `onExit`
+ * itself is unchanged — see its own doc for why it may never unmount this component.
  *
  * ONE ROW, and as short as a row can be: the whole reason this surface took the aside over is
  * vertical space. It earns its height by being the exit and by saying what this is — the product
@@ -748,25 +756,39 @@ export function StudioBar({ isMobile, lang, onExit, tree }: {
       display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, minWidth: 0,
       // 44px is the MOBILE figure and only the mobile figure — applied on desktop it would make
       // this thin bar as tall as the tab strip under it.
-      minHeight: isMobile ? 44 : 30, padding: '0 8px 0 2px',
+      minHeight: isMobile ? 44 : 30,
+      // The STATUS BAR is not padding this bar may spend on mobile — the Studio is a true
+      // full-screen `Layer` there (`mobileOverlay.ts`'s own concern), and this bar is its first
+      // child, flush with the viewport's own top edge. Same rule as `overlayPadding`, applied to a
+      // bar with its own left/right/bottom values rather than the common `0 0` shape that helper
+      // returns.
+      padding: isMobile ? 'var(--safe-top) 8px 0 2px' : '0 8px 0 2px',
       borderBottom: '1px solid var(--border)',
     }}>
       <button
         onClick={onExit}
-        aria-label={pt ? 'Sair do Studio e voltar para Conteúdo' : 'Leave the Studio and go back to Contents'}
-        title={pt ? 'Sair do Studio e voltar para Conteúdo' : 'Leave the Studio and go back to Contents'}
+        aria-label={pt ? 'Fechar Studio' : 'Close Studio'}
+        title={pt ? 'Fechar Studio' : 'Close Studio'}
         style={{
-          display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0,
-          minHeight: isMobile ? 44 : 26, padding: isMobile ? '0 10px 0 4px' : '0 7px 0 3px',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          // `studioLayout` answers `layers` for every mobile render, so `tree` (the only other
+          // control this bar can hold) is never passed on a phone — this is the SOLE control on
+          // this side of a bar that is already 44px tall there. `.ag-tap-icon`'s projected box
+          // (22px painted + the default 7px grow) tops out at 36px, short of 44 on ITS OWN doc's
+          // claim (see `TabStrip`'s own back-arrow, measured 34x35) — so with nothing beside it to
+          // steal from, this one pays its mobile target in paint rather than in a box that would
+          // still fall short.
+          // @touch-intentional icon-only, alone on this side of the bar — see above.
+          minHeight: isMobile ? 44 : 26, width: isMobile ? 44 : undefined,
+          // @overlay-intentional the status bar inset is reserved on the BAR's own padding above —
+          // this button's zero is its icon centring, not a full-screen dialog's top edge.
+          padding: isMobile ? 0 : '0 7px 0 3px', // @overlay-intentional see comment above
           border: 'none', borderRadius: 8, background: 'transparent',
           color: 'var(--text-secondary)', cursor: 'pointer',
           fontFamily: 'inherit', fontSize: isMobile ? 13 : 11.5,
         }}
       >
-        <ChevronLeft size={isMobile ? 18 : 15} />
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {pt ? 'Conteúdo' : 'Contents'}
-        </span>
+        <X size={isMobile ? 18 : 15} />
       </button>
 
       {tree !== undefined && (
@@ -1406,6 +1428,12 @@ export function NewFileRow({ state, isMobile, lang, onChange, onSubmit, onCancel
  * The name and the close are SIBLING buttons, never a button inside a button: nesting them is
  * invalid, and it makes the close a region of the tab rather than a control of its own for anything
  * that reads the markup instead of looking at it.
+ *
+ * EACH TAB WEARS ITS `fileIcon.tsx` GLYPH, the same one the tree draws for that name — a strip of
+ * six open files used to be six identical shapes, distinguished only by a truncated name each. Its
+ * WIDTH is part of the measurement in `StudioBody`'s own contract: the icon grows every tab by a
+ * fixed amount, so the overflow split (`scrollWidth <= innerWidth`) had to be re-checked at 390px
+ * and 1440px after adding it, not assumed to still hold.
  */
 export function TabStrip({ tabs, activePath, agentHere, isMobile, lang, onSelect, onClose, onBack }: {
   tabs: readonly OpenTab[]
@@ -1462,6 +1490,7 @@ export function TabStrip({ tabs, activePath, agentHere, isMobile, lang, onSelect
       {tabs.map(tab => {
         const active = tab.path === activePath
         const name = tab.path.split('/').pop() ?? tab.path
+        const iconId = fileIconId(tab.path, 'file')
         return (
           <span
             role="listitem"
@@ -1500,6 +1529,20 @@ export function TabStrip({ tabs, activePath, agentHere, isMobile, lang, onSelect
                   background: tab.dirty ? 'var(--anthropic-orange)' : 'transparent',
                 }}
               />
+              {/* THE EXTENSION ICON, before the name — the same `fileIcon.tsx` glyph the tree draws.
+                  On the ACTIVE tab it draws in `fileIconHueOnActiveTab`'s colour rather than the
+                  default `HUE`: this tab's own background is `--bg-elevated`, a ground eight of the
+                  twenty-seven hues do not clear at `MIN_UI_CONTRAST` (see that function's own
+                  comment for the measurement) — an INACTIVE tab is transparent and sits on the same
+                  backdrop the tree already draws on, so it takes the ordinary default. */}
+              <span aria-hidden="true" style={{ flexShrink: 0, display: 'inline-flex' }}>
+                <FileIcon
+                  name={tab.path}
+                  kind="file"
+                  size={14}
+                  {...(active ? { hue: fileIconHueOnActiveTab(iconId) } : {})}
+                />
+              </span>
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
               {active && agentHere && (
                 <span

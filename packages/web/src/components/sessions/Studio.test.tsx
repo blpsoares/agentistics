@@ -27,6 +27,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { stripComments } from '../../lib/stripComments'
 import { makeRootNode, type OpenTab, type TreeNode } from '../../lib/repoTreeModel'
+import { ICON_HUES, fileIconHueOnActiveTab } from './fileIcon'
 import type { LiveEvent, LiveTurn } from '../../lib/artifactTabs'
 
 /**
@@ -445,6 +446,37 @@ describe('TabStrip', () => {
     expect(html).toContain('overflow-x:auto')
     expect(html).toContain('overscroll-behavior:contain')
   })
+
+  /**
+   * §3 of the slots/references design: an extension icon on every open tab, the same `fileIcon.tsx`
+   * glyph the tree draws. `a.ts` wears the TypeScript letter badge — every tab used to be the same
+   * shape, distinguished only by a truncated name.
+   */
+  describe('the extension icon', () => {
+    test('every tab carries its own mark, drawn before the name', () => {
+      const html = strip([tab('a.ts'), tab('.env')], 'a.ts')
+      // Both marks are on screen — `TS` (the letter badge) and the key stroke `.env` draws with.
+      expect(html).toContain('TS')
+      expect(html).toContain(ICON_HUES.env!)
+    })
+
+    test('an unmapped extension takes the neutral glyph, not a near-miss', () => {
+      expect(strip([tab('data.xyz123')], 'a.ts')).toContain('lucide-file')
+    })
+
+    test('the ACTIVE tab draws in the elevated-ground hue; an inactive one keeps the tree default', () => {
+      // `env` is one of the eight `fileIconHueOnActiveTab` had to lift — see that function's own
+      // comment. Planting the regression (rendering every tab with the tree's default `ICON_HUES.env`
+      // regardless of `active`) makes this fail on the active assertion.
+      const html = strip([tab('.env')], '.env')
+      expect(html).toContain(fileIconHueOnActiveTab('env')!)
+      expect(html).not.toContain(ICON_HUES.env!)
+
+      const inactiveHtml = strip([tab('.env'), tab('b.ts')], 'b.ts')
+      expect(inactiveHtml).toContain(ICON_HUES.env!)
+      expect(inactiveHtml).not.toContain(fileIconHueOnActiveTab('env')!)
+    })
+  })
 })
 
 // --- the toolbar and the new-file row ---------------------------------------------------------------
@@ -577,16 +609,21 @@ describe('StudioBar — the only chrome the Studio has', () => {
     <StudioBar isMobile={isMobile} lang={lang} onExit={() => {}} />,
   )
 
-  test('the way back NAMES where it goes, in both languages', () => {
-    // Not a bare arrow: `ArrowLeft` already means "back to the tree" on the strip below, and the
-    // word is the heading the reader actually lands on.
-    expect(bar('en')).toContain('Contents')
-    expect(bar('pt')).toContain('Conteúdo')
+  test('the exit is a CLOSE, never a link named after another panel', () => {
+    // §1.1/§2 of the slots/references design: this used to read "‹ Conteúdo", which is the aside's
+    // own heading and lies the moment the Studio can open without that panel ever having been open.
+    // `X` plus "Fechar Studio"/"Close Studio" says only what is true in both worlds.
+    expect(bar('en')).toContain('aria-label="Close Studio"')
+    expect(bar('en')).toContain('title="Close Studio"')
+    expect(bar('pt')).toContain('aria-label="Fechar Studio"')
+    expect(bar('pt')).toContain('title="Fechar Studio"')
+    expect(bar('en')).not.toContain('Contents')
+    expect(bar('pt')).not.toContain('Conteúdo')
   })
 
   test('it is a BUTTON with an accessible name, not a decorated glyph', () => {
-    expect(bar('en')).toContain('aria-label="Leave the Studio and go back to Contents"')
-    expect(bar('pt')).toContain('Sair do Studio e voltar para Conteúdo')
+    expect(bar('en')).toContain('<button aria-label="Close Studio"')
+    expect(bar('pt')).toContain('<button aria-label="Fechar Studio"')
   })
 
   test('the product names itself, and carries the beta caveat', () => {
@@ -612,8 +649,8 @@ describe('the Studio draws its exit from the first frame', () => {
   test('before any listing has arrived, the way out is already on screen', () => {
     // The root listing is a fetch and `useEffect` never runs here, so this is the panel at its
     // emptiest — the moment a missing exit would strand somebody.
-    expect(render()).toContain('Leave the Studio and go back to Contents')
-    expect(render('pt')).toContain('Sair do Studio e voltar para Conteúdo')
+    expect(render()).toContain('aria-label="Close Studio"')
+    expect(render('pt')).toContain('aria-label="Fechar Studio"')
   })
 })
 

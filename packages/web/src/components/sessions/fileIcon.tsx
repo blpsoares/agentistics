@@ -223,8 +223,15 @@ const HUE = {
   text: '#8b8b94',
 } as const satisfies Record<string, string>
 
-/** The two `--bg-base` values a mark is drawn on. The test's grounds, kept beside the palette. */
-export const ICON_GROUNDS = ['#0a0a0f', '#f4f4f7'] as const
+/**
+ * The two `--bg-surface` values a mark is ACTUALLY drawn on — the tree's rows and an inactive tab
+ * are both transparent over that backdrop, never `--bg-elevated` (that is the active tab's ground,
+ * `ICON_GROUNDS_ELEVATED` below) and never `--bg-base` either. This constant named `--bg-base`
+ * (`#0a0a0f`/`#f4f4f7`) until a live measurement of the computed ancestor chain found the real
+ * ground one step lighter; the "DEEPENED" table above still records its original figures against
+ * `--bg-base`; nothing here failed the floor once re-checked against the correct ground.
+ */
+export const ICON_GROUNDS = ['#111118', '#fafafc'] as const
 
 /** Every hue a mark can be drawn in, for the test that holds each of them to the floor. */
 export const ICON_HUES: Readonly<Record<string, string>> = HUE
@@ -329,8 +336,7 @@ function Atom({ size, hue }: GlyphProps & { hue: string }) {
 }
 
 /** The Markdown mark: a framed `M` with the down-arrow beside it. */
-function MarkdownMark({ size }: GlyphProps) {
-  const hue = HUE.markdown
+function MarkdownMark({ size, hue }: GlyphProps & { hue: string }) {
   return (
     <Svg size={size}>
       <rect x="0.8" y="3.4" width="14.4" height="9.2" rx="1.8" stroke={hue} strokeWidth="1.2" />
@@ -348,8 +354,7 @@ function MarkdownMark({ size }: GlyphProps) {
 }
 
 /** Two sliders — configuration, for the `.yml`/`.toml`/`.ini`/`Makefile` family. */
-function Sliders({ size }: GlyphProps) {
-  const hue = HUE.config
+function Sliders({ size, hue }: GlyphProps & { hue: string }) {
   return (
     <Svg size={size}>
       <path d="M2 5.4h3.2M8.4 5.4h5.6M2 10.6h5.6M10.8 10.6H14" stroke={hue} strokeWidth="1.4" strokeLinecap="round" />
@@ -360,8 +365,7 @@ function Sliders({ size }: GlyphProps) {
 }
 
 /** A terminal: the prompt and a line of input. */
-function Terminal({ size }: GlyphProps) {
-  const hue = HUE.shell
+function Terminal({ size, hue }: GlyphProps & { hue: string }) {
   return (
     <Svg size={size}>
       <rect x="1" y="2.4" width="14" height="11.2" rx="2.2" fill={hue} opacity="0.16" />
@@ -379,8 +383,7 @@ function Terminal({ size }: GlyphProps) {
 }
 
 /** Docker: the whale, with its stack of containers. */
-function Whale({ size }: GlyphProps) {
-  const hue = HUE.docker
+function Whale({ size, hue }: GlyphProps & { hue: string }) {
   return (
     <Svg size={size}>
       <g fill={hue}>
@@ -400,8 +403,7 @@ function Whale({ size }: GlyphProps) {
 }
 
 /** A key — `.env` and its variants. The file that holds secrets is the one worth spotting fast. */
-function Key({ size }: GlyphProps) {
-  const hue = HUE.env
+function Key({ size, hue }: GlyphProps & { hue: string }) {
   return (
     <Svg size={size}>
       <circle cx="5.2" cy="10.8" r="2.6" stroke={hue} strokeWidth="1.4" />
@@ -412,8 +414,7 @@ function Key({ size }: GlyphProps) {
 }
 
 /** A padlock — a lockfile is generated and not meant to be edited by hand. */
-function Padlock({ size }: GlyphProps) {
-  const hue = HUE.lock
+function Padlock({ size, hue }: GlyphProps & { hue: string }) {
   return (
     <Svg size={size}>
       <path d="M5.4 7.2V5.6a2.6 2.6 0 0 1 5.2 0v1.6" stroke={hue} strokeWidth="1.4" strokeLinecap="round" />
@@ -423,8 +424,7 @@ function Padlock({ size }: GlyphProps) {
 }
 
 /** A branch — the `.git*` files. */
-function Branch({ size }: GlyphProps) {
-  const hue = HUE.git
+function Branch({ size, hue }: GlyphProps & { hue: string }) {
   return (
     <Svg size={size}>
       <path d="M4.6 3.4v6.4" stroke={hue} strokeWidth="1.4" strokeLinecap="round" />
@@ -449,8 +449,7 @@ function Picture({ size, hue }: GlyphProps & { hue: string }) {
 }
 
 /** `{ }` — JSON. */
-function Braces({ size }: GlyphProps) {
-  const hue = HUE.json
+function Braces({ size, hue }: GlyphProps & { hue: string }) {
   return (
     <Svg size={size}>
       <path
@@ -472,46 +471,53 @@ function Braces({ size }: GlyphProps) {
 /**
  * Id → glyph. A `Record`, so a new `FileIconId` is a compile error here until it is drawn — the same
  * reason `HARNESS_CAPABILITIES` is one.
+ *
+ * Every entry now takes the HUE AS A PARAMETER rather than reading `HUE.xxx` off the module scope —
+ * the ONE change that lets `FileIcon` draw the same mark in a colour tuned for a ground other than
+ * `--bg-base` (see `fileIconHueOnActiveTab`) without a second copy of the thirty drawings. The two
+ * folder states and the fallback ignore it; every other entry passes it straight to the shape it
+ * already took a `hue`/`badge` prop for.
  */
-const ICONS: Record<FileIconId, (size: number) => ReactNode> = {
+const ICONS: Record<FileIconId, (size: number, hue: string) => ReactNode> = {
   // The two delegated families. See the header: these are the glyphs the tree already used, and the
-  // ones the rest of the application uses for the same two ideas.
+  // ones the rest of the application uses for the same two ideas. Neither reads `hue` — they draw in
+  // `currentColor`, the caller's own text colour.
   file: size => <File size={size} />,
   folder: size => <Folder size={size} />,
   'folder-open': size => <FolderOpen size={size} />,
 
-  ts: size => <LetterBadge size={size} label="TS" badge={HUE.ts} />,
-  react: size => <Atom size={size} hue={HUE.react} />,
-  js: size => <LetterBadge size={size} label="JS" badge={HUE.js} />,
-  json: size => <Braces size={size} />,
-  markdown: size => <MarkdownMark size={size} />,
+  ts: (size, hue) => <LetterBadge size={size} label="TS" badge={hue} />,
+  react: (size, hue) => <Atom size={size} hue={hue} />,
+  js: (size, hue) => <LetterBadge size={size} label="JS" badge={hue} />,
+  json: (size, hue) => <Braces size={size} hue={hue} />,
+  markdown: (size, hue) => <MarkdownMark size={size} hue={hue} />,
 
-  css: size => <Shield size={size} hue={HUE.css} />,
-  sass: size => <Shield size={size} hue={HUE.sass} />,
-  less: size => <Shield size={size} hue={HUE.less} />,
-  html: size => <Shield size={size} hue={HUE.html} />,
+  css: (size, hue) => <Shield size={size} hue={hue} />,
+  sass: (size, hue) => <Shield size={size} hue={hue} />,
+  less: (size, hue) => <Shield size={size} hue={hue} />,
+  html: (size, hue) => <Shield size={size} hue={hue} />,
 
-  config: size => <Sliders size={size} />,
-  shell: size => <Terminal size={size} />,
-  docker: size => <Whale size={size} />,
-  env: size => <Key size={size} />,
-  lock: size => <Padlock size={size} />,
-  git: size => <Branch size={size} />,
+  config: (size, hue) => <Sliders size={size} hue={hue} />,
+  shell: (size, hue) => <Terminal size={size} hue={hue} />,
+  docker: (size, hue) => <Whale size={size} hue={hue} />,
+  env: (size, hue) => <Key size={size} hue={hue} />,
+  lock: (size, hue) => <Padlock size={size} hue={hue} />,
+  git: (size, hue) => <Branch size={size} hue={hue} />,
 
-  image: size => <Picture size={size} hue={HUE.image} />,
-  svg: size => <Picture size={size} hue={HUE.svg} />,
+  image: (size, hue) => <Picture size={size} hue={hue} />,
+  svg: (size, hue) => <Picture size={size} hue={hue} />,
 
-  python: size => <LetterBadge size={size} label="PY" badge={HUE.python} />,
-  go: size => <LetterBadge size={size} label="GO" badge={HUE.go} />,
-  rust: size => <LetterBadge size={size} label="RS" badge={HUE.rust} />,
-  java: size => <LetterBadge size={size} label="JV" badge={HUE.java} />,
-  ruby: size => <LetterBadge size={size} label="RB" badge={HUE.ruby} />,
-  php: size => <LetterBadge size={size} label="PHP" badge={HUE.php} />,
-  c: size => <LetterBadge size={size} label="C" badge={HUE.c} />,
-  cpp: size => <LetterBadge size={size} label="C++" badge={HUE.cpp} />,
-  csharp: size => <LetterBadge size={size} label="C#" badge={HUE.csharp} />,
-  sql: size => <LetterBadge size={size} label="SQL" badge={HUE.sql} />,
-  text: size => <LetterBadge size={size} label="TXT" badge={HUE.text} />,
+  python: (size, hue) => <LetterBadge size={size} label="PY" badge={hue} />,
+  go: (size, hue) => <LetterBadge size={size} label="GO" badge={hue} />,
+  rust: (size, hue) => <LetterBadge size={size} label="RS" badge={hue} />,
+  java: (size, hue) => <LetterBadge size={size} label="JV" badge={hue} />,
+  ruby: (size, hue) => <LetterBadge size={size} label="RB" badge={hue} />,
+  php: (size, hue) => <LetterBadge size={size} label="PHP" badge={hue} />,
+  c: (size, hue) => <LetterBadge size={size} label="C" badge={hue} />,
+  cpp: (size, hue) => <LetterBadge size={size} label="C++" badge={hue} />,
+  csharp: (size, hue) => <LetterBadge size={size} label="C#" badge={hue} />,
+  sql: (size, hue) => <LetterBadge size={size} label="SQL" badge={hue} />,
+  text: (size, hue) => <LetterBadge size={size} label="TXT" badge={hue} />,
 }
 
 /** Every id, for the test that proves each of them draws something. */
@@ -524,6 +530,11 @@ export interface FileIconProps {
   /** Directories only; ignored for a file. */
   expanded?: boolean
   size?: number
+  /**
+   * Draw the mark in THIS colour instead of its own `HUE` entry — see `fileIconHueOnActiveTab`. The
+   * two folder states and the neutral fallback ignore it; they draw in `currentColor` regardless.
+   */
+  hue?: string
 }
 
 /**
@@ -534,6 +545,66 @@ export interface FileIconProps {
  * exactly as they were. A caller therefore sets the fallback colour by setting its own, and sets
  * nothing for a mapped file.
  */
-export function FileIcon({ name, kind, expanded = false, size = 13 }: FileIconProps) {
-  return <>{ICONS[fileIconId(name, kind, expanded)](size)}</>
+export function FileIcon({ name, kind, expanded = false, size = 13, hue }: FileIconProps) {
+  const id = fileIconId(name, kind, expanded)
+  return <>{ICONS[id](size, hue ?? (HUE as Partial<Record<FileIconId, string>>)[id] ?? '')}</>
+}
+
+// --- a ground other than `--bg-base` ------------------------------------------------------------
+
+/**
+ * `--bg-elevated` in each theme — the ACTIVE tab's own ground in `TabStrip`, never `--bg-base`: an
+ * inactive tab is transparent and sits on the same backdrop the tree already draws on, so only the
+ * active one needs a floor of its own.
+ */
+export const ICON_GROUNDS_ELEVATED = ['#1e1e2e', '#f0f1f5'] as const
+
+/**
+ * `HUE`, LIFTED where `--bg-elevated` is not the ground it was tuned against.
+ *
+ * `--bg-elevated` sits CLOSER to every one of these marks than `--bg-base` does, in BOTH themes — a
+ * ground with less contrast to spare, not a different one to tune for separately. Measured
+ * 2026-09-12: eight of the twenty-seven fall under `MIN_UI_CONTRAST` there even though every one of
+ * them clears it on `--bg-base` (`react`/`json`/`env`/`lock`/`git`/`go`/`text` on the LIGHT
+ * `--bg-elevated`, `#f0f1f5`; `less` on the DARK one, `#1e1e2e`). Each replacement is
+ * `readable(original, <the ground that failed>, MIN_UI_CONTRAST)` — the exact recipe the header's own
+ * "DEEPENED" table used — and then RE-MEASURED against all four grounds (`ICON_GROUNDS` and
+ * `ICON_GROUNDS_ELEVATED` together), because a lift aimed at one direction can spend the headroom the
+ * other direction was relying on; none did here.
+ *
+ * A `Partial`, not a second full palette: nineteen of the twenty-seven already clear `--bg-elevated`
+ * with their `HUE` value unchanged, so this only lists what actually needs to differ, and
+ * `fileIconHueOnActiveTab` falls back to `HUE` for everything else — one table to drift, not two.
+ * Written out as literals for the same reason `HUE` is: a palette is read by people. `fileIcon.test.tsx`
+ * holds every one of them (and everything that fell through to `HUE`) to the floor on all four
+ * grounds, so a hand-edited hue that misses it fails the build instead of the eye.
+ *
+ * ```
+ *   react  #2699b3 → #2492ab   light-elevated 2.96 → 3.22
+ *   json   #b78411 → #ae7d10   light-elevated 2.94 → 3.24
+ *   less   #3162a6 → #366bb6   dark-elevated  2.68 → 3.07
+ *   env    #af8623 → #a77f21   light-elevated 2.97 → 3.26
+ *   lock   #8b8b94 → #86868f   light-elevated 2.99 → 3.20
+ *   git    #e2683c → #e16133   light-elevated 2.96 → 3.12
+ *   go     #1e98be → #1d91b5   light-elevated 2.96 → 3.22
+ *   text   #8b8b94 → #86868f   light-elevated 2.99 → 3.20
+ * ```
+ */
+const ACTIVE_TAB_HUE: Partial<Record<FileIconId, string>> = {
+  react: '#2492ab',
+  json: '#ae7d10',
+  less: '#366bb6',
+  env: '#a77f21',
+  lock: '#86868f',
+  git: '#e16133',
+  go: '#1d91b5',
+  text: '#86868f',
+}
+
+/**
+ * The colour to draw `id` in on the ACTIVE tab. `undefined` for the two folder states and the
+ * neutral fallback — they draw in `currentColor` and take no override at all.
+ */
+export function fileIconHueOnActiveTab(id: FileIconId): string | undefined {
+  return ACTIVE_TAB_HUE[id] ?? (HUE as Partial<Record<FileIconId, string>>)[id]
 }

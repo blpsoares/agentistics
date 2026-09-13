@@ -127,3 +127,74 @@ export function resetArtifacts(): void {
   state = EMPTY
   for (const l of listeners) l()
 }
+
+// --- the Studio's own on-screen flag --------------------------------------------------------------
+//
+// ADDED FOR W1-A (see docs/superpowers/specs/2026-09-12-studio-slots-and-references-design.md §2),
+// as the design's own escape hatch: "until the slots package (W2-A) lands... read it from the
+// existing state through ONE small exported predicate". Today the Studio is a MODE of
+// `ArtifactsAside` (its own `inStudio` boolean, not exposed anywhere) rather than a slot with a
+// shared layout, so there is no existing store this header button can read. Kept as a SEPARATE pair
+// of primitives rather than a field on `ArtifactsState` above: it does not describe "which
+// session"'s panel is open, only whether the Studio happens to be the thing on screen right now, and
+// folding it into that record's equality check would re-render both of that store's consumers on
+// every Studio toggle for no reason of theirs.
+//
+// W2-A REPLACES THIS WHOLE MECHANISM. Once `lib/panelSlots.ts` exists, "the Studio is on screen"
+// is `layout.right === 'studio' || layout.bottom === 'studio'` and this pair is deleted along with
+// the one-line `useEffect` in `ArtifactsAside.tsx` that publishes to it — the header button's own
+// code (`App.tsx`) does not change, because it only ever consumed the predicate below.
+
+let studioShown = false
+const studioShownListeners = new Set<() => void>()
+
+/**
+ * Published by `ArtifactsAside` whenever its own Studio-mode flag changes, and cleared when it
+ * unmounts (no session selected, or the panel closed) — a flag nobody ever un-published would leave
+ * the header's button reading "on" for a Studio that is no longer there for anyone to see.
+ */
+export function setStudioShown(shown: boolean): void {
+  if (shown === studioShown) return
+  studioShown = shown
+  for (const l of studioShownListeners) l()
+}
+
+/**
+ * `ArtifactsAside`'s own publish, pulled out of its effect body so a wiring defect there (calling
+ * this with a hardcoded constant instead of its own `inStudio`) is caught by a test that calls it
+ * directly — `useEffect` never runs under `renderToStaticMarkup` (no jsdom in this repo), and
+ * mounting the whole Studio-capable aside is not practical in a unit test. An alias rather than new
+ * behaviour: `ArtifactsAside.tsx` calls this with its own `inStudio` on every change and with `false`
+ * on unmount, exactly as it called `setStudioShown` before.
+ */
+export function publishStudioShown(inStudio: boolean): void {
+  setStudioShown(inStudio)
+}
+
+/** The current value. Exists for tests and for callers that read once rather than subscribe. */
+export function getStudioShown(): boolean {
+  return studioShown
+}
+
+/**
+ * Registers a listener directly, bypassing React — pulled out of `useStudioShown` below so a test
+ * can prove `setStudioShown` actually NOTIFIES rather than only updating the value `getStudioShown`
+ * reads back. `useSyncExternalStore` cannot be driven from a plain `bun test` (no jsdom, no
+ * `@testing-library/react`), and a get/set-only test cannot tell a real subscription from a dropped
+ * one — see `artifactsStore.test.ts`.
+ */
+export function subscribeStudioShown(cb: () => void): () => void {
+  studioShownListeners.add(cb)
+  return () => studioShownListeners.delete(cb)
+}
+
+/** Whether the Studio is the thing on screen right now, in ANY session's panel. */
+export function useStudioShown(): boolean {
+  return useSyncExternalStore(subscribeStudioShown, () => studioShown, () => false)
+}
+
+/** For tests: forget the flag too. */
+export function resetStudioShown(): void {
+  studioShown = false
+  for (const l of studioShownListeners) l()
+}
