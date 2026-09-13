@@ -155,8 +155,14 @@ export interface BandPrefs {
   target?: string
 }
 
-/** Where a shell is drawn. `docked` is the band under the composer; `dedicated` is its own screen. */
-export type ShellPlacement = 'docked' | 'dedicated'
+/**
+ * Where a shell is drawn. `docked` is the band under the composer; `dedicated` is its own screen;
+ * `aside` is the panel-slots' RIGHT slot (`lib/panelSlots.ts`'s `shell` panel) — no drag handle, no
+ * collapsed state (the slot's own close is the way out), but its own geometry key: the aside is a
+ * different box from both of the other two, and one shared measurement would snap the pane to
+ * whichever box last reported, the exact defect `bandGeometry` exists to avoid.
+ */
+export type ShellPlacement = 'docked' | 'dedicated' | 'aside'
 
 export interface PaneGeometry { cols: number; rows: number }
 
@@ -201,7 +207,7 @@ function readGeometries(v: unknown): Partial<Record<ShellPlacement, PaneGeometry
   if (typeof v !== 'object' || v === null) return null
   const r = v as Record<string, unknown>
   const out: Partial<Record<ShellPlacement, PaneGeometry>> = {}
-  for (const key of ['docked', 'dedicated'] as const) {
+  for (const key of ['docked', 'dedicated', 'aside'] as const) {
     const g = readGeometry(r[key])
     if (g) out[key] = g
   }

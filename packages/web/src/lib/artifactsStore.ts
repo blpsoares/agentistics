@@ -18,7 +18,7 @@
  */
 
 import { useSyncExternalStore } from 'react'
-import { holdIfUnsaved } from './unsavedBuffers'
+import { getPanelLayout, hidePanel, rightSlotShowing, showPanel } from './panelSlots'
 
 export interface ArtifactsState {
   /** Which session the count and the open flag describe. `null` before one is selected. */
@@ -91,26 +91,48 @@ export function setArtifactCount(sessionId: string, count: number): void {
 }
 
 export function openArtifacts(tab?: string, ref?: string): void {
-  emit({
+  // THE STUDIO IS NO LONGER A MODE OF THIS PANEL — see `panelSlots.ts`. This is kept as a thin
+  // compatibility shim so the header button and the mobile session menu (which both still call
+  // `openArtifacts('studio')`) need no second import: a request for it opens the STUDIO panel in
+  // its own slot and touches nothing here. This store's `open`/`dismissed`/`tabRequest` describe the
+  // CONTENTS panel alone, exactly as `contents` is its own `PanelId` in the new model.
+  if (tab === 'studio') { showPanel('studio'); return }
+  const show = () => emit({
     ...state, open: true,
     // `ref` names a STEP to open once the tab is there — the edge strip names an action, and
     // pressing it should land on that row rather than on the top of a feed to be searched.
     ...(tab === undefined ? {} : { tabRequest: { tab, at: Date.now(), ...(ref ? { ref } : {}) } }),
   })
+  // CONTENTS AND WHATEVER ELSE HOLDS THE RIGHT SLOT SHARE IT. Opening Contents while ANY panel sits
+  // there — the Studio, and now `cli`/`shell` too (C2, this defect's second showing: I2 fixed it for
+  // the Studio alone and the same gap reopened the moment `cli`/`shell` could reach the slot) — must
+  // DISPLACE it, asking first only when the Studio is dirty, through the very `hidePanel` that
+  // already asks for a direct close — or Contents lights as "open" behind a panel the reader never
+  // left: the header's button, a note chip's `openArtifacts('live', ref)`, the metrics card's
+  // `openArtifacts('metrics')` and the right switcher's own "Conteúdo" tab all go through this one
+  // function. `after` is what fixes the second half of that: Contents opens only once the occupant
+  // has actually gone, whether that is immediate (nothing dirty) or after the reader answers
+  // "discard" — never eagerly, which is what let it light up behind a Studio kept via "Continuar
+  // editando". `hidePanel` only ever asks for the Studio (`panelSlots.hidePanel`'s own studio-only
+  // hold) — displacing `cli`/`shell` here asks nothing, which is correct: nothing of theirs is
+  // dropped by leaving the slot.
+  const occupant = getPanelLayout().right
+  if (occupant !== null) { hidePanel(occupant, show); return }
+  show()
 }
 
 /**
  * Closing is also a DECISION not to be reopened automatically — see `ArtifactsState.dismissed`.
  *
- * AND IT ASKS FIRST WHEN THE STUDIO HOLDS UNSAVED BUFFERS. Closing the panel unmounts the whole
- * pane, Monaco models and all, so a close with dirty buffers is a discard. The question is asked
- * HERE, in the only function that closes, rather than at each button that calls it: the panel's
- * own close, the header's toggle and the page menu's toggle all arrive through this, and a guard
- * at the call sites is a guard the next caller forgets. `unsavedBuffers.ts` holds the question; the
- * close happens only when the reader chooses to discard.
+ * IT NO LONGER ASKS ABOUT THE STUDIO. This panel used to unmount the Studio along with itself — one
+ * DOM tree, one close — so a close with dirty Monaco buffers was a silent discard, and the question
+ * was asked here, in the one function every close went through. The Studio is now its OWN panel
+ * (`panelSlots.ts`), placed in its own slot independently of this one: closing Contents no longer
+ * touches it at all, so asking about its buffers here would hold a close that drops nothing. The
+ * hold moved with the buffers — `panelSlots.ts`'s `showPanel` / `hidePanel` ask before the Studio
+ * itself is displaced or closed, through the very same `unsavedBuffers.ts`.
  */
 export function closeArtifacts(): void {
-  if (state.open && holdIfUnsaved('close', closeNow)) return
   closeNow()
 }
 
@@ -118,83 +140,25 @@ function closeNow(): void {
   emit({ ...state, open: false, dismissed: true })
 }
 
+/**
+ * TOGGLE READS THE SAME "WHAT IS SHOWN" SELECTOR THE HEADER'S `aria-pressed` DOES (C2), not this
+ * store's own `open` flag in isolation. Found live, after the displacement fix above: `state.open`
+ * stays whatever it last was set to by THIS store alone, and `cli`/`shell` reaching the right slot
+ * through the switcher's own tab (which calls `panelSlots.openPanel` directly, never
+ * `openArtifacts`/`closeArtifacts`) does not touch it. So opening Contents, then picking `cli` from
+ * the switcher, left `state.open === true` while the slot showed the terminal — and the header
+ * button's NEXT press, reading only `state.open`, called `closeArtifacts()` instead of displacing
+ * `cli`: the button visibly did nothing (the terminal stayed, `aria-pressed` stayed `false`, which
+ * was already correct) and it took a THIRD press to actually reach Contents. `rightSlotShowing` is
+ * the one place that already reconciles the slot's own occupant with this store's flag; reading it
+ * here as well is what makes one press behave like Contents is either showing or it is not.
+ */
 export function toggleArtifacts(): void {
-  if (state.open) closeArtifacts(); else openArtifacts()
+  if (rightSlotShowing(getPanelLayout(), state.open) === 'contents') closeArtifacts(); else openArtifacts()
 }
 
 /** For tests: forget everything. */
 export function resetArtifacts(): void {
   state = EMPTY
   for (const l of listeners) l()
-}
-
-// --- the Studio's own on-screen flag --------------------------------------------------------------
-//
-// ADDED FOR W1-A (see docs/superpowers/specs/2026-09-12-studio-slots-and-references-design.md §2),
-// as the design's own escape hatch: "until the slots package (W2-A) lands... read it from the
-// existing state through ONE small exported predicate". Today the Studio is a MODE of
-// `ArtifactsAside` (its own `inStudio` boolean, not exposed anywhere) rather than a slot with a
-// shared layout, so there is no existing store this header button can read. Kept as a SEPARATE pair
-// of primitives rather than a field on `ArtifactsState` above: it does not describe "which
-// session"'s panel is open, only whether the Studio happens to be the thing on screen right now, and
-// folding it into that record's equality check would re-render both of that store's consumers on
-// every Studio toggle for no reason of theirs.
-//
-// W2-A REPLACES THIS WHOLE MECHANISM. Once `lib/panelSlots.ts` exists, "the Studio is on screen"
-// is `layout.right === 'studio' || layout.bottom === 'studio'` and this pair is deleted along with
-// the one-line `useEffect` in `ArtifactsAside.tsx` that publishes to it — the header button's own
-// code (`App.tsx`) does not change, because it only ever consumed the predicate below.
-
-let studioShown = false
-const studioShownListeners = new Set<() => void>()
-
-/**
- * Published by `ArtifactsAside` whenever its own Studio-mode flag changes, and cleared when it
- * unmounts (no session selected, or the panel closed) — a flag nobody ever un-published would leave
- * the header's button reading "on" for a Studio that is no longer there for anyone to see.
- */
-export function setStudioShown(shown: boolean): void {
-  if (shown === studioShown) return
-  studioShown = shown
-  for (const l of studioShownListeners) l()
-}
-
-/**
- * `ArtifactsAside`'s own publish, pulled out of its effect body so a wiring defect there (calling
- * this with a hardcoded constant instead of its own `inStudio`) is caught by a test that calls it
- * directly — `useEffect` never runs under `renderToStaticMarkup` (no jsdom in this repo), and
- * mounting the whole Studio-capable aside is not practical in a unit test. An alias rather than new
- * behaviour: `ArtifactsAside.tsx` calls this with its own `inStudio` on every change and with `false`
- * on unmount, exactly as it called `setStudioShown` before.
- */
-export function publishStudioShown(inStudio: boolean): void {
-  setStudioShown(inStudio)
-}
-
-/** The current value. Exists for tests and for callers that read once rather than subscribe. */
-export function getStudioShown(): boolean {
-  return studioShown
-}
-
-/**
- * Registers a listener directly, bypassing React — pulled out of `useStudioShown` below so a test
- * can prove `setStudioShown` actually NOTIFIES rather than only updating the value `getStudioShown`
- * reads back. `useSyncExternalStore` cannot be driven from a plain `bun test` (no jsdom, no
- * `@testing-library/react`), and a get/set-only test cannot tell a real subscription from a dropped
- * one — see `artifactsStore.test.ts`.
- */
-export function subscribeStudioShown(cb: () => void): () => void {
-  studioShownListeners.add(cb)
-  return () => studioShownListeners.delete(cb)
-}
-
-/** Whether the Studio is the thing on screen right now, in ANY session's panel. */
-export function useStudioShown(): boolean {
-  return useSyncExternalStore(subscribeStudioShown, () => studioShown, () => false)
-}
-
-/** For tests: forget the flag too. */
-export function resetStudioShown(): void {
-  studioShown = false
-  for (const l of studioShownListeners) l()
 }

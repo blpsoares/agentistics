@@ -72,7 +72,8 @@ import { Login } from './components/Login'
 import { ModeSwitch } from './components/nav/ModeSwitch'
 import { TopBar } from './components/nav/TopBar'
 import { COST_BASIS_W, FULL_BAR_W, MIN_BAR_W, headerFit, stripPadding } from './lib/headerFit'
-import { openArtifacts, toggleArtifacts, useArtifacts, useStudioShown } from './lib/artifactsStore'
+import { openArtifacts, toggleArtifacts, useArtifacts } from './lib/artifactsStore'
+import { isPanelShown, rightSlotShowing, usePanelSlots } from './lib/panelSlots'
 import { SessionsAside } from './components/nav/SessionsAside'
 import { SessionsRail } from './components/nav/SessionsRail'
 import { getPinnedIds } from './lib/pinnedSessions'
@@ -1977,10 +1978,18 @@ export default function AppLayout() {
   /** The artifacts panel's open flag and count — see `artifactsStore` for why it is not a prop. */
   const artifacts = useArtifacts()
   /**
-   * THE STUDIO BUTTON'S OWN STATE (§2 of the slots/references design). `studioOn` is
-   * "on screen in ANY slot", published by `ArtifactsAside` — see `artifactsStore.ts`'s comment on
-   * `useStudioShown` for why this reads from a flag rather than from `artifacts` above (the Studio is
-   * a MODE of that same panel today, not a value this store already carried).
+   * THE STUDIO BUTTON'S OWN STATE (§2 of the slots/references design). `studioOn` is "on screen in
+   * ANY slot" — `panelSlots.ts`'s own `isPanelShown`, which is `true` whether the Studio sits in the
+   * right slot, the bottom slot, or a collapsed bottom band (the panel is still THERE, only its
+   * screen is hidden). This used to read a bespoke `useStudioShown` flag published by
+   * `ArtifactsAside` back when the Studio was a MODE of that one panel; now that panels/slots exist,
+   * the layout itself is the single source of truth for "is the Studio on screen".
+   *
+   * `headerRightShowing` is the SEPARATE question the Contents button asks — what does the RIGHT
+   * slot specifically show — through `rightSlotShowing`, the one selector every "is this pressed"
+   * reading in this header goes through. Before this existed, the Contents button's `aria-pressed`
+   * read `artifacts.open` directly: with `cli`/`shell` holding the slot, pressing the button flipped
+   * the flag while the screen kept showing the terminal — see C2.
    *
    * `studioSeen` replaces the button's old `NewTag`: a corner DOT rather than a word, so the button
    * is the same width whether or not it has been pressed yet, cleared for good the first time it
@@ -1991,16 +2000,18 @@ export default function AppLayout() {
    *
    * CLEARED FROM ONE PLACE — an effect on `studioOn` turning true, not this button's own `onClick`
    * — so every route into the Studio marks the dot seen the same way: this button, the mobile
-   * menu's row (`SessionsPage.tsx`) and the aside's own strip entry all flip `studioOn`, and only
-   * one of those used to clear the dot.
+   * menu's row (`SessionsPage.tsx`) and the right switcher's own Studio tab all flip `studioOn`, and
+   * only one of those used to clear the dot.
    */
-  const studioOn = useStudioShown()
+  const slotLayout = usePanelSlots().layout
+  const studioOn = isPanelShown(slotLayout, 'studio')
   const [studioSeen, setStudioSeen] = useState(() => readStudioSeen(localStorage))
   useEffect(() => {
     if (!studioOn || studioSeen) return
     setStudioSeen(true)
     writeStudioSeen(localStorage)
   }, [studioOn, studioSeen])
+  const headerRightShowing = rightSlotShowing(slotLayout, artifacts.open)
 
   /**
    * Active sessions only — the fleet's own dimension (see `FiltersBar`'s doc comment on
@@ -3358,16 +3369,16 @@ export default function AppLayout() {
       {selectedFleetSession && !isCentral && (
         <button
           onClick={toggleArtifacts}
-          aria-pressed={artifacts.open}
+          aria-pressed={headerRightShowing === 'contents'}
           title={lang === 'pt'
             ? 'Conteúdo desta sessão — atividade, galeria, skills, subagentes e mais'
             : 'This session’s contents — activity, gallery, skills, subagents and more'}
           style={{
             display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
             height: 30, padding: '0 10px', borderRadius: 9, cursor: 'pointer',
-            border: '1px solid ' + (artifacts.open ? 'var(--anthropic-orange)' : 'var(--border-subtle)'),
-            background: artifacts.open ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
-            color: artifacts.open ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+            border: '1px solid ' + (headerRightShowing === 'contents' ? 'var(--anthropic-orange)' : 'var(--border-subtle)'),
+            background: headerRightShowing === 'contents' ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+            color: headerRightShowing === 'contents' ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
             fontFamily: 'inherit', fontSize: 12,
           }}
         >
@@ -3407,12 +3418,12 @@ export default function AppLayout() {
           reader that the unmarked one is something else.
 
           PRESSED means the Studio is ON SCREEN, in whichever slot is showing it — not merely that
-          this button was the one that opened it. `studioOn` (`useStudioShown`) is what makes that
-          true even when it was some OTHER control — the aside's own strip entry, or the mobile
-          menu row — that opened it, and false again the moment the aside's own back control puts
-          the Studio away; see `artifactsStore.ts` for why that flag exists at all before W2-A's
-          slots land. The orange treatment on `true` is the "Reabrir N sessões que caíram" button's
-          own tokens (`SessionsAside.tsx`), reused rather than re-invented. */}
+          this button was the one that opened it. `studioOn` (`isPanelShown(slotLayout, 'studio')`)
+          is what makes that true even when it was some OTHER control — the right switcher's own
+          Studio tab, the docked band's segment, or the mobile menu row — that opened it, and false
+          again the moment the Studio is displaced or closed from any of them. The orange treatment
+          on `true` is the "Reabrir N sessões que caíram" button's own tokens (`SessionsAside.tsx`),
+          reused rather than re-invented. */}
       {selectedFleetSession && appCtx.editorEnabled && (
         <StudioHeaderButton
           studioOn={studioOn}
