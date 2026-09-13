@@ -8,8 +8,8 @@
  * `resolveTreePath` only catches a LEXICAL `..` escape; this is the other half, the one that
  * catches a symlink INSIDE the tree pointing outside it.
  */
-import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { dirname, resolve } from 'node:path'
 import type { StartHost } from '../cli-start'
 import { gitEnv } from '../backup/repo-probe'
 import { planSessionDirectory, type SessionDirPlan } from './editor-directory'
@@ -344,7 +344,9 @@ export async function createTreeEntry(
   if (target === null) return { ok: false, reason: 'not-found' }
 
   try {
-    await stat(target)
+    // `lstat`, not `stat`: a DANGLING symlink at this name answers "nothing there" to `stat`, and
+    // `writeFile` would then follow it and create its target — which can be anywhere on the machine.
+    await lstat(target)
     return { ok: false, reason: 'already-exists' }
   } catch {
     // Good — it must not exist yet.
@@ -355,7 +357,41 @@ export async function createTreeEntry(
   return { ok: true }
 }
 
-export type RenameRefusal = 'escaped' | 'not-found' | 'already-exists'
+/**
+ * THE ENTRY A MUTATION ACTS ON — the name in its folder, never what a symlink at that name points to.
+ *
+ * Rename and delete used to resolve the entry with `realContained`, which is `realpath` of the ENTRY
+ * itself: right for a READ (the bytes you see are the target's) and wrong for a MUTATION. With
+ * `CLAUDE.md -> AGENTS.md`, deleting `CLAUDE.md` deleted `AGENTS.md` and left a dangling link, while
+ * the confirmation had named `CLAUDE.md`; renaming it renamed `AGENTS.md`. So only the PARENT is
+ * resolved (it must really live inside the tree — that is the containment rule), the basename is kept
+ * as written, and existence is `lstat`, which answers for the link and not for its target. `rename`
+ * and `rm` both act on a link without following it, so the link is what moves or goes.
+ *
+ * `null` for a path whose parent escapes or does not exist, and for a name with nothing there.
+ */
+async function entryContained(root: string, abs: string): Promise<string | null> {
+  const entry = await realContainedParent(root, abs)
+  if (entry === null) return null
+  try {
+    await lstat(entry)
+    return entry
+  } catch {
+    return null
+  }
+}
+
+/**
+ * `''`, `.`, `sub/..` — anything that normalises to the session folder ITSELF. A mutation of the root
+ * is never something the tree asks for (the root is not a row), and `DELETE path=. recursive=1` used
+ * to answer 200 and remove the whole session folder. Refused by name rather than falling through to
+ * whatever the parent check happens to say, so the sentence is true.
+ */
+function namesRoot(root: string, abs: string): boolean {
+  return resolve(abs) === resolve(root)
+}
+
+export type RenameRefusal = 'escaped' | 'not-found' | 'already-exists' | 'is-root'
 export type RenamePlan = { ok: true } | { ok: false; reason: RenameRefusal }
 
 export async function renameTreeEntry(root: string, fromPath: string, toPath: string): Promise<RenamePlan> {
@@ -363,15 +399,17 @@ export async function renameTreeEntry(root: string, fromPath: string, toPath: st
   if (!from.ok) return { ok: false, reason: 'escaped' }
   const to = resolveTreePath(root, toPath)
   if (!to.ok) return { ok: false, reason: 'escaped' }
+  if (namesRoot(root, from.abs) || namesRoot(root, to.abs)) return { ok: false, reason: 'is-root' }
 
-  const realFrom = await realContained(root, from.abs)
+  const realFrom = await entryContained(root, from.abs)
   if (realFrom === null) return { ok: false, reason: 'not-found' }
 
   const realToTarget = await realContainedParent(root, to.abs)
   if (realToTarget === null) return { ok: false, reason: 'escaped' }
 
   try {
-    await stat(realToTarget)
+    // `lstat`: a dangling symlink already sitting at the destination is still something there.
+    await lstat(realToTarget)
     return { ok: false, reason: 'already-exists' }
   } catch {
     // Good — the destination must be free.
@@ -381,7 +419,7 @@ export async function renameTreeEntry(root: string, fromPath: string, toPath: st
   return { ok: true }
 }
 
-export type DeleteRefusal = 'escaped' | 'not-found' | 'not-empty'
+export type DeleteRefusal = 'escaped' | 'not-found' | 'not-empty' | 'is-root'
 export type DeletePlan = { ok: true } | { ok: false; reason: DeleteRefusal }
 
 export async function deleteTreeEntry(
@@ -389,12 +427,15 @@ export async function deleteTreeEntry(
 ): Promise<DeletePlan> {
   const planned = resolveTreePath(root, requestedPath)
   if (!planned.ok) return { ok: false, reason: 'escaped' }
-  const real = await realContained(root, planned.abs)
+  if (namesRoot(root, planned.abs)) return { ok: false, reason: 'is-root' }
+  const real = await entryContained(root, planned.abs)
   if (real === null) return { ok: false, reason: 'not-found' }
 
   let st
   try {
-    st = await stat(real)
+    // `lstat`, so a link to a folder is a LINK here: it is removed as one entry and its target's
+    // contents are neither listed for the not-empty check nor touched.
+    st = await lstat(real)
   } catch {
     return { ok: false, reason: 'not-found' }
   }

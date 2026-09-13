@@ -199,6 +199,23 @@ describe('handleEditorTreeRoute', () => {
       expect(body).toMatchObject({ ok: false, reason: 'escaped' })
     })
 
+    test('DELETE /api/fleet/tree/entry?path=.&recursive=1 is refused as the session folder itself, and deletes nothing', async () => {
+      const keep = new Request('http://x/api/fleet/tree/entry', {
+        method: 'POST', body: JSON.stringify({ id: 's1', path: 'root-survivor.txt', kind: 'file' }),
+      })
+      await call(keep, hostWith('s1', repo))
+      for (const path of ['', '.']) {
+        const del = await call(
+          new Request(`http://x/api/fleet/tree/entry?id=s1&path=${encodeURIComponent(path)}&recursive=1`, { method: 'DELETE' }),
+          hostWith('s1', repo),
+        )
+        expect(del.status).toBe(409)
+        expect(del.body).toMatchObject({ ok: false, reason: 'is-root' })
+      }
+      const list = await call(new Request('http://x/api/fleet/tree?id=s1&path='), hostWith('s1', repo))
+      expect(JSON.stringify(list.body)).toContain('root-survivor.txt')
+    })
+
     test('DELETE /api/fleet/tree/entry on a non-empty folder without ?recursive=1 is 409 (a real state conflict)', async () => {
       const dirReq = new Request('http://x/api/fleet/tree/entry', {
         method: 'POST', body: JSON.stringify({ id: 's1', path: 'nonempty', kind: 'dir' }),
