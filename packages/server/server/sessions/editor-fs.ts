@@ -124,13 +124,37 @@ export async function listChildren(root: string, requestedPath: string): Promise
  * The recursive, gitignore-aware file list under `relDir` (relative to `root`), with paths
  * returned relative to `relDir` itself. `null` when `root` is not a git work tree at all (the
  * command's own exit code says so — no separate "is this a repo" probe is needed).
+ *
+ * PHANTOM ROWS: the Studio's rename/delete act with a raw `fs.rename`/`rm`, never `git mv`/`git
+ * rm` — so a git-TRACKED path can vanish or move on disk while the INDEX still names the old
+ * one. `--cached` answers from the index regardless of what disk has, so an entry gone from disk
+ * kept appearing (a file under its old name; a whole directory, once every tracked descendant
+ * that used to justify `collapseToChildren` producing it was itself gone). `--others
+ * --exclude-standard` is never the problem half — it lists the working tree's own untracked,
+ * non-ignored files, which by definition exist.
+ *
+ * Fixed by subtracting `git ls-files --deleted` (index paths git can see are missing from the
+ * worktree) from the `--cached` half, before `collapseToChildren` ever runs. Chosen over an
+ * `lstat` per collapsed child — the other candidate — because it is exact at EVERY depth under
+ * `relDir` in one pass (a deleted folder's directory row disappears here for the same reason its
+ * files do, with nothing extra to reason about), it costs one more `git` call bounded by the
+ * same pathspec rather than N filesystem syscalls sized to how many children the level happens to
+ * have, and it needs no filesystem access at all beyond what `git` already does internally. A
+ * `--deleted` call that itself fails is treated as "nothing known to be deleted" — the listing
+ * degrades to exactly its old (buggy) behaviour rather than refusing the whole directory.
  */
 async function gitListRecursive(root: string, relDir: string): Promise<string[] | null> {
   const pathspec = relDir === '' ? '.' : relDir
-  const res = await runGit(root, ['ls-files', '--cached', '--others', '--exclude-standard', '--', pathspec])
+  const [res, deletedRes] = await Promise.all([
+    runGit(root, ['ls-files', '--cached', '--others', '--exclude-standard', '--', pathspec]),
+    runGit(root, ['ls-files', '--deleted', '--', pathspec]),
+  ])
   if (!res.ok) return null
+  const deleted = deletedRes.ok ? new Set(deletedRes.out.split('\n').filter(Boolean)) : null
   const prefix = relDir === '' ? '' : `${relDir}/`
-  return res.out.split('\n').filter(Boolean).map(p => (p.startsWith(prefix) ? p.slice(prefix.length) : p))
+  return res.out.split('\n').filter(Boolean)
+    .filter(p => !deleted?.has(p))
+    .map(p => (p.startsWith(prefix) ? p.slice(prefix.length) : p))
 }
 
 /**
