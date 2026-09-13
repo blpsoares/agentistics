@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -402,6 +402,147 @@ describe('renameTreeEntry', () => {
     writeFileSync(join(plainDir, 'src-c.txt'), 'c')
     expect(await renameTreeEntry(plainDir, 'src-c.txt', '../out.txt')).toEqual({ ok: false, reason: 'escaped' })
     expect(await renameTreeEntry(plainDir, '../out.txt', 'src-c.txt')).toEqual({ ok: false, reason: 'escaped' })
+  })
+})
+
+describe('rename and delete act on the ENTRY, never on a symlink\'s target', () => {
+  test('deleting a symlink removes the link and leaves its target', async () => {
+    writeFileSync(join(plainDir, 'AGENTS-del.md'), 'the real one')
+    symlinkSync('AGENTS-del.md', join(plainDir, 'CLAUDE-del.md'))
+    expect(await deleteTreeEntry(plainDir, 'CLAUDE-del.md', false)).toEqual({ ok: true })
+    expect(existsSync(join(plainDir, 'CLAUDE-del.md'))).toBe(false)
+    expect(readFileSync(join(plainDir, 'AGENTS-del.md'), 'utf8')).toBe('the real one')
+  })
+
+  test('renaming a symlink moves the link and leaves its target where it is', async () => {
+    writeFileSync(join(plainDir, 'AGENTS-ren.md'), 'the real one')
+    symlinkSync('AGENTS-ren.md', join(plainDir, 'CLAUDE-ren.md'))
+    expect(await renameTreeEntry(plainDir, 'CLAUDE-ren.md', 'CLAUDE-moved.md')).toEqual({ ok: true })
+    expect(existsSync(join(plainDir, 'AGENTS-ren.md'))).toBe(true)
+    expect(lstatSync(join(plainDir, 'CLAUDE-moved.md')).isSymbolicLink()).toBe(true)
+  })
+
+  test('recursively deleting a link to a folder removes the link, not the folder\'s contents', async () => {
+    mkdirSync(join(plainDir, 'real-folder'))
+    writeFileSync(join(plainDir, 'real-folder', 'keep.txt'), 'x')
+    symlinkSync('real-folder', join(plainDir, 'folder-link'))
+    expect(await deleteTreeEntry(plainDir, 'folder-link', true)).toEqual({ ok: true })
+    expect(existsSync(join(plainDir, 'folder-link'))).toBe(false)
+    expect(readFileSync(join(plainDir, 'real-folder', 'keep.txt'), 'utf8')).toBe('x')
+  })
+
+  test('a dangling link is still an entry: it can be deleted, and it blocks a rename onto its name', async () => {
+    symlinkSync('does-not-exist', join(plainDir, 'dangling-a'))
+    symlinkSync('does-not-exist', join(plainDir, 'dangling-b'))
+    writeFileSync(join(plainDir, 'onto-dangling.txt'), 'x')
+    expect(await renameTreeEntry(plainDir, 'onto-dangling.txt', 'dangling-b'))
+      .toEqual({ ok: false, reason: 'already-exists' })
+    expect(await deleteTreeEntry(plainDir, 'dangling-a', false)).toEqual({ ok: true })
+    expect(existsSync(join(plainDir, 'onto-dangling.txt'))).toBe(true)
+  })
+
+  test('a lexical ../ path is refused before any filesystem call', async () => {
+    expect(await deleteTreeEntry(plainDir, '../outside.txt', false)).toEqual({ ok: false, reason: 'escaped' })
+  })
+})
+
+describe('a PARENT folder that is a symlink pointing outside the tree', () => {
+  // The fix resolves only the parent (`entryContained`), so this is the containment rule every
+  // mutation now rests on. Each case asserts the refusal AND that the outside file is untouched.
+  const setup = (tag: string) => {
+    const outside = mkdtempSync(join(tmpdir(), `agentistics-outside-${tag}-`))
+    writeFileSync(join(outside, 'o.txt'), 'outside')
+    mkdirSync(join(outside, 'odir'))
+    writeFileSync(join(outside, 'odir', 'inner.txt'), 'outside')
+    symlinkSync(outside, join(plainDir, `evil-${tag}`))
+    return outside
+  }
+
+  test('delete (plain and recursive) through it is refused', async () => {
+    const outside = setup('del')
+    expect((await deleteTreeEntry(plainDir, 'evil-del/o.txt', false)).ok).toBe(false)
+    expect((await deleteTreeEntry(plainDir, 'evil-del/odir', true)).ok).toBe(false)
+    expect(readFileSync(join(outside, 'o.txt'), 'utf8')).toBe('outside')
+    expect(readFileSync(join(outside, 'odir', 'inner.txt'), 'utf8')).toBe('outside')
+    rmSync(outside, { recursive: true, force: true })
+  })
+
+  test('rename FROM through it is refused, so an outside file is never pulled into the tree', async () => {
+    const outside = setup('from')
+    expect((await renameTreeEntry(plainDir, 'evil-from/o.txt', 'stolen.txt')).ok).toBe(false)
+    expect(existsSync(join(outside, 'o.txt'))).toBe(true)
+    expect(existsSync(join(plainDir, 'stolen.txt'))).toBe(false)
+    rmSync(outside, { recursive: true, force: true })
+  })
+
+  test('rename TO through it is refused, so a tree file is never pushed out', async () => {
+    const outside = setup('to')
+    writeFileSync(join(plainDir, 'stays-home.txt'), 'home')
+    expect((await renameTreeEntry(plainDir, 'stays-home.txt', 'evil-to/pushed.txt')).ok).toBe(false)
+    expect(existsSync(join(plainDir, 'stays-home.txt'))).toBe(true)
+    expect(existsSync(join(outside, 'pushed.txt'))).toBe(false)
+    rmSync(outside, { recursive: true, force: true })
+  })
+
+  test('create through it is refused and writes nothing outside', async () => {
+    const outside = setup('create')
+    expect((await createTreeEntry(plainDir, 'evil-create/new.txt', 'file')).ok).toBe(false)
+    expect((await createTreeEntry(plainDir, 'evil-create/newdir', 'dir')).ok).toBe(false)
+    expect(existsSync(join(outside, 'new.txt'))).toBe(false)
+    expect(existsSync(join(outside, 'newdir'))).toBe(false)
+    rmSync(outside, { recursive: true, force: true })
+  })
+})
+
+describe('what the filesystem itself refuses comes back as a code, never a thrown host path', () => {
+  test('moving a folder into its own child is into-itself', async () => {
+    mkdirSync(join(plainDir, 'self-parent'))
+    expect(await renameTreeEntry(plainDir, 'self-parent', 'self-parent/child'))
+      .toEqual({ ok: false, reason: 'into-itself' })
+  })
+
+  test('moving a folder into its own child THROUGH a symlink is into-itself too', async () => {
+    mkdirSync(join(plainDir, 'self-real'))
+    symlinkSync('self-real', join(plainDir, 'self-alias'))
+    expect(await renameTreeEntry(plainDir, 'self-real', 'self-alias/child'))
+      .toEqual({ ok: false, reason: 'into-itself' })
+    expect(existsSync(join(plainDir, 'self-real'))).toBe(true)
+  })
+
+  test('a path whose middle segment is a FILE is not-a-directory, for create and rename', async () => {
+    writeFileSync(join(plainDir, 'plain-file.txt'), 'x')
+    writeFileSync(join(plainDir, 'mover.txt'), 'x')
+    expect(await createTreeEntry(plainDir, 'plain-file.txt/child', 'file'))
+      .toEqual({ ok: false, reason: 'not-a-directory' })
+    expect(await renameTreeEntry(plainDir, 'mover.txt', 'plain-file.txt/child'))
+      .toEqual({ ok: false, reason: 'not-a-directory' })
+  })
+})
+
+describe('creating an entry never writes through a dangling symlink', () => {
+  test('a dangling link pointing OUTSIDE the tree blocks the create and nothing is written out there', async () => {
+    const outside = join(root, 'outside-target-created-by-link.txt')
+    symlinkSync(outside, join(plainDir, 'trap-link.txt'))
+    expect(await createTreeEntry(plainDir, 'trap-link.txt', 'file')).toEqual({ ok: false, reason: 'already-exists' })
+    expect(existsSync(outside)).toBe(false)
+  })
+})
+
+describe('the session folder itself is never renamed or deleted', () => {
+  for (const path of ['', '.', './', 'sub-for-root/..']) {
+    test(`delete ${JSON.stringify(path)} recursive is refused and the folder survives`, async () => {
+      mkdirSync(join(plainDir, 'sub-for-root'), { recursive: true })
+      writeFileSync(join(plainDir, 'survivor.txt'), 'still here')
+      expect(await deleteTreeEntry(plainDir, path, true)).toEqual({ ok: false, reason: 'is-root' })
+      expect(readFileSync(join(plainDir, 'survivor.txt'), 'utf8')).toBe('still here')
+    })
+  }
+
+  test('rename from or onto the root is refused', async () => {
+    expect(await renameTreeEntry(plainDir, '.', 'elsewhere')).toEqual({ ok: false, reason: 'is-root' })
+    writeFileSync(join(plainDir, 'to-root.txt'), 'x')
+    expect(await renameTreeEntry(plainDir, 'to-root.txt', '')).toEqual({ ok: false, reason: 'is-root' })
+    expect(existsSync(join(plainDir, 'to-root.txt'))).toBe(true)
   })
 })
 

@@ -58,6 +58,26 @@ async function call(req: Request, host: StartHost, lang: 'en' | 'pt' = 'en') {
 }
 
 describe('handleEditorTreeRoute', () => {
+  test('an unexpected exception is a 500 with a code and a ref, never the raw message', async () => {
+    const throwing = { ...noHost, sessions: async () => { throw new Error('EACCES: /home/secret/path/leak') } } as StartHost
+    const { status, body } = await call(new Request('http://x/api/fleet/tree?id=s1&path='), throwing)
+    expect(status).toBe(500)
+    expect(body.error).toBe('internal_error')
+    expect(typeof body.ref).toBe('string')
+    expect(JSON.stringify(body)).not.toContain('/home/secret')
+  })
+
+  test('PATCH moving a folder into its own child is a 409 into-itself, with a sentence', async () => {
+    const mk = new Request('http://x/api/fleet/tree/entry', { method: 'POST', body: JSON.stringify({ id: 's1', path: 'movedir', kind: 'dir' }) })
+    await call(mk, hostWith('s1', repo))
+    const mv = await call(new Request('http://x/api/fleet/tree/entry', {
+      method: 'PATCH', body: JSON.stringify({ id: 's1', from: 'movedir', to: 'movedir/inner' }),
+    }), hostWith('s1', repo), 'pt')
+    expect(mv.status).toBe(409)
+    expect(mv.body).toMatchObject({ ok: false, reason: 'into-itself' })
+    expect(String(mv.body.message)).toContain('pasta')
+  })
+
   test('an unknown route under the prefix falls through as null, so index.ts can keep looking', async () => {
     const req = new Request('http://x/api/fleet/tree/not-a-real-subroute')
     const res = await handleEditorTreeRoute(req, new URL(req.url), noHost, 'en')
@@ -197,6 +217,23 @@ describe('handleEditorTreeRoute', () => {
       const { status, body } = await call(req, hostWith('s1', repo))
       expect(status).toBe(404)
       expect(body).toMatchObject({ ok: false, reason: 'escaped' })
+    })
+
+    test('DELETE /api/fleet/tree/entry?path=.&recursive=1 is refused as the session folder itself, and deletes nothing', async () => {
+      const keep = new Request('http://x/api/fleet/tree/entry', {
+        method: 'POST', body: JSON.stringify({ id: 's1', path: 'root-survivor.txt', kind: 'file' }),
+      })
+      await call(keep, hostWith('s1', repo))
+      for (const path of ['', '.']) {
+        const del = await call(
+          new Request(`http://x/api/fleet/tree/entry?id=s1&path=${encodeURIComponent(path)}&recursive=1`, { method: 'DELETE' }),
+          hostWith('s1', repo),
+        )
+        expect(del.status).toBe(409)
+        expect(del.body).toMatchObject({ ok: false, reason: 'is-root' })
+      }
+      const list = await call(new Request('http://x/api/fleet/tree?id=s1&path='), hostWith('s1', repo))
+      expect(JSON.stringify(list.body)).toContain('root-survivor.txt')
     })
 
     test('DELETE /api/fleet/tree/entry on a non-empty folder without ?recursive=1 is 409 (a real state conflict)', async () => {
