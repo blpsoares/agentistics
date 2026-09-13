@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { childrenFromDirents, collapseToChildren } from './editor-list'
+import { childrenFromDirents, collapseToChildren, mergeEmptyDirs } from './editor-list'
 
 describe('collapseToChildren', () => {
   test('a flat file at the top is a file child', () => {
@@ -33,5 +33,24 @@ describe('childrenFromDirents', () => {
       { name: 'a.ts', kind: 'file' },
       { name: 'b.ts', kind: 'file' },
     ])
+  })
+})
+
+describe('mergeEmptyDirs', () => {
+  test('no empty dirs to add returns the children untouched', () => {
+    const children = [{ name: 'a.ts', kind: 'file' as const }]
+    expect(mergeEmptyDirs(children, [])).toEqual(children)
+  })
+  test('an empty dir name is folded in as a dir child, sorted with the rest', () => {
+    const children = [{ name: 'src', kind: 'dir' as const }, { name: 'a.ts', kind: 'file' as const }]
+    expect(mergeEmptyDirs(children, ['empty'])).toEqual([
+      { name: 'empty', kind: 'dir' },
+      { name: 'src', kind: 'dir' },
+      { name: 'a.ts', kind: 'file' },
+    ])
+  })
+  test('a name already present as a dir is never duplicated', () => {
+    const children = [{ name: 'src', kind: 'dir' as const }]
+    expect(mergeEmptyDirs(children, ['src'])).toEqual([{ name: 'src', kind: 'dir' }])
   })
 })
