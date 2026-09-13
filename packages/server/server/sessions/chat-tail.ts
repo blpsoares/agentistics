@@ -29,6 +29,7 @@ import { isUserRoleMessage } from '../jsonl'
 import { commandSummary, hasUnreadableWrite, shellWrites } from './shell-writes'
 import { classifyUserEntry, type UserEntry } from './chat-envelope'
 import { parseImageCompanion, resolveCompanionImages } from './attachment-companion'
+import { resolveViewedImagePath, VIEWED_IMAGE_RE } from './viewed-image'
 import type { ChatTurn } from './chat-turn'
 import { MAX_TAIL_BYTES, TAIL_BYTES, readTailBytes, windowLines } from './transcript-window'
 import { createTranscriptPathMemo, resolveMemoizedPath } from './transcript-path-memo'
@@ -306,24 +307,36 @@ function noteImageCompanion(
 }
 
 /**
- * The turn one classified PERSON entry becomes, with its own `[Image #N]` markers resolved through
- * the companion the walk has already seen — see `attachment-companion.ts`. Every other kind of
- * entry is `userTurn` unchanged; a companion match requires the turn's own `promptId` and
- * `imagePasteIds`, so this reads nothing that was not already on the raw entry.
+ * The turn one classified entry becomes, with its identity carried where the shape allows it.
+ *
+ * A PERSON entry gets its own `[Image #N]` markers resolved through the companion the walk has
+ * already seen — see `attachment-companion.ts`; a companion match requires the turn's own
+ * `promptId` and `imagePasteIds`, so this reads nothing that was not already on the raw entry.
+ *
+ * A "the assistant viewed an image" note gets its `systemRef` the same way: the raw text is the one
+ * place the harness's own shape survives (`classifyUserEntry` already reduced it to a note), and
+ * `resolveViewedImagePath` walks the entry's OWN `parentUuid` chain to the exact `Read` call it
+ * describes — see `viewed-image.ts`. `lines`/`index` are the raw transcript and this entry's
+ * position in it, which is ALL that resolver needs; nothing else in this module reads them either.
  */
 function markerAwareUserTurn(
   e: Record<string, unknown>, entry: UserEntry, companions: ReadonlyMap<string, string[]>,
+  lines: readonly string[], index: number,
 ): ChatTurn {
   const turn = userTurn(entry)
-  if (entry.kind !== 'person') return turn
-  const promptId = typeof e.promptId === 'string' ? e.promptId : null
-  const pasteIds = Array.isArray(e.imagePasteIds) ? e.imagePasteIds : null
-  if (!promptId || !pasteIds) return turn
-  const companion = companions.get(promptId)
-  if (!companion) return turn
-  const markerCount = splitImageMarkers(entry.text).markers.length
-  const resolved = resolveCompanionImages(companion, markerCount, pasteIds.length)
-  return resolved ? { ...turn, imagePaths: resolved } : turn
+  if (entry.kind === 'person') {
+    const promptId = typeof e.promptId === 'string' ? e.promptId : null
+    const pasteIds = Array.isArray(e.imagePasteIds) ? e.imagePasteIds : null
+    if (!promptId || !pasteIds) return turn
+    const companion = companions.get(promptId)
+    if (!companion) return turn
+    const markerCount = splitImageMarkers(entry.text).markers.length
+    const resolved = resolveCompanionImages(companion, markerCount, pasteIds.length)
+    return resolved ? { ...turn, imagePaths: resolved } : turn
+  }
+  if (!VIEWED_IMAGE_RE.test(rawEntryText(e).trim())) return turn
+  const ref = resolveViewedImagePath(lines, index)
+  return ref ? { ...turn, systemRef: ref } : turn
 }
 
 function extractAssistantText(e: Record<string, unknown>): string | null {
@@ -504,7 +517,7 @@ async function readTurnsFromTail(
     if (noteImageCompanion(e, companions)) continue
 
     const userEntry = extractUserEntry(e)
-    if (userEntry) { add(markerAwareUserTurn(e, userEntry, companions)); continue }
+    if (userEntry) { add(markerAwareUserTurn(e, userEntry, companions, lines, i)); continue }
     const queued = extractQueuedEntry(e)
     if (queued) { add(userTurn(queued)); continue }
     const assistantText = extractAssistantText(e)
@@ -633,7 +646,7 @@ export async function readChatWindow(
     if (noteImageCompanion(e, companions)) continue
 
     const userEntry = extractUserEntry(e)
-    if (userEntry) { add(markerAwareUserTurn(e, userEntry, companions)); continue }
+    if (userEntry) { add(markerAwareUserTurn(e, userEntry, companions, lines, i)); continue }
     const queued = extractQueuedEntry(e)
     if (queued) { add(userTurn(queued)); continue }
 

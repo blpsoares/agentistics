@@ -683,3 +683,60 @@ describe('a system note carries WHICH thing it is about, where the body named on
     expect(turn?.systemRef).toBeUndefined()
   })
 })
+
+describe('the assistant VIEWED an image — viewed-image.ts, end to end', () => {
+  let root: string
+  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'chat-tail-viewed-')); forgetChatTailContent() })
+  afterEach(async () => { await rm(root, { recursive: true, force: true }) })
+
+  const readUse = (uuid: string, parentUuid: string, id: string, filePath: string, name = 'Read') => line({
+    type: 'assistant', uuid, parentUuid,
+    message: { content: [{ type: 'tool_use', id, name, input: { file_path: filePath } }] },
+  })
+  const imageResult = (uuid: string, parentUuid: string, toolUseId: string) => line({
+    type: 'user', uuid, parentUuid,
+    message: { content: [{ type: 'tool_result', tool_use_id: toolUseId, content: [{ type: 'image' }] }] },
+  })
+  const viewedCompanion = (uuid: string, parentUuid: string) => line({
+    type: 'user', uuid, parentUuid, isMeta: true, turnCompanion: true,
+    message: { content: '[Image: original 2223x888, displayed at 2000x799. Multiply coordinates by 1.11 to map to original image.]' },
+  })
+
+  test('names the note correctly and carries the Read call’s own file_path as systemRef — never "an image was attached"', async () => {
+    const path = join(root, 'a.jsonl')
+    await writeFile(path, [
+      readUse('u1', 'p0', 'toolu_1', '/repo/screenshot.png'),
+      imageResult('r1', 'u1', 'toolu_1'),
+      viewedCompanion('c1', 'r1'),
+    ].join('\n') + '\n')
+    const out = (await readChatWindow(path, 10)).turns
+    const note = out.find(t => t.system !== undefined)
+    expect(note?.system).toBe('the assistant viewed an image')
+    expect(note?.systemRef).toBe('/repo/screenshot.png')
+  })
+
+  test('THE MEASURED CASE, through the real reader: three Reads, one companion, pairs with the THIRD', async () => {
+    const path = join(root, 'b.jsonl')
+    await writeFile(path, [
+      readUse('u1', 'p0', 'toolu_1', '/repo/small-a.png'),
+      imageResult('r1', 'u1', 'toolu_1'),
+      readUse('u2', 'r1', 'toolu_2', '/repo/small-b.png'),
+      imageResult('r2', 'u2', 'toolu_2'),
+      readUse('u3', 'r2', 'toolu_3', '/repo/big-resized.jpg'),
+      imageResult('r3', 'u3', 'toolu_3'),
+      viewedCompanion('c1', 'r3'),
+    ].join('\n') + '\n')
+    const out = (await readChatWindow(path, 10)).turns
+    const note = out.find(t => t.system !== undefined)
+    expect(note?.systemRef).toBe('/repo/big-resized.jpg')
+  })
+
+  test('a companion whose chain cannot be traced carries the note and no reference — never a guess', async () => {
+    const path = join(root, 'c.jsonl')
+    await writeFile(path, viewedCompanion('c1', 'nowhere-in-this-file') + '\n')
+    const out = (await readChatWindow(path, 10)).turns
+    expect(out).toHaveLength(1)
+    expect(out[0]!.system).toBe('the assistant viewed an image')
+    expect(out[0]!.systemRef).toBeUndefined()
+  })
+})
