@@ -53,6 +53,15 @@ const EXT_LANGUAGE: Record<string, string> = {
   // `.env` files. `ini` is the grammar — see `DOTENV_LANGUAGE` for why, and for the whole-name rule
   // that catches `.env` itself, which has no extension to key on.
   ini: 'ini', properties: 'ini',
+  // `*.dockerfile` (a file NAMED with the extension rather than named `Dockerfile` outright) — the
+  // `dockerfile` grammar `NAME_LANGUAGE` already reaches for `Dockerfile` itself.
+  dockerfile: 'dockerfile',
+  // Terraform/HCL. `monacoEntry.ts` already imports this grammar (it exists for nothing else), so
+  // leaving these three extensions unclaimed cost the highlighting for free.
+  tf: 'hcl', tfvars: 'hcl', hcl: 'hcl',
+  // A Makefile FRAGMENT included by a top-level one. Same grammar answer as `makefile` above, and
+  // for the same reason — stated so a reviewer does not have to re-derive it from the fallback.
+  mk: 'plaintext',
 }
 
 /**
@@ -84,6 +93,8 @@ const DOTENV_LANGUAGE = 'ini'
  */
 const NAME_LANGUAGE: Record<string, string> = {
   dockerfile: 'dockerfile',
+  // The OCI-neutral spelling some projects use instead of `Dockerfile` — same grammar, same syntax.
+  containerfile: 'dockerfile',
   // **`makefile` IS NOT A LANGUAGE IN THIS BUNDLE EITHER**, and unlike `toml` and `vue` it has no
   // near-neighbour: `shell` was considered and REFUSED, because a Makefile's top-level lines are not
   // shell (only its recipes are), and one unbalanced quote in an `echo` would then paint the rest of
@@ -92,6 +103,19 @@ const NAME_LANGUAGE: Record<string, string> = {
   '.env': DOTENV_LANGUAGE,
   '.gitconfig': 'ini',
   '.editorconfig': 'ini',
+  // `.gitignore`/`.gitattributes` and `.dockerignore` are pattern lists monaco has no grammar for —
+  // stated explicitly rather than left to fall through the extension branch below (both basenames
+  // have no `.` after their leading one, so `dot <= 0` would answer `plaintext` anyway; this says WHY
+  // instead of leaving it to be inferred from a `<= 0` check three lines away).
+  '.gitignore': 'plaintext',
+  '.gitattributes': 'plaintext',
+  '.dockerignore': 'plaintext',
+  // A Justfile is `just`'s own recipe format — Makefile-shaped, shell-bodied, no grammar here either.
+  justfile: 'plaintext',
+  // Procfile (Heroku/foreman): `name: command` lines. No grammar; `ini` was considered and refused —
+  // a shell command on the right of the colon routinely contains its OWN `key=value` pairs, which
+  // `ini` would then paint as this file's top-level fields.
+  procfile: 'plaintext',
 }
 
 /**

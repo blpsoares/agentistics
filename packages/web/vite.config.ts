@@ -1,8 +1,38 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type Rollup } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 const apiPort = process.env.PORT ?? '47291'
+
+/**
+ * **mermaid's dependency graph OVERLAPS the app's own** — `d3-shape`, `d3-hierarchy` and friends
+ * reach this bundle a second way, through `recharts` → `victory-vendor`, and wherever the two
+ * resolve to the same installed version rolldown places the shared code in ONE chunk (measured:
+ * `CartesianChart-*.js`, 52 of its 265 modules are `d3-*` files mermaid also imports). Monaco never
+ * had this problem — nothing else in this bundle imports `monaco-editor` — so its own routing below
+ * checks "does ANY module trace to it"; doing the same for mermaid would take `CartesianChart` (used
+ * on Home, Costs, every chart on the dashboard) out of the precache for the sake of a diagram most
+ * sessions never open. So a chunk is MERMAID'S only when it is made of NOTHING ELSE: every module in
+ * it must resolve through mermaid's own package or one of the dependencies below — each read off
+ * `mermaid`'s own `package.json` `dependencies` (plus `lodash-es`, which is `dagre-d3-es`'s and
+ * `chevrotain`'s own transitive dependency and, per `bun.lock`, nobody else's). Measured against a
+ * real build: 96 chunks are ALL mermaid, 14 more touch it but are genuinely shared and are correctly
+ * left alone.
+ */
+const MERMAID_ONLY_MARKERS = [
+  '/mermaid/dist/', '/mermaid/lib/', '@mermaid-js/parser',
+  '@braintree/sanitize-url', '@iconify/utils', '@upsetjs/venn.js',
+  '/chevrotain/', '@chevrotain/',
+  '/cytoscape/', 'cytoscape-cose-bilkent', 'cytoscape-fcose', 'cose-base', 'layout-base',
+  '/d3/', 'd3-sankey', 'dagre-d3-es', 'graphlib',
+  'dayjs', 'dompurify', 'elkjs', 'es-toolkit',
+  'katex', 'khroma', 'marked', 'roughjs', 'stylis', 'ts-dedent', 'uuid', 'lodash-es',
+]
+
+function isMermaidOnlyChunk(chunk: Rollup.PreRenderedChunk | Rollup.RenderedChunk): boolean {
+  const ids = chunk.moduleIds ?? []
+  return ids.length > 0 && ids.every(id => MERMAID_ONLY_MARKERS.some(marker => id.includes(marker)))
+}
 
 export default defineConfig({
   plugins: [
@@ -48,7 +78,10 @@ export default defineConfig({
         // `editor.api`, `toggleHighContrast`, `pgsql`… and a name-based rule would be one upstream
         // refactor away from silently precaching 14 MB again. Monaco is fetched on demand and then
         // served from the ordinary HTTP cache.
-        globIgnores: ['assets/monaco/**', '**/*.worker-*.js'],
+        // `assets/mermaid/**` is the exact same rule as Monaco's — see `isMermaidOnlyChunk`'s own
+        // header for why a substring/name-based rule cannot stand in for the directory here, the way
+        // it might look like it could from this line alone.
+        globIgnores: ['assets/monaco/**', 'assets/mermaid/**', '**/*.worker-*.js'],
         navigateFallback: null,
         skipWaiting: true,
         clientsClaim: true,
@@ -77,10 +110,15 @@ export default defineConfig({
         // render-blocking `<link rel="stylesheet">` into `index.html`, i.e. 4.5 MB fetched on every
         // page load — the exact opposite of what the dynamic import is for. Routing by DIRECTORY
         // leaves rolldown's own splitting alone, and `index.html` then names no Monaco asset at all.
+        // `assets/mermaid/` is the SAME technique, ONE LINE below Monaco's, for `MermaidDiagram.tsx`'s
+        // own `import('mermaid')` — see `isMermaidOnlyChunk`'s header for why it is a stricter test
+        // than Monaco's `.some(...)` and must stay one.
         chunkFileNames: chunk =>
           (chunk.moduleIds ?? []).some(id => id.includes('monaco-editor'))
             ? 'assets/monaco/[name]-[hash].js'
-            : 'assets/[name]-[hash].js',
+            : isMermaidOnlyChunk(chunk)
+              ? 'assets/mermaid/[name]-[hash].js'
+              : 'assets/[name]-[hash].js',
         // The same for Monaco's assets, which are its CSS (~160 KB across two files) and
         // `codicon.ttf`. The test is `originalFileNames`, because that is the only field that is
         // IDENTICAL on both of the calls Vite makes per asset — it probes once with a placeholder

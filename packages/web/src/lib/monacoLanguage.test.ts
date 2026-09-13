@@ -63,6 +63,35 @@ describe('languageForPath', () => {
     expect(languageForPath('script.fsx')).toBe('fsharp')
   })
 
+  // --- the niche-file audit (Docker variants, HCL, config files with no grammar here) -------------
+  test('Containerfile and the *.dockerfile extension get the same grammar as Dockerfile', () => {
+    expect(languageForPath('Containerfile')).toBe('dockerfile')
+    expect(languageForPath('build/Containerfile')).toBe('dockerfile')
+    expect(languageForPath('app.dockerfile')).toBe('dockerfile')
+  })
+  test('Terraform/HCL, a grammar this bundle already ships and the table did not claim', () => {
+    expect(languageForPath('main.tf')).toBe('hcl')
+    expect(languageForPath('terraform.tfvars')).toBe('hcl')
+    expect(languageForPath('network.hcl')).toBe('hcl')
+  })
+  test('docker-compose*.yml and compose*.yml already resolve through the plain YAML rule', () => {
+    expect(languageForPath('docker-compose.yml')).toBe('yaml')
+    expect(languageForPath('compose.override.yaml')).toBe('yaml')
+  })
+  test('files with no grammar in this bundle at all are PLAINTEXT, said explicitly', () => {
+    expect(languageForPath('common.mk')).toBe('plaintext')
+    expect(languageForPath('Justfile')).toBe('plaintext')
+    expect(languageForPath('Procfile')).toBe('plaintext')
+    expect(languageForPath('.gitignore')).toBe('plaintext')
+    expect(languageForPath('.gitattributes')).toBe('plaintext')
+    expect(languageForPath('.dockerignore')).toBe('plaintext')
+    // `nginx.conf`/`Caddyfile`: no grammar exists either, and neither carries a NAME_LANGUAGE or
+    // EXT_LANGUAGE entry of its own — this is the unmapped fallback, exercised explicitly so the
+    // audit is not merely inferred from the rule three lines above `languageForPath`'s `return`.
+    expect(languageForPath('nginx.conf')).toBe('plaintext')
+    expect(languageForPath('Caddyfile')).toBe('plaintext')
+  })
+
   // --- `.env` ------------------------------------------------------------------------------------
   describe('.env files highlight, including the variants people actually have', () => {
     test('the bare name, which has no extension to key on', () => {
