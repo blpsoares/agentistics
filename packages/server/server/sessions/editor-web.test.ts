@@ -199,6 +199,24 @@ describe('handleEditorTreeRoute', () => {
       expect(body).toMatchObject({ ok: false, reason: 'escaped' })
     })
 
+    test('PATCH /api/fleet/tree/entry moving a folder into itself is 409, with a sentence in each language', async () => {
+      const mk = await call(new Request('http://x/api/fleet/tree/entry', {
+        method: 'POST', body: JSON.stringify({ id: 's1', path: 'into-self-web', kind: 'dir' }),
+      }), hostWith('s1', repo))
+      expect(mk.body.ok).toBe(true)
+
+      for (const lang of ['en', 'pt'] as const) {
+        const req = new Request(`http://x/api/fleet/tree/entry?lang=${lang}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ id: 's1', from: 'into-self-web', to: 'into-self-web/into-self-web' }),
+        })
+        const { status, body } = await call(req, hostWith('s1', repo), lang)
+        expect(status).toBe(409)
+        expect(body).toMatchObject({ ok: false, reason: 'into-itself' })
+        expect(body.message).toContain(lang === 'pt' ? 'não pode ser movida' : 'cannot be moved')
+      }
+    })
+
     test('DELETE /api/fleet/tree/entry on a non-empty folder without ?recursive=1 is 409 (a real state conflict)', async () => {
       const dirReq = new Request('http://x/api/fleet/tree/entry', {
         method: 'POST', body: JSON.stringify({ id: 's1', path: 'nonempty', kind: 'dir' }),

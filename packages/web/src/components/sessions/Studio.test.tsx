@@ -47,7 +47,7 @@ afterEach(desktop)
 afterAll(() => { if (windowIsOurs) delete env.window })
 
 function tab(path: string, dirty = false): OpenTab {
-  return { path, dirty }
+  return { id: path, path, dirty }
 }
 
 // --- the rule this task must not ship without ----------------------------------------------------
@@ -469,10 +469,14 @@ describe('Toolbar', () => {
 })
 
 describe('NewFileRow', () => {
-  const row = (state: { name: string; busy: boolean; error: string | null }, lang: 'pt' | 'en' = 'en') =>
+  const row = (
+    state: { name: string; busy: boolean; error: string | null },
+    lang: 'pt' | 'en' = 'en',
+    extra: { parentPath?: string; kind?: 'file' | 'dir' } = {},
+  ) =>
     renderToStaticMarkup(
       <NewFileRow
-        state={state}
+        state={{ parentPath: extra.parentPath ?? '', kind: extra.kind ?? 'file', ...state }}
         isMobile={env.window!.innerWidth < 768}
         lang={lang}
         onChange={() => {}}

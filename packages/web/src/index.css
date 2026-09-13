@@ -363,6 +363,21 @@ html.ag-viewport-locked > body {
   .ag-tap-icon::after { left: calc(0px - var(--ag-tap-grow)); right: calc(0px - var(--ag-tap-grow)); }
 }
 
+/* --- .ag-tree-row-menu: the tree row's "⋯" button, revealed by the row around it -----------------
+   Hidden by default on a mouse-driven layout — a `⋯` painted on every row of a long tree is more
+   noise than the rows it sits beside — and shown while the ROW (not the button itself) is hovered
+   or holds keyboard focus, so tabbing onto a row reveals its own menu button exactly as hovering it
+   would. On a phone there is no hover to reveal anything with, so the mobile rule below makes it
+   unconditionally visible — the design's own "a 44px ⋯ on every row" on touch. */
+.ag-tree-row-menu { opacity: 0; }
+.ag-tree-row:hover .ag-tree-row-menu,
+.ag-tree-row:focus-within .ag-tree-row-menu {
+  opacity: 1;
+}
+@media (max-width: 767px) {
+  .ag-tree-row-menu { opacity: 1; }
+}
+
 /* ── The focus ring ──────────────────────────────────────────────────────────
    NOTHING IN THIS APP FOCUSES WHITE. Asked for directly, and the browser is what does it: with no
    `outline` of our own the UA default applies, and Chrome's `outline: auto` on a dark surface draws

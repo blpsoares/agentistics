@@ -1404,7 +1404,7 @@ function withoutComments(source: string): string {
  * that opens it, so nothing from the effects around it can be read as part of this one.
  */
 function readFileEffect(source: string): string {
-  const end = source.indexOf('}, [sessionId, path])')
+  const end = source.indexOf('}, [sessionId, path, retargetFrom])')
   expect(end).toBeGreaterThan(0)
   const start = source.lastIndexOf('useEffect(', end)
   expect(start).toBeGreaterThanOrEqual(0)
@@ -1434,6 +1434,32 @@ describe('the save wiring, asserted over the source', () => {
     const read = effect.indexOf('readRepoFile(')
     expect(reset).toBeGreaterThanOrEqual(0)
     expect(read).toBeGreaterThan(reset)
+  })
+
+  test('a RETARGET (a rename of an already-open file) skips the re-read and re-reset, before either runs', () => {
+    // Guards `retargetFrom`'s own promise: the bytes on screen after a rename are exactly the bytes
+    // that were there before it, saved or not. Matched BY INDEX against the same two calls the
+    // previous test anchors on, so a refactor that moved the guard clause BELOW the reset (silently
+    // re-reading every retarget from disk, exactly the defect this clause exists to prevent) fails
+    // this test even though the guard clause still exists somewhere in the function.
+    const effect = readFileEffect(src)
+    const guard = effect.indexOf('retargetFrom !== undefined')
+    const reset = effect.indexOf("dispatch({ kind: 'reset' })")
+    const read = effect.indexOf('readRepoFile(')
+    expect(guard).toBeGreaterThanOrEqual(0)
+    expect(guard).toBeLessThan(reset)
+    expect(reset).toBeLessThan(read)
+  })
+
+  test('the MOUNT effect depends on load.kind alone — `path` is absent, which is the whole reason a retarget does not tear down the model', () => {
+    // The mount effect is the one whose cleanup DISPOSES the live Monaco model and editor. Were
+    // `path` back in its dependency array, a rename would re-trigger it (React runs the OUTGOING
+    // cleanup unconditionally on any dependency change, before the new effect body gets a say) and
+    // dispose the very instance the retarget skip above exists to keep alive.
+    expect(src).toContain('}, [load.kind])')
+    // And the model itself is created from the LATEST path via the ref, never the closed-over
+    // `path` — the one a removed dependency would otherwise leave stale forever.
+    expect(src).toContain('languageForPath(argsRef.current.path)')
   })
 
   test('the conflict prompt keeps Escape to itself, and nothing behind it is reachable', () => {

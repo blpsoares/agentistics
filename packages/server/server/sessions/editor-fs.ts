@@ -14,6 +14,7 @@ import type { StartHost } from '../cli-start'
 import { gitEnv } from '../backup/repo-probe'
 import { planSessionDirectory, type SessionDirPlan } from './editor-directory'
 import { containedInRoot, resolveTreePath } from './editor-path'
+import { withinDirectory } from './artifact-file'
 import { childrenFromDirents, collapseToChildren, type TreeChild } from './editor-list'
 import { looksBinary } from './artifact-web'
 import { decodeUtf8Lossless } from './editor-text'
@@ -355,7 +356,7 @@ export async function createTreeEntry(
   return { ok: true }
 }
 
-export type RenameRefusal = 'escaped' | 'not-found' | 'already-exists'
+export type RenameRefusal = 'escaped' | 'not-found' | 'already-exists' | 'into-itself'
 export type RenamePlan = { ok: true } | { ok: false; reason: RenameRefusal }
 
 export async function renameTreeEntry(root: string, fromPath: string, toPath: string): Promise<RenamePlan> {
@@ -363,6 +364,16 @@ export async function renameTreeEntry(root: string, fromPath: string, toPath: st
   if (!from.ok) return { ok: false, reason: 'escaped' }
   const to = resolveTreePath(root, toPath)
   if (!to.ok) return { ok: false, reason: 'escaped' }
+
+  // LEXICAL, before any fs call — exactly like the two checks above. Moving a directory into ITSELF
+  // or into one of its own descendants asks `rename()` to make a directory its own ancestor, which
+  // Node surfaces as an unhandled EINVAL rather than a clean refusal; a drag dropped onto the row it
+  // was dragged FROM computes exactly this (`to` becomes `from/<own name>`). `withinDirectory` is the
+  // PROPER-descendant test (it excludes equality on purpose) — renaming a path onto itself (`from ===
+  // to`, what the "Mover para…" picker would send for "move into the folder it is already in") must
+  // keep falling through to the ordinary `already-exists` below, which is the refusal the existing
+  // contract and its tests already state for that case.
+  if (withinDirectory(to.abs, from.abs)) return { ok: false, reason: 'into-itself' }
 
   const realFrom = await realContained(root, from.abs)
   if (realFrom === null) return { ok: false, reason: 'not-found' }

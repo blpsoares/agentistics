@@ -74,6 +74,10 @@ const GENERIC_REFUSAL: Record<GenericRefusal, { en: string; pt: string }> = {
     en: 'That folder is not empty. Delete it recursively to remove everything inside it.',
     pt: 'Essa pasta não está vazia. Apague recursivamente para remover tudo dentro dela.',
   },
+  'into-itself': {
+    en: 'A folder cannot be moved into itself or into one of its own subfolders.',
+    pt: 'Uma pasta não pode ser movida para dentro dela mesma ou de uma de suas subpastas.',
+  },
   conflict: {
     en: 'This file changed on disk since it was opened. Review the current version before saving over it.',
     pt: 'Este arquivo mudou no disco desde que foi aberto. Revise a versão atual antes de salvar sobre ela.',
@@ -106,12 +110,15 @@ const GENERIC_REFUSAL: Record<GenericRefusal, { en: string; pt: string }> = {
 
 /**
  * A genuine STATE conflict — something already there, a non-empty folder, a write that lost the
- * race with a change already on disk — is 409. Everything else here is 404: the path this request
- * named could not be resolved to anything at all (it escaped the tree, or nothing is there, or it
- * is the wrong kind of entry), which is true regardless of which route asked. Decided once, from
- * the REASON CODE, so the same code can never mean 404 through one door and 409 through another.
+ * race with a change already on disk, a move asked to make a folder its own ancestor — is 409.
+ * Everything else here is 404: the path this request named could not be resolved to anything at all
+ * (it escaped the tree, or nothing is there, or it is the wrong kind of entry), which is true
+ * regardless of which route asked. Decided once, from the REASON CODE, so the same code can never
+ * mean 404 through one door and 409 through another.
  */
-const CONFLICT_SHAPED: ReadonlySet<GenericRefusal> = new Set(['already-exists', 'not-empty', 'conflict'])
+const CONFLICT_SHAPED: ReadonlySet<GenericRefusal> = new Set([
+  'already-exists', 'not-empty', 'conflict', 'into-itself',
+])
 /**
  * The one CONTENT-shaped refusal the text routes have: the path resolved perfectly well and the
  * answer is about what is in the file, which is what 415 says (the bytes route's `not-media` below

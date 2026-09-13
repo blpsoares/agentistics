@@ -703,6 +703,21 @@ export function RepoFileEditor({
   saveRef.current = save
   const argsRef = useRef({ sessionId, path, lang: lang as RepoLang })
   argsRef.current = { sessionId, path, lang }
+  /**
+   * **A RENAME, DETECTED FROM INSIDE — no prop from the host is needed for this.** The host keys
+   * this component by a STABLE identity (`OpenTab.id`, never `path` — see `EditorStack`'s own
+   * header in `Studio.tsx`), so the ONE way `path` can change while this exact component instance
+   * survives is a rename or a move retargeting the tab it belongs to; an ordinary "open a different
+   * file" always arrives as a brand new instance under a different key. `retargetFrom` is read
+   * DURING RENDER, before anything writes to the ref, so it always names the path as of the LAST
+   * commit — and the write happens in an effect, which runs only AFTER render, so there is no risk
+   * of the read observing its own write (relevant under React's StrictMode double-render in dev: a
+   * mutate-during-render version of this same comparison would see its own first pass's write on
+   * the second, and report no rename had happened).
+   */
+  const priorPathRef = useRef(path)
+  const retargetFrom = path !== priorPathRef.current ? priorPathRef.current : undefined
+  useEffect(() => { priorPathRef.current = path })
   const dirtyRef = useRef(false)
   const requestSaveRef = useRef<(trigger: SaveTrigger) => void>(() => {})
   const options = monacoOptions({ isMobile, theme: monacoThemeFor(themeAttr) })
@@ -716,6 +731,20 @@ export function RepoFileEditor({
   // re-running this effect would re-read the file and tear the editor down — so toggling the
   // dashboard's language would silently discard an unsaved buffer.
   useEffect(() => {
+    // **A RETARGET OF AN ALREADY-OPEN FILE RE-READS NOTHING.** The bytes on screen are exactly the
+    // bytes that were open a moment ago, saved or not, and the file at its OLD path no longer
+    // exists to read back — the rename already happened server-side before this prop changed. Only
+    // the KEY this state is filed under moves, so the NEXT ordinary path change (a real file swap,
+    // which always arrives as a fresh component instance — see `retargetFrom`'s own note) is not
+    // mistaken for "still loading" by `load`'s own `read.key === fileKey` test. Guarded on an
+    // editor actually EXISTING: a retarget racing a file that has not finished its first read yet
+    // (rare, but possible — a drag dropped on a tab before its initial fetch resolved) has nothing
+    // to preserve, so it falls through to the ordinary read below instead of leaving the tab stuck
+    // in `loading` forever under a key its own in-flight fetch was cancelled out from under.
+    if (retargetFrom !== undefined && editorRef.current !== null) {
+      setRead(prev => ({ key: fileKeyOf(sessionId, path), state: prev.state }))
+      return
+    }
     let cancelled = false
     // The reset goes out BEFORE the read, and regardless of how the read turns out. Only `ready`
     // dispatches `loaded`, so without it a failed or BINARY read left the previous file's edit count
@@ -731,7 +760,7 @@ export function RepoFileEditor({
       setRead({ key: fileKeyOf(sessionId, path), state: next })
     })
     return () => { cancelled = true }
-  }, [sessionId, path])
+  }, [sessionId, path, retargetFrom])
 
   // --- follow the app's theme -----------------------------------------------
   useEffect(() => {
@@ -745,6 +774,17 @@ export function RepoFileEditor({
   // --- mount Monaco ----------------------------------------------------------
   // Only once there is text to show AND a host div to show it in: "do we have the file" and "is an
   // editor attached" are two questions, and letting them race is how a pane ends up blank.
+  //
+  // **`path` IS DELIBERATELY ABSENT FROM THIS EFFECT'S DEPENDENCIES — the one change in this file
+  // that actually lets a rename keep its model.** Every OTHER file swap already arrives as a whole
+  // new component instance (the host keys by a stable id, not by `path` — see `retargetFrom`'s own
+  // note above), so this effect was never asked to re-point a LIVE editor at different content; the
+  // only thing `path` changing without a remount can mean is a retarget. Listing it anyway would
+  // tear the effect down and rebuild a fresh model and a fresh editor the moment a rename committed
+  // — disposing the very instance `retargetFrom`'s skipped re-read above was written to protect,
+  // and losing the unsaved text, the undo stack and the cursor to a rename that changed none of
+  // them. `argsRef.current.path` reads the CURRENT path from inside the callback instead of the
+  // closed-over one, the same pattern `writeNow` already uses for the identical reason.
   useEffect(() => {
     if (load.kind !== 'ready') return
     const host = hostRef.current
@@ -760,7 +800,7 @@ export function RepoFileEditor({
         // BEFORE `create`, always: a theme name monaco does not know yet resolves to plain `vs` and
         // says nothing about it. Idempotent, so paying for it on every mount costs nothing.
         defineAgentisticsThemes(monaco)
-        model = monaco.editor.createModel(contentRef.current, languageForPath(path))
+        model = monaco.editor.createModel(contentRef.current, languageForPath(argsRef.current.path))
         editor = monaco.editor.create(host, { ...optionsRef.current, model })
         editorRef.current = editor
 
@@ -784,7 +824,26 @@ export function RepoFileEditor({
       editor?.dispose()
       model?.dispose()
     }
-  }, [load.kind, path])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load.kind])
+
+  // --- a retarget can change the EXTENSION, and the model's language with it -----------------------
+  // A plain rename within the same folder is the common case and usually keeps it (`a.ts` -> `b.ts`),
+  // but nothing stops a reader renaming `notes.txt` to `notes.md` mid-edit. The model itself survives
+  // untouched (see the mount effect's own note); only its declared language needs to catch up, and
+  // `setModelLanguage` does that without disturbing the buffer, the undo stack or the cursor at all.
+  useEffect(() => {
+    if (retargetFrom === undefined) return
+    const editor = editorRef.current
+    const model = editor?.getModel()
+    if (editor === undefined || editor === null || model === null || model === undefined) return
+    void import('../../lib/monacoSetup').then(mod => mod.loadMonaco()).then((monaco: MonacoModule) => {
+      // The reader may have switched to yet another tab while this import resolved — a language
+      // set on a model that is no longer this editor's would silently relabel someone else's file.
+      if (editorRef.current !== editor || editor.getModel() !== model) return
+      monaco.editor.setModelLanguage(model, languageForPath(path))
+    })
+  }, [path, retargetFrom])
 
   // --- keep the live editor's options current -------------------------------
   // A drag across the mobile breakpoint, or a theme toggle, must not remount the editor: that would

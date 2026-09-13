@@ -102,13 +102,22 @@ export function flattenVisible(root: TreeNode): FlatRow[] {
 }
 
 export interface OpenTab {
+  /**
+   * STABLE across a rename or a move — the path this tab was opened AT, fixed forever after. Never
+   * shown and never sent to the server; `path` is both of those. It exists for exactly one reason:
+   * the host keys its Monaco instances by it (see `retargetOpenPaths`'s own header) so that renaming
+   * an open file changes what the tab is CALLED without tearing down the editor underneath it — a
+   * rename is not a new file, so it must not look like one to the one thing that cannot survive
+   * being remounted, the undo stack.
+   */
+  id: string
   path: string
   dirty: boolean
 }
 
 export function openTab(tabs: readonly OpenTab[], path: string): OpenTab[] {
   if (tabs.some(t => t.path === path)) return [...tabs]
-  return [...tabs, { path, dirty: false }]
+  return [...tabs, { id: path, path, dirty: false }]
 }
 
 export function closeTab(tabs: readonly OpenTab[], path: string): OpenTab[] {
@@ -117,4 +126,85 @@ export function closeTab(tabs: readonly OpenTab[], path: string): OpenTab[] {
 
 export function markDirty(tabs: readonly OpenTab[], path: string, dirty: boolean): OpenTab[] {
   return tabs.map(t => (t.path === path ? { ...t, dirty } : t))
+}
+
+// --- path arithmetic shared by the tree operations (rename, move, delete) -------------------------
+
+/** `''` for a root-level entry — mirrors the tree model's own root-relative paths. */
+export function parentOf(path: string): string {
+  const i = path.lastIndexOf('/')
+  return i === -1 ? '' : path.slice(0, i)
+}
+
+/** The basename — the part a rename, unlike a move, is free to change. */
+export function baseNameOf(path: string): string {
+  const i = path.lastIndexOf('/')
+  return i === -1 ? path : path.slice(i + 1)
+}
+
+/**
+ * Is `path` `ancestor` itself, or somewhere inside it? Mirrors the SERVER's own
+ * `containedInRoot`/`withinDirectory` (`editor-path.ts`) — the shape of "is X under Y" is the same
+ * question asked of a different root, and the two must agree on what counts as a nested path.
+ */
+export function isSelfOrDescendant(path: string, ancestor: string): boolean {
+  return path === ancestor || path.startsWith(`${ancestor}/`)
+}
+
+/**
+ * Where `itemPath` lands if it is moved into the folder `targetDir` (`''` for the tree's root),
+ * keeping its own basename — exactly what a drag-and-drop move and the "Mover para…" picker both
+ * need before they can ask the server to rename anything.
+ */
+export function destinationPath(itemPath: string, targetDir: string): string {
+  const base = baseNameOf(itemPath)
+  return targetDir === '' ? base : `${targetDir}/${base}`
+}
+
+/**
+ * Is moving `itemPath` into `targetDir` something worth ASKING the server to do?
+ *
+ * Two refusals, and neither needs a round trip to discover: moving a folder into ITSELF or into one
+ * of its own descendants (the server's own `renameTreeEntry` refuses this lexically too — see its
+ * `into-itself` reason — but the drop target's outline and the picker's own folder list must already
+ * agree before a request is ever sent, or a reader sees an "illegal" target highlighted as a legal
+ * one for the one frame before the refusal comes back), and moving something into the folder it is
+ * ALREADY in — not wrong, merely nothing: the server would answer this `already-exists` (true, and
+ * unhelpful, since "there is already a file there" describes the move's own source).
+ */
+export function canMoveInto(itemPath: string, targetDir: string): boolean {
+  if (isSelfOrDescendant(targetDir, itemPath)) return false
+  return parentOf(itemPath) !== targetDir
+}
+
+/**
+ * Where `path` lands after `from` is renamed or moved to `to` — `null` when `path` is untouched by
+ * that change at all.
+ *
+ * Exact equality retargets a renamed FILE (a tab is always a file; nothing here ever opens a
+ * directory). The prefix case retargets every file a MOVED DIRECTORY was carrying — `${from}/` is
+ * what keeps a rename of `src2` from also retargeting `src` and its children; a bare `startsWith`
+ * with no separator would.
+ */
+export function retargetPath(path: string, from: string, to: string): string | null {
+  if (path === from) return to
+  const prefix = `${from}/`
+  return path.startsWith(prefix) ? `${to}/${path.slice(prefix.length)}` : null
+}
+
+/**
+ * Every OPEN tab, re-keyed the same way: a rename or a move of `from` to `to` is applied to every
+ * tab it touches and leaves every other tab exactly as it was — `id` included, since the host's
+ * whole reason for keeping one is to survive precisely this call unchanged.
+ *
+ * `retargetPath` returning `null` for "untouched" is why this is a `map` and not a `filter`-then-map:
+ * a tab this rename does not concern must come back byte-for-byte identical, not merely
+ * path-for-path identical, or a caller comparing object IDENTITY (React does, via `===`, before ever
+ * reaching a key) would see every tab as "changed" on every unrelated rename.
+ */
+export function retargetOpenPaths(tabs: readonly OpenTab[], from: string, to: string): OpenTab[] {
+  return tabs.map(t => {
+    const moved = retargetPath(t.path, from, to)
+    return moved === null ? t : { ...t, path: moved }
+  })
 }
