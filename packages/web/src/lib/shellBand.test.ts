@@ -173,8 +173,10 @@ describe('the geometry the band remembers', () => {
     const s = fake()
     writeBandGeometry('docked', { cols: 144, rows: 13 }, s)
     writeBandGeometry('dedicated', { cols: 144, rows: 48 }, s)
+    writeBandGeometry('aside', { cols: 96, rows: 30 }, s)
     expect(bandGeometry('docked', s)).toEqual({ cols: 144, rows: 13 })
     expect(bandGeometry('dedicated', s)).toEqual({ cols: 144, rows: 48 })
+    expect(bandGeometry('aside', s)).toEqual({ cols: 96, rows: 30 })
   })
 
   test('writing a geometry keeps everything else the record already held', () => {

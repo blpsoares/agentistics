@@ -159,24 +159,37 @@ export interface PopGuard {
  * push. Two pops are its own and never reach a decision: the UNDO (swallowed, even if the page that
  * caused it has disarmed since) and the REPLAY after "leave anyway" (let through, and the router then
  * computes the same delta from its own unmoved index).
+ *
+ * BOTH ARE MATCHED BY THE INDEX THEY EXPECT TO LAND ON, NEVER BY "THE NEXT POP". Two navigations
+ * close together (an undo's own popstate has not fired yet when an unrelated one pops) would
+ * otherwise have the second, real pop consumed as if it were the first's undo — the reader's own
+ * Back doing nothing, silently, with no ask. `undoingTo` / `replayingTo` record the ONE index each
+ * expects; a pop landing anywhere else is a genuinely new navigation and is re-evaluated, never
+ * swallowed.
  */
 export function createPopGuard(win: PoppableWindow): PopGuard {
   let armed: PopGuardArming | null = null
-  let undoing = 0
-  let replaying = 0
+  let undoingTo: number | null = null
+  let replayingTo: number | null = null
   const onPop = (e: PopEventLike) => {
-    if (undoing > 0) { undoing--; e.stopImmediatePropagation(); return }
-    if (replaying > 0) { replaying--; return }
+    const to = historyIndexOf(e.state)
+    if (undoingTo !== null) {
+      if (to === undoingTo) { undoingTo = null; e.stopImmediatePropagation(); return }
+      undoingTo = null
+    }
+    if (replayingTo !== null) {
+      if (to === replayingTo) { replayingTo = null; return }
+      replayingTo = null
+    }
     const page = armed
     if (page === null) return
     const from = page.lastIndex()
-    const to = historyIndexOf(e.state)
     if (from === null || to === null || from === to) return
     if (!page.hold(win.location.pathname)) return
     const delta = to - from
-    if (!page.onHold(() => { replaying++; win.history.go(delta) })) return
+    if (!page.onHold(() => { replayingTo = to; win.history.go(delta) })) return
     e.stopImmediatePropagation()
-    undoing++
+    undoingTo = from
     win.history.go(-delta)
   }
   return {

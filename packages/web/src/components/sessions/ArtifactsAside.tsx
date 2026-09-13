@@ -1,18 +1,14 @@
 /**
- * ArtifactsAside — the session's right-hand panel: what it is doing, what it produced, and the
- * STUDIO.
+ * ArtifactsAside — the session's `contents` panel: what it is doing, and what it produced.
  *
- * TWO THINGS LIVE IN THIS SLOT, and the second one takes it over. The normal aside is a header, a
- * tab strip and one tab's body. Agentistics Studio — the repository tree, the search and a multi-tab
- * Monaco editor — is NOT one of those tabs: opening it covers the header and the strip and gives it
- * the aside's full height and width, because a tree plus an editor cannot share a 440px column with
- * two rows of chrome. That is what `StripId` encodes and what the render's own note spends.
- *
- * IT MUST NOT UNMOUNT EITHER WAY. The Studio holds Monaco buffers; an unsaved one exists in exactly
- * one place in the world. So the Studio is a `Layer` at this component's ROOT — a sibling of the
- * chrome, above both the tab chain and the `open ? <ArtifactDoc/> : …` branch, because each of those
- * is a tree something routinely replaces. Three different paths used to destroy it; none can reach
- * it where it is now.
+ * THE STUDIO USED TO LIVE HERE TOO, as a MODE that took the whole slot over the moment it opened —
+ * one open flag for two components, so opening the Studio lit the Contents button beside it and the
+ * Studio's own bar carried a way back into a panel nobody asked to see. It is now its OWN panel
+ * (`lib/panelSlots.ts`'s `studio`, rendered by `StudioHost.tsx`), placed independently in the
+ * `right` or `bottom` slot — never inside this component, never as a `StripId` this component's
+ * strip can select. See
+ * `docs/superpowers/specs/2026-09-12-studio-slots-and-references-design.md` §1 for the full model.
+ * This component is `contents` alone: a header, a tab strip, and one tab's body.
  *
  * THE FILES AND DOCS TABS ARE GONE. They listed what this session itself wrote — one of them a
  * subset of the other — and the Studio's tree holds the whole folder, so the panel held three
@@ -44,7 +40,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { asideCache, asideKey } from '../../lib/asideCache'
 import { focusMissNotice, isFocusedRow, rowsCarry, ROW_FLASH } from '../../lib/noteFocus'
-import { Activity, BarChart3, Bot, Brain, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, ExternalLink, Eye, FileEdit, FileText, FolderTree, GitBranch, GitPullRequest, Image, LayoutGrid, Loader, PanelRightClose, Pencil, Plug, Plus, Send, Sparkles, Terminal, Trash2, Workflow, X } from 'lucide-react'
+import { Activity, BarChart3, Bot, Brain, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, ExternalLink, Eye, FileEdit, FileText, GitBranch, GitPullRequest, Image, LayoutGrid, Loader, PanelRightClose, Pencil, Plug, Plus, Send, Sparkles, Terminal, Trash2, Workflow, X } from 'lucide-react'
 import { artifactShortfall, type Artifact } from '../../lib/sessionArtifacts'
 import {
   countSkills, groupSkills, shortName, skillInvocation, type SkillEntry,
@@ -92,7 +88,6 @@ import {
 } from '../SessionDrilldown'
 import { ArtifactDoc } from './ArtifactDoc'
 import { GalleryTab } from './GalleryTab'
-import { Layer, Studio } from './Studio'
 // The FOURTH copy of this shape lived here, byte-identical to the three the repository
 // explorer's own views had already folded into `repoNote.tsx`. Imported under the name this
 // file's own call sites already use: one shape, one place for it to change.
@@ -109,16 +104,17 @@ import { createSharedPref } from '../../lib/sharedPref'
 type TabId = 'live' | 'gallery' | 'skills' | 'agents' | 'forks' | 'workflows' | 'mcps' | 'prs' | 'tasks' | 'metrics'
 
 /**
- * Every id the tab strip and the launcher grid can carry — the tabs, plus the STUDIO.
+ * Every id the tab strip and the launcher grid can carry.
  *
- * THE SPLIT IS THE GUARANTEE, not documentation of one. The Studio takes the whole aside over: it
- * covers this panel's header AND its tab strip, because a file tree plus a code editor cannot share
- * 440px of width with two rows of chrome. So it is a MODE and not a tab body — and because `studio`
- * is absent from `TabId`, `setTab` cannot be handed it and no arm of the body chain can be written
- * for it. The alternative was a comment asking the next reader not to, which is the shape of defect
- * `ArtifactsAside.gate.lint.test.ts` exists to refuse.
+ * THE STUDIO USED TO BE HERE TOO, as a `StripId` outside `TabId` — a MODE rather than a tab, because
+ * it covered this panel's own header and strip and a file tree plus a code editor cannot share 440px
+ * with two rows of chrome. It is now its own PANEL (`lib/panelSlots.ts`'s `studio`), placed in its
+ * own slot independently of this one, rendered by `StudioHost` and never by this component — see
+ * `docs/superpowers/specs/2026-09-12-studio-slots-and-references-design.md` §1. This panel is
+ * `contents` alone now: `StripId` and `TabId` are the same set, kept as two names because every
+ * call site below already spells out which question it is answering.
  */
-type StripId = TabId | 'studio'
+type StripId = TabId
 
 /** Where the view toggle is remembered. One key, read and written in one place. */
 // SHARED. How a person reads the gallery and a skill is about the work, not about the screen —
@@ -162,24 +158,6 @@ export interface ArtifactsAsideProps {
   tabRequest?: { tab: string; at: number; ref?: string } | null
   sessionId: string
   lang: 'pt' | 'en'
-  /**
-   * May this machine serve the repository explorer at all — the RESOLVED answer (`CAPS.localShell`
-   * AND the user's own switch), combined on the server by `sessions/editor-gate.ts` and carried
-   * here through `AppContext.editorEnabled`. Never re-derived from a capability plus a preference
-   * on this side.
-   *
-   * When it is not `true` the Studio is ABSENT — no strip entry, no layer, and a requested `studio`
-   * tab ignored — never a greyed-out control: a disabled one that explains nothing is
-   * indistinguishable from a broken one, and the server refuses the route regardless. Undefined
-   * reads as OFF — a read/write file editor is opt-in and absence is never consent, the same
-   * reading `shellEnabled` takes.
-   */
-  editorEnabled?: boolean
-  /**
-   * The user's autosave switch inside that editor. A convenience, not a gate — it can only ever
-   * narrow what `editorEnabled` has already gated, so no capability guards it. Absent reads as OFF.
-   */
-  editorAutosave?: boolean
   /**
    * The session itself, for the TASKS tab — what it is called, which harness, and what it is filed
    * under right now. Absent on a surface that has the id and nothing else; the tab then offers
@@ -382,7 +360,7 @@ function TabGrid({ tabs, active, pt, isMobile, anchor, onPick, onClose }: {
 export function ArtifactsAside({
   sessionId, cwd, lang, artifacts, loading, unavailable, older, turns, onClose,
   unlistedWrites, outsideNote,
-  tabRequest, session, onOpenTask, onTaskChanged, metrics, editorEnabled, editorAutosave,
+  tabRequest, session, onOpenTask, onTaskChanged, metrics,
 }: ArtifactsAsideProps) {
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
@@ -426,47 +404,6 @@ export function ArtifactsAside({
   )
   const [mcpError, setMcpError] = useState<string | null>(null)
   const [mcpNonce, setMcpNonce] = useState(0)
-  /**
-   * IS THE STUDIO THE THING ON SCREEN? Its own state, because it is a MODE and not a tab — see
-   * `StripId`. Opening it hides this panel's header and its tab strip and gives it the whole aside.
-   */
-  const [studio, setStudio] = useState(false)
-  /**
-   * THE STUDIO SURVIVES LEAVING IT, and that is the whole reason this second flag exists.
-   *
-   * Every tab here is torn down and rebuilt when you leave it, which costs nothing: each one
-   * re-reads what it shows. The Studio holds MONACO BUFFERS, and an unsaved one exists in exactly
-   * one place in the world — so unmounting it is the silent loss `mountedEditors` and `Layer` were
-   * both written to make impossible, one level further out. Three lines typed, a glance at Live, and
-   * back: the text was gone, with no prompt.
-   *
-   * So it is mounted and HIDDEN while the normal aside is showing (`Layer`, imported rather than
-   * re-implemented — one rule, one place), which is also what makes `onExit` a control that changes
-   * nothing but what is visible. It is LAZY rather than permanent for the same reason the mounted
-   * set is bounded: a reader who never opens it must not pay for its first directory read, so
-   * nothing is mounted until it has been opened once.
-   */
-  const [studioOpened, setStudioOpened] = useState(false)
-  useEffect(() => { if (studio) setStudioOpened(true) }, [studio])
-  /** Mounted: the gate is open AND the reader has been here. Never merely "the gate is open". */
-  const studioMounted = editorEnabled === true && (studio || studioOpened)
-  /**
-   * SHOWN, which is narrower than `studio`. The switch can be turned off in another surface while
-   * this panel still has the Studio open, and `editorEnabled` is re-read on every render — so the
-   * panel falls back to its own chrome rather than drawing a frame with nothing behind it.
-   *
-   * LIMIT, stated rather than hidden: `editorEnabled` only changes at `App.tsx` mount and inside
-   * `SessionsSettings.tsx`'s `toggleEditor` (`refreshTeamSession`) — a different ROUTE from this
-   * one (`SessionsPage`/`ArtifactsAside`), and leaving `/sessions/:id` with a dirty Studio buffer is
-   * already intercepted by `UnsavedChangesGuard` before this component can unmount. So there is no
-   * path today through which the gate closes on a mounted, dirty Studio out from under a reader —
-   * this drop is unasked, but nothing reachable can trigger it. If the gate ever becomes refreshable
-   * while THIS page stays mounted (cross-tab sync of the team session, a focus/visibility refetch of
-   * `refreshTeamSession` like `loadSharedPrefs`'s), the Studio would unmount and drop unsaved Monaco
-   * buffers with no prompt — and that change must add a hold here (`holdIfUnsaved`, as
-   * `artifactsStore.ts`'s `closeArtifacts` already does) before it ships.
-   */
-  const inStudio = studio && editorEnabled === true
 
   /**
    * Honour a requested tab, once per request.
@@ -495,10 +432,9 @@ export function ArtifactsAside({
   const askedAt = tabRequest?.at
   useEffect(() => {
     const t = tabRequest?.tab
-    // THE STUDIO IS A MODE, so a request for it sets the mode and never the tab — and it is honoured
-    // only while the gate is open, for the same reason the strip entry is absent without it.
-    if (t === 'studio') { if (editorEnabled === true) setStudio(true) }
-    else if (t === 'live' || t === 'gallery' || t === 'skills'
+    // A REQUEST FOR 'studio' NEVER REACHES HERE — `artifactsStore.openArtifacts('studio')` is a
+    // compatibility shim over `panelSlots.showPanel('studio')` and this panel is never asked for it.
+    if (t === 'live' || t === 'gallery' || t === 'skills'
       || t === 'agents' || t === 'forks' || t === 'workflows' || t === 'mcps' || t === 'prs'
       || (t === 'tasks' && session !== undefined)
       || (t === 'metrics' && metrics !== undefined)) setTab(t)
@@ -771,22 +707,8 @@ export function ArtifactsAside({
   // session's own metrics is not a list. Without it the grid would print `—` under a tooltip
   // saying "open the tab to count", which is a promise this tab can never keep.
   const tabs: { id: StripId; label: string; icon: React.ReactNode; count?: number | null }[] = [
-    // THE STUDIO LEADS, and it is the one entry here that is not a tab: pressing it hands the whole
-    // aside over (see `StripId`). It is kept in the strip as well as on the header button because
-    // this is where the feature has always been found, and a reader who learnt it here must not have
-    // to learn somewhere else; the header is the SHORTER route, not the replacement.
-    // ABSENT and never greyed when the gate is closed (`editorEnabled` — the server's own
-    // combination of `CAPS.localShell` and the user's switch): a disabled control that explains
-    // nothing is indistinguishable from a broken one, and the route refuses anyway.
-    // NO `count`: a repository is not a list of this session's work, and the grid prints a dash plus
-    // "open the tab to count" for a `null` — a promise this entry can never keep.
-    ...(editorEnabled
-      ? [{
-          id: 'studio' as const,
-          label: 'Studio',
-          icon: <FolderTree size={12} />,
-        }]
-      : []),
+    // THE STUDIO IS GONE FROM HERE — it is its own panel now (`lib/panelSlots.ts`), reached through
+    // the right-slot switcher `SessionsPage` draws around this panel, never through this strip.
     { id: 'live', label: 'Live', icon: <Activity size={12} />, count: loading ? null : feed.length },
     {
       id: 'gallery',
@@ -896,19 +818,12 @@ export function ArtifactsAside({
     return () => ro.disconnect()
   }, [tabSig, isMobile])
 
-  /**
-   * WHAT THE STRIP MARKS — the tab, or the Studio while the Studio is the thing on screen.
-   *
-   * It is its own value because `tab` keeps its place while the Studio is open: leaving the Studio
-   * puts the reader back where they were, which is what makes `onExit` a control that changes one
-   * thing. (The strip is not drawn in Studio mode; this is what the grid and the cells read when the
-   * reader comes back, and what `splitAsideTabs` keeps on the bar.)
-   */
-  const activeStrip: StripId = inStudio ? 'studio' : tab
-  /** The one place a strip id is turned into an action — and the only place `studio` is routed. */
+  /** What the strip marks. Kept as its own name (rather than reading `tab` everywhere below) because
+   *  every call site here is answering "what does the strip show", not "what tab is selected" —
+   *  the same distinction that used to matter when the Studio could occupy this value too. */
+  const activeStrip: StripId = tab
   const pickStrip = (id: StripId) => {
-    if (id === 'studio') setStudio(true)
-    else { setStudio(false); setTab(id) }
+    setTab(id)
     setGridOpen(false)
   }
 
@@ -941,8 +856,8 @@ export function ArtifactsAside({
           // on one layout and withheld on the other, and what was actually shipped was withheld on
           // BOTH: measured at 390x844 on a live session, these tabs painted 70x22 / 83x22 / 85x22
           // and answered `elementFromPoint` over 21 vertical pixels. This bar is how you reach the
-          // Studio, the live feed and the gallery, so on a phone it IS the navigation — which is
-          // what "não tô conseguindo navegar direito" gets you.
+          // live feed and the gallery, so on a phone it IS the navigation — which is what "não tô
+          // conseguindo navegar direito" gets you.
           //
           // Painted, exactly as the note above `tabCell` reasoned and did not do: `.ag-tap` projects
           // its box with `::after`, the bar is `overflow: hidden`, and a clipped projection is a
@@ -1378,10 +1293,9 @@ export function ArtifactsAside({
    * Clicking a written path in the feed opens the FILE, as a document over this region.
    *
    * It used to switch to the Files tab first; with that tab gone it opens `ArtifactDoc` directly, and
-   * it is the only remaining caller of it. That matters for one reason beyond tidiness: `open`
-   * replaces this panel's whole chrome, so it was the third path that could tear the Studio's Monaco
-   * buffers down. It cannot any more — the Studio's layer is a SIBLING of that branch, not a child of
-   * it (see the render).
+   * it is the only remaining caller of it. `open` replaces this panel's whole chrome, which is
+   * harmless now that the Studio is not something this panel can tear down at all — it is its own
+   * panel, mounted by `StudioHost` wherever `panelSlots.ts` places it.
    *
    * Returns null when the path is no longer on disk, and the row is then plain text rather than a
    * dead link: the feed records every write the transcript saw, and a link whose only outcome is a
@@ -1758,48 +1672,14 @@ export function ArtifactsAside({
   }
 
   return (
-    /*
-      `position: relative` is LOAD-BEARING, and it is what makes the Studio a mode rather than a tab.
-      The Studio's `Layer` is `position: absolute; inset: 0` against this box, so it covers the
-      header AND the tab strip at the full size of the aside — which is the whole point: a file tree
-      plus a code editor cannot share this column with two rows of chrome.
-    */
+    // The Studio no longer lives inside this box at all — it is `StudioHost`'s own persistent DOM
+    // node, physically appended into whichever slot's box currently shows it (`lib/panelSlots.ts`,
+    // `StudioHost.tsx`). This component is `contents` alone now, so nothing here needs to survive a
+    // move it no longer participates in.
     <div style={{
-      position: 'relative',
       display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, minWidth: 0,
     }}>
-      {/*
-        THE STUDIO IS A SIBLING OF THE CHROME, NEVER A CHILD OF IT — and that placement is the fix
-        for the defect this feature was stopped over twice. Inside the body region it was torn down
-        by a tab switch; inside the `open ? … : …` branch below it would be torn down by opening a
-        document from the live feed, which is the one remaining path that replaces this panel's whole
-        tree. Both take unsaved Monaco buffers with them, and an unsaved buffer exists in exactly one
-        place in the world. Up here, nothing below can unmount it: `Layer` composites it away with
-        `opacity: 0`, which a descendant cannot undo from inside (opacity is not inherited — a child's
-        `opacity: 1` composites within a parent's `0` and stays invisible), and `inert` takes it out
-        of the keyboard's reach and out of the hit-testing. **`visibility` is NOT the mechanism and
-        may not become one**: it IS inherited and overridable, so an inner `visibility: visible`
-        re-shows itself through a hidden ancestor — which shipped once and painted the file tree over
-        the tab the reader had switched to (`Layer`'s own doc records the reproduction). Neither
-        `display: none` nor `content-visibility` may be used either: the layer has to keep MEASURING,
-        which is the one state Monaco's `automaticLayout` cannot recover from on its own.
-      */}
-      {studioMounted && (
-        <Layer shown={inStudio}>
-          <Studio
-            sessionId={sessionId}
-            lang={lang}
-            autosave={editorAutosave === true}
-            turns={turns ?? []}
-            /* The way back. It flips which layer is SHOWN and unmounts nothing — see above. */
-            onExit={() => setStudio(false)}
-          />
-        </Layer>
-      )}
-      {/* In Studio mode this panel's own chrome is not rendered at all. Hiding it would leave the
-          header and the strip measuring under a layer nobody can reach; not rendering it is what
-          gives the Studio the aside's full height and says so unambiguously. */}
-      {inStudio ? null : open ? (
+      {open ? (
         <ArtifactDoc sessionId={sessionId} artifact={open} lang={lang} onBack={() => setOpen(null)} />
       ) : (
         <>

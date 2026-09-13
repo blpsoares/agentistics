@@ -14,7 +14,7 @@
  */
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { RepoTreeView, toggleDirectory, treeViewState } from './RepoTreeView'
+import { RepoTreeView, toggleDirectory, treeViewState, type TreeOps } from './RepoTreeView'
 import {
   applyChildren, applyError, makeRootNode, setLoading, toggleExpanded, type TreeNode,
 } from '../../lib/repoTreeModel'
@@ -44,6 +44,21 @@ afterAll(() => { if (windowIsOurs) delete env.window })
 
 function noop() { /* the component never changes the tree in these renders */ }
 
+/** None of the tests below drive a tree operation — this view's own chrome is what is asserted. */
+const noopOps: TreeOps = {
+  renaming: null,
+  onRenameStart: noop,
+  onRenameChange: noop,
+  onRenameCommit: noop,
+  onRenameCancel: noop,
+  onNewAt: noop,
+  onDelete: noop,
+  onMovePicker: noop,
+  onCopyRelativePath: noop,
+  onCopyPath: noop,
+  onDropMove: noop,
+}
+
 function loadedRoot(): TreeNode {
   return applyChildren(makeRootNode(), '', [
     { name: 'src', kind: 'dir' },
@@ -53,7 +68,7 @@ function loadedRoot(): TreeNode {
 
 function render(tree: TreeNode, lang: 'pt' | 'en' = 'en'): string {
   return renderToStaticMarkup(
-    <RepoTreeView sessionId="s1" tree={tree} onTreeChange={noop} onOpenFile={noop} lang={lang} />,
+    <RepoTreeView sessionId="s1" tree={tree} onTreeChange={noop} onOpenFile={noop} lang={lang} ops={noopOps} />,
   )
 }
 
@@ -286,9 +301,15 @@ describe('mobile', () => {
   })
 
   test('the row never sets a width that could exceed its column', () => {
+    // The row's own button used to be `width:100%` directly inside the listitem; it is now a
+    // `flex:1` sibling of the "⋯" button inside a `.ag-tree-row` wrapper (see the file header's note
+    // on why they may never nest) — `flex:1` fills exactly the space the wrapper leaves it and
+    // cannot exceed the column any more than `width:100%` could, so this asserts the NEW shape of
+    // the same guarantee rather than the literal string the old layout happened to produce.
     phone()
     const html = render(loadedRoot())
-    expect(html).toContain('width:100%')
+    expect(html).toContain('flex:1')
+    expect(html).toContain('min-width:0')
     expect(html).toContain('box-sizing:border-box')
     expect(html).toContain('overflow-x:hidden')
   })

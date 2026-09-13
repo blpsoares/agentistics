@@ -26,11 +26,12 @@ import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   AUTOSAVE_FAILURE_LIMIT, autosaveStopped, binaryText, diskVersionOf, focusTrapTarget,
-  initialSaveState, isDirty, loadStateFor, mediaFailedText, mediaTooBigText,
-  monacoOptions, monacoThemeFor, nextSaveState,
+  initialSaveState, isDirty, isMidRetarget, loadStateFor, loadStateForRender,
+  mediaFailedText, mediaTooBigText,
+  monacoOptions, monacoThemeFor, nextSaveState, readPreviewMode, renderableDocKind,
   RepoConflictPrompt, RepoMediaView, RepoSaveStrip, RepoStaleBanner,
-  saveButtonState, saveEventFor, saveGate, saveStatus,
-  type SaveEvent, type SaveState,
+  saveButtonState, saveEventFor, saveGate, saveStatus, ViewModeToggle, writePreviewMode,
+  type LoadState, type SaveEvent, type SaveState,
 } from './RepoFileEditor'
 import type { ReadFileResult, WriteFileResult } from '../../lib/repoApi'
 import { AGENTISTICS_THEME_NAME } from '../../lib/monacoTheme'
@@ -83,6 +84,71 @@ describe('loadStateFor', () => {
     const state = loadStateFor({ ok: false, failure: 'unreachable', cause: 'timeout' }, 'en')
     expect(state.kind).toBe('failed')
     expect(state.kind === 'failed' && state.text.length > 0).toBe(true)
+  })
+})
+
+/**
+ * C1 (2026-09-12, `session-w1c-tree-ops-review.md`): renaming or moving an open file with unsaved
+ * changes discarded the buffer and the undo stack. The two functions below are the whole fix, pulled
+ * out of the component so the failure — and the repair — can be asserted directly rather than
+ * believed from a comment. The bug was a naive `read.key === fileKey ? read.state : {kind:'loading'}`
+ * flipping to `loading` for exactly the render between a retarget being detected and the read effect
+ * catching `read.key` up — long enough for the mount effect's `[load.kind]` dependency to see 'ready'
+ * become 'loading' and dispose the live editor, so the NEXT flip back to 'ready' recreated one from
+ * `contentRef.current` (the file's original disk text, not the dirty buffer).
+ */
+describe('isMidRetarget', () => {
+  test('a path change with a live editor IS a retarget', () => {
+    expect(isMidRetarget('src/a.ts', true)).toBe(true)
+  })
+
+  test('no path change is never a retarget, editor or not', () => {
+    expect(isMidRetarget(undefined, true)).toBe(false)
+    expect(isMidRetarget(undefined, false)).toBe(false)
+  })
+
+  test('a path change with NO live editor yet is an ordinary read — nothing to preserve', () => {
+    // The race the component's own header names: a retarget landing before the first read resolved.
+    expect(isMidRetarget('src/a.ts', false)).toBe(false)
+  })
+})
+
+describe('loadStateForRender — the exact line C1 lived in', () => {
+  const READY: LoadState = { kind: 'ready', content: '// DIRTY-LINE\nexport const a = 1\n', mtimeMs: 5 }
+  const read = { key: 'sess\nsrc/a.ts', state: READY }
+  const newFileKey = 'sess\nsrc/a2.ts'
+
+  test('the key already matches: the state is returned untouched, retarget or not', () => {
+    expect(loadStateForRender(read, read.key, undefined, true)).toBe(READY)
+    expect(loadStateForRender(read, read.key, 'src/a.ts', true)).toBe(READY)
+  })
+
+  test('mid-retarget, a mismatched key still returns the live state — never `loading`', () => {
+    // This is the render between the retarget being detected and the read effect patching
+    // `read.key`: exactly where C1 lost the buffer. `isMidRetarget` is what the real render
+    // computes as its third argument; passed here explicitly so the two can never drift apart.
+    expect(loadStateForRender(read, newFileKey, 'src/a.ts', true)).toBe(READY)
+  })
+
+  test('THE PLANTED DEFECT: a bare key-equality check loses the buffer on the very render C1 reported', () => {
+    // The exact shape of the line this replaced (`read.key === fileKey ? read.state : {kind:'loading'}`).
+    // Restated here as an assertion so the regression is pinned in the test file, not only in a
+    // comment above the real function: if `loadStateForRender` above ever regresses to this, this
+    // expectation fails, but `read.key === fileKey ? read.state : {kind:'loading'} as LoadState`
+    // itself proves the point — it drops the buffer whenever the key has not yet caught up, which is
+    // exactly the render a retarget is detected on.
+    const naive = (r: typeof read, key: string): LoadState => (r.key === key ? r.state : { kind: 'loading' })
+    expect(naive(read, newFileKey)).toEqual({ kind: 'loading' })
+    // ...while the real function, given the SAME inputs plus the retarget signal, keeps the buffer.
+    expect(loadStateForRender(read, newFileKey, 'src/a.ts', true)).toBe(READY)
+  })
+
+  test('mid-retarget with NO live editor yet: nothing to preserve, so it reads loading', () => {
+    expect(loadStateForRender(read, newFileKey, 'src/a.ts', false)).toEqual({ kind: 'loading' })
+  })
+
+  test('an ordinary file swap (no retarget signal) with a mismatched key reads loading', () => {
+    expect(loadStateForRender(read, newFileKey, undefined, true)).toEqual({ kind: 'loading' })
   })
 })
 
@@ -884,6 +950,83 @@ describe('the save strip', () => {
     // With autosave off there is nothing to say: it was never running.
     expect(strip(typed, 'en', false, false)).not.toContain('Autosave')
   })
+
+  test('the strip carries no toggle for a plain code file', () => {
+    // `toggle` is `undefined` by default — every assertion above already renders without it, which
+    // is the point: this is what proves the toggle is additive rather than a rewritten strip.
+    expect(strip(DIRTY)).not.toContain('role="tablist"')
+  })
+
+  test('a toggle handed to the strip renders alongside the existing controls', () => {
+    const html = renderToStaticMarkup(
+      <RepoSaveStrip
+        state={DIRTY} lang="en" isMobile={false} autosave={false} onSave={noop}
+        toggle={<ViewModeToggle mode="code" isMobile={false} lang="en" onChange={noop} />}
+      />,
+    )
+    expect(html).toContain('role="tablist"')
+    expect(html).toContain('Ctrl+S')
+  })
+})
+
+describe('renderableDocKind — which files the toggle appears on', () => {
+  test('markdown, by extension', () => {
+    for (const p of ['README.md', 'docs/guide.mdx', 'notes.markdown', 'AGENTS.md', 'SKILL.md']) {
+      expect(renderableDocKind(p), p).toBe('markdown')
+    }
+  })
+  test('markdown, by the two common extensionless names', () => {
+    expect(renderableDocKind('README')).toBe('markdown')
+    expect(renderableDocKind('CHANGELOG')).toBe('markdown')
+    expect(renderableDocKind('readme')).toBe('markdown')
+  })
+  test('mermaid, by extension', () => {
+    expect(renderableDocKind('diagram.mmd')).toBe('mermaid')
+    expect(renderableDocKind('flow.mermaid')).toBe('mermaid')
+  })
+  test('everything else has no preview at all', () => {
+    for (const p of ['index.ts', 'Dockerfile', 'notes.txt', 'LICENSE', 'package.json']) {
+      expect(renderableDocKind(p), p).toBeNull()
+    }
+  })
+})
+
+describe('the preview mode is remembered per doc kind, and survives a hostile localStorage', () => {
+  function memory(): Storage {
+    const map = new Map<string, string>()
+    return {
+      getItem: (k: string) => map.get(k) ?? null,
+      setItem: (k: string, v: string) => { map.set(k, v) },
+      removeItem: (k: string) => { map.delete(k) },
+      clear: () => map.clear(),
+      key: () => null,
+      get length() { return map.size },
+    } as unknown as Storage
+  }
+
+  test('absent reads as code', () => {
+    expect(readPreviewMode('markdown', memory())).toBe('code')
+  })
+
+  test('round-trips, and the two kinds do not share a slot', () => {
+    const s = memory()
+    writePreviewMode('markdown', 'preview', s)
+    expect(readPreviewMode('markdown', s)).toBe('preview')
+    expect(readPreviewMode('mermaid', s)).toBe('code')
+    writePreviewMode('mermaid', 'preview', s)
+    expect(readPreviewMode('markdown', s)).toBe('preview')
+    expect(readPreviewMode('mermaid', s)).toBe('preview')
+  })
+
+  test('a browser blocking site data costs the memory, never the toggle', () => {
+    const hostile = {
+      getItem() { throw new Error('blocked') },
+      setItem() { throw new Error('blocked') },
+    } as unknown as Storage
+    expect(() => readPreviewMode('markdown', hostile)).not.toThrow()
+    expect(readPreviewMode('markdown', hostile)).toBe('code')
+    expect(() => writePreviewMode('markdown', 'preview', hostile)).not.toThrow()
+  })
 })
 
 describe('the stale banner', () => {
@@ -1402,6 +1545,11 @@ function withoutComments(source: string): string {
  * The read effect's own body, comments stripped. Anchored on its DEPENDENCY LIST rather than on the
  * section comment above it, so the slice survives a comment being reworded — and on the `useEffect`
  * that opens it, so nothing from the effects around it can be read as part of this one.
+ *
+ * The dependency list is deliberately `[sessionId, path]` alone — `retargetFrom` is EXCLUDED on
+ * purpose (see `RepoFileEditor.tsx`'s own note by `priorPathRef`): including it is exactly what made
+ * C1 possible, since a later render where `retargetFrom` alone flips back to `undefined` would
+ * re-trigger this effect down the ordinary reset-and-reread branch.
  */
 function readFileEffect(source: string): string {
   const end = source.indexOf('}, [sessionId, path])')
@@ -1436,6 +1584,40 @@ describe('the save wiring, asserted over the source', () => {
     expect(read).toBeGreaterThan(reset)
   })
 
+  test('a RETARGET (a rename of an already-open file) skips the re-read and re-reset, before either runs', () => {
+    // A STRUCTURAL companion to the `loadStateForRender`/`isMidRetarget` behavioural tests above —
+    // it is not, on its own, proof that the buffer survives (that was exactly the two tests the
+    // review found satisfied by a comment: C1 shipped with this ordering intact and the bug anyway,
+    // because the loss happened in `load`'s derivation, not in this effect's branch order). Kept as a
+    // regression guard on the branch itself: matched BY INDEX against the same two calls the previous
+    // test anchors on, so a refactor that moved the guard clause BELOW the reset (silently re-reading
+    // every retarget from disk) fails this test even though the guard clause still exists somewhere
+    // in the function — and on the actual predicate, so inlining the check back by hand instead of
+    // calling `isMidRetarget` is caught too.
+    const effect = readFileEffect(src)
+    const guard = effect.indexOf('isMidRetarget(retargetFrom, editorRef.current !== null)')
+    const reset = effect.indexOf("dispatch({ kind: 'reset' })")
+    const read = effect.indexOf('readRepoFile(')
+    expect(guard).toBeGreaterThanOrEqual(0)
+    expect(guard).toBeLessThan(reset)
+    expect(reset).toBeLessThan(read)
+  })
+
+  test('the MOUNT effect depends on load.kind alone — `path` is absent, which is the whole reason a retarget does not tear down the model', () => {
+    // The mount effect is the one whose cleanup DISPOSES the live Monaco model and editor. Were
+    // `path` back in its dependency array, a rename would re-trigger it (React runs the OUTGOING
+    // cleanup unconditionally on any dependency change, before the new effect body gets a say) and
+    // dispose the very instance the retarget skip above exists to keep alive. THIS ALONE is not the
+    // proof C1's fix works — `load.kind` staying 'ready' throughout a retarget is what
+    // `loadStateForRender`'s behavioural tests above pin — but it is a real, independent invariant:
+    // even with `load.kind` correctly staying 'ready', re-adding `path` here would tear the editor
+    // down on every retarget regardless.
+    expect(src).toContain('}, [load.kind])')
+    // And the model itself is created from the LATEST path via the ref, never the closed-over
+    // `path` — the one a removed dependency would otherwise leave stale forever.
+    expect(src).toContain('languageForPath(argsRef.current.path)')
+  })
+
   test('the conflict prompt keeps Escape to itself, and nothing behind it is reachable', () => {
     // Sliced to the Escape handler's own body, and matched on the whole expression rather than the
     // word: `stopPropagation` and `inert` both appear in this module's comments, so a bare grep for
@@ -1446,6 +1628,43 @@ describe('the save wiring, asserted over the source', () => {
     expect(onKey).toContain('Escape')
     expect(onKey).toContain('ev.stopPropagation()')
     // `includes` again, for its neighbour's reason: a failure here prints `false`, not 40 KB of module.
+    // The condition grew a second clause (the preview toggle also hides Monaco with `inert`), so this
+    // now matches the WHOLE expression rather than the old exact string — still real code, not a
+    // comment: `inert=` is a JSX attribute, and this module's comments never write JSX.
+    expect(src.includes("inert={save.phase.kind === 'conflict' || viewMode === 'preview'}")).toBe(true)
+  })
+
+  // M6: the preview region used to carry NO `inert` of its own — reachable behind the conflict
+  // prompt exactly when the Monaco host (correctly `inert` in that same state) was not showing.
+  test('the preview region is inert while the conflict prompt is open too (M6)', () => {
     expect(src.includes("inert={save.phase.kind === 'conflict'}")).toBe(true)
+  })
+
+  // M6: Ctrl+S in preview mode used to have nowhere to land — Monaco's own command only fires while
+  // MONACO is focused, and Monaco is `inert` throughout preview mode.
+  test('the preview region has its own Ctrl+S, since Monaco cannot be focused to receive one (M6)', () => {
+    expect(src).toContain("ev.key.toLowerCase() !== 's'")
+    expect(src.includes("requestSaveRef.current('explicit')")).toBe(true)
+  })
+
+  // M2: `discardAndReload` used to leave the preview showing the DISCARDED buffer — the debounce
+  // that would otherwise refresh it is deliberately skipped for this programmatic `setValue`
+  // (`applyingDiskRef`), so nothing else updated `previewText` for this one path.
+  test('discarding and reloading refreshes the preview immediately, not just the model (M2)', () => {
+    const fn = src.slice(src.indexOf('const discardAndReload ='), src.indexOf('const handleViewModeChange ='))
+    expect(fn).toContain('setPreviewText(disk.diskContent)')
+    // Ordered after the model is actually replaced — a preview refreshed from the STALE
+    // `contentRef`/model would show the buffer this discard is meant to replace.
+    expect(fn.indexOf('editor.setValue(disk.diskContent)')).toBeLessThan(fn.indexOf('setPreviewText(disk.diskContent)'))
+  })
+
+  // I3: the JSON diagnostics relaxation has to run before the FIRST model is ever created, or the
+  // very first tsconfig.json/*.jsonc opened this session still shows the old squiggles until a
+  // second file triggers it.
+  test('JSON diagnostics are configured before the first model is created (I3)', () => {
+    const mount = src.slice(src.indexOf("void import('../../lib/monacoSetup')"), src.indexOf('setMounted(n => n + 1)'))
+    expect(mount).toContain('configureJsonDiagnostics(monaco)')
+    expect(mount.indexOf('configureJsonDiagnostics(monaco)'))
+      .toBeLessThan(mount.indexOf('monaco.editor.createModel('))
   })
 })
