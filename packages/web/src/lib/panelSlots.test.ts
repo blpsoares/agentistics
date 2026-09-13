@@ -23,15 +23,16 @@ function memory(): Storage {
 }
 
 describe('allowed — the closed sets', () => {
-  test('right hosts all four panels', () => {
+  test('right hosts all five panels', () => {
     for (const p of PANEL_IDS) expect(allowed('right', p)).toBe(true)
   })
 
-  test('bottom hosts everything but contents — a tabbed list does not fit a band', () => {
+  test('bottom hosts cli/shell/studio — contents and hardware do not fit a band', () => {
     expect(allowed('bottom', 'contents')).toBe(false)
     expect(allowed('bottom', 'studio')).toBe(true)
     expect(allowed('bottom', 'cli')).toBe(true)
     expect(allowed('bottom', 'shell')).toBe(true)
+    expect(allowed('bottom', 'hardware')).toBe(false)
   })
 })
 
@@ -58,10 +59,15 @@ describe('openPanel — exhaustive, every panel × slot × starting occupant', (
   test('with no slot given, it falls back to lastSlot, then to the panel’s default', () => {
     expect(openPanel(EMPTY_SLOT_LAYOUT, 'studio').right).toBe('studio')
     expect(openPanel(EMPTY_SLOT_LAYOUT, 'cli').bottom).toBe('cli')
+    expect(openPanel(EMPTY_SLOT_LAYOUT, 'hardware').right).toBe('hardware')
     const remembered: SlotLayout = {
       ...EMPTY_SLOT_LAYOUT, lastSlot: { ...DEFAULT_LAST_SLOT, cli: 'right' },
     }
     expect(openPanel(remembered, 'cli').right).toBe('cli')
+  })
+
+  test('hardware can never land at the bottom, even asked for explicitly — right only', () => {
+    expect(openPanel(EMPTY_SLOT_LAYOUT, 'hardware', 'bottom')).toBe(EMPTY_SLOT_LAYOUT)
   })
 
   test('opening a panel where another already sits DISPLACES it — the other stops being shown anywhere', () => {
@@ -298,6 +304,11 @@ describe('resolveForGates — a closed gate reads the panel as absent (C1)', () 
     expect(resolveForGates(stored, { editorEnabled: false, shellEnabled: false, relayed: true })).toBe(stored)
   })
 
+  test('hardware has no gate of its own either — it is a client-side read, not a session capability', () => {
+    const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'hardware' }
+    expect(resolveForGates(stored, { editorEnabled: false, shellEnabled: false, relayed: true })).toBe(stored)
+  })
+
   test('every panel × every gate combination: a closed gate never leaves its panel shown', () => {
     for (const editorEnabled of [true, false]) {
       for (const shellEnabled of [true, false]) {
@@ -310,6 +321,7 @@ describe('resolveForGates — a closed gate reads the panel as absent (C1)', () 
               const resolved = resolveForGates(layout, gates)
               const shouldBeOpen =
                 panel === 'contents' ? true
+                : panel === 'hardware' ? true
                 : panel === 'studio' ? editorEnabled
                 : panel === 'cli' ? !relayed
                 : shellEnabled && !relayed

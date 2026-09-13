@@ -23,7 +23,7 @@ import {
 } from 'react'
 import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import {
-  ChevronLeft, FileText, FolderTree, MessagesSquare, PanelBottomOpen, Plus, TerminalSquare,
+  ChevronLeft, Cpu, FileText, FolderTree, MessagesSquare, PanelBottomOpen, Plus, TerminalSquare,
   X as XIcon,
 } from 'lucide-react'
 import { StudioHost, type StudioHostProps } from '../components/sessions/StudioHost'
@@ -49,6 +49,7 @@ import { SessionTitleFlag } from '../components/sessions/SessionTitleFlag'
 import { MagnifierButton } from '../components/a11y/MagnifierButton'
 import { HideLensesButton } from '../components/a11y/HideLensesButton'
 import { ArtifactsAside } from '../components/sessions/ArtifactsAside'
+import { HardwarePanel } from '../components/sessions/HardwarePanel'
 import { UnsavedChangesGuard } from '../components/sessions/UnsavedChangesGuard'
 import {
   ASIDE_ANIM_MS, ASIDE_EASE, edgeHint, panelWidth, resolveArtifactLayout,
@@ -522,6 +523,7 @@ export default function SessionsPage() {
   const rightIsStudio = slotLayout.right === 'studio'
   const rightIsCli = slotLayout.right === 'cli'
   const rightIsShell = slotLayout.right === 'shell'
+  const rightIsHardware = slotLayout.right === 'hardware'
   const bottomIsStudio = slotLayout.bottom === 'studio'
   const [rightSlotEl, setRightSlotEl] = useState<HTMLDivElement | null>(null)
   const [bottomStudioEl, setBottomStudioEl] = useState<HTMLDivElement | null>(null)
@@ -739,16 +741,24 @@ export default function SessionsPage() {
   )
 
   /**
-   * THE RIGHT SLOT'S OWN SWITCHER (design §1.3) — `Conteúdo · Studio · Claude Code · Shell`, an
-   * entry ABSENT (never greyed) wherever its gate is closed. `Contents` keeps going through the OLD
-   * `artifactsStore`, deliberately: `contents` is `panelSlots.ts`'s own `PanelId` too, but this
-   * routes only `studio`/`cli`/`shell` through it, so a request for Contents never touches this
-   * store — see `panelSlots.showPanel`'s own doc comment. `cli`/`shell` are desktop-only here: on a
-   * phone they open as today's dedicated fullscreen pane instead (design §1.6), so the entries are
-   * absent under `isMobile` rather than opening an inline pane `resolveForViewport` never reads.
+   * THE RIGHT SLOT'S OWN SWITCHER (design §1.3) used to draw the picker tabs — `Conteúdo · Studio ·
+   * Claude Code · Shell` — ABOVE this same box on EVERY viewport. Item 2 of the UX pass folds those
+   * tabs into the FIXED HEADER on desktop instead (`App.tsx`'s `sessionTopBar`, which reads
+   * `usePanelSlots()` and `appCtx` independently — no new prop threaded through this file), so on
+   * desktop this box draws no picker of its own any more: a picker here AND one in the header would
+   * be the exact "two lit controls for one slot" defect item 2 exists to remove.
+   *
+   * MOBILE HAS NO FIXED HEADER FOR IT (`sessionTopBar` is desktop-only), so the picker survives here,
+   * UNCHANGED in shape, for exactly that viewport — `rightSwitcherMobile` below. `hardware` joins the
+   * set (design item 3): right-slot only, ABSENT on a central the same way the header chip always
+   * was (`hardwareOffered`).
    */
-  const rightActivePanel: 'studio' | 'cli' | 'shell' | null = rightIsStudio
-    ? 'studio' : rightIsCli ? 'cli' : rightIsShell ? 'shell' : null
+  const hardwareOffered = !isCentral
+  const rightActivePanel: 'studio' | 'cli' | 'shell' | 'hardware' | null = rightIsStudio
+    ? 'studio' : rightIsCli ? 'cli' : rightIsShell ? 'shell' : rightIsHardware ? 'hardware' : null
+  /** `hardware` never moves to the bottom band — `panelSlots.ts` refuses the placement outright
+   *  (right-only), so offering the button there would be a control whose one outcome is nothing. */
+  const canMoveToBottom = rightActivePanel === 'studio' || rightActivePanel === 'cli' || rightActivePanel === 'shell'
   // The 44px mobile touch target is PROJECTED by the `.ag-tap-icon` class already on both buttons
   // below (`index.css`'s invisible-hitbox rule), never painted here — a literal `width/height:
   // isMobile ? 44` on an icon button is the exact shape `touchTarget.lint.test.ts` refuses: the
@@ -759,7 +769,7 @@ export default function SessionsPage() {
     border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
     color: 'var(--text-secondary)', cursor: 'pointer',
   }
-  const rightSwitcher = selected ? (
+  const rightSwitcherMobile = (isMobile && selected) ? (
     <div role="tablist" aria-label={pt ? 'O que mostrar' : 'What to show'} style={{
       display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, flexWrap: 'wrap',
       padding: '4px 6px', borderBottom: '1px solid var(--border)',
@@ -768,8 +778,7 @@ export default function SessionsPage() {
         [
           { id: 'contents' as const, label: pt ? 'Conteúdo' : 'Contents', icon: <FileText key="c" size={12} />, on: rightSlotShowing(slotLayout, art.open) === 'contents', shown: true },
           { id: 'studio' as const, label: 'Studio', icon: <FolderTree key="s" size={12} />, on: rightIsStudio, shown: editorEnabled === true },
-          { id: 'cli' as const, label: targetLabel('cli', selected.harness, pt ? 'pt' : 'en'), icon: <TerminalSquare key="cli" size={12} />, on: rightIsCli, shown: !isMobile && !relayed },
-          { id: 'shell' as const, label: targetLabel('shell', selected.harness, pt ? 'pt' : 'en'), icon: <TerminalSquare key="sh" size={12} />, on: rightIsShell, shown: !isMobile && shellEnabled === true && !relayed },
+          { id: 'hardware' as const, label: pt ? 'Hardware' : 'Hardware', icon: <Cpu key="hw" size={12} />, on: rightIsHardware, shown: hardwareOffered },
         ]
       ).filter(entry => entry.shown).map(({ id, label, icon, on }) => (
         <button
@@ -785,7 +794,7 @@ export default function SessionsPage() {
           }}
           style={{
             display: 'flex', alignItems: 'center', gap: 5,
-            minHeight: isMobile ? 44 : 22, padding: isMobile ? '0 14px' : '4px 9px',
+            minHeight: 44, padding: '0 14px',
             borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
             fontSize: 11.5, fontWeight: on ? 700 : 500,
             background: on ? 'var(--bg-elevated)' : 'transparent',
@@ -794,19 +803,8 @@ export default function SessionsPage() {
         >{icon}{label}</button>
       ))}
       <span style={{ flex: 1 }} />
-      {/* "MOVE TO BOTTOM" is ABSENT on mobile — a phone has no bottom slot at all (`dockedAllowed`
-          in `lib/terminalSurface.ts`), so it would move a panel somewhere `resolveForViewport`
-          immediately reads back as the right sheet it already is. */}
-      {rightActivePanel && !isMobile && (
-        <button className="ag-tap-icon"
-          onClick={() => moveSlotPanel(rightActivePanel, 'bottom')}
-          title={pt ? 'Mover para baixo' : 'Move to the bottom'}
-          aria-label={pt ? 'Mover para baixo' : 'Move to the bottom'}
-          style={rightSlotIconBtn}
-        ><PanelBottomOpen size={13} /></button>
-      )}
-      {/* CLOSE — the review's C1/I3 finding: the right slot had a way IN for the Studio (and now
-          cli/shell) but no way OUT beside displacing it with another panel. Closing the Studio asks
+      {/* CLOSE — a phone has no fixed header to close this from any other way (item 2's merged
+          tab group is desktop-only), so this stays the one door out here. Closing the Studio asks
           first when dirty, through the very `hidePanel` `closeSlotPanel` already calls. */}
       {rightActivePanel && (
         <button className="ag-tap-icon"
@@ -819,18 +817,51 @@ export default function SessionsPage() {
     </div>
   ) : null
 
+  /**
+   * THE DESKTOP TOOLBAR — all that is left once the picker moved into the header (item 2) and the
+   * close button became redundant with clicking the header's own lit tab: "move to bottom", with a
+   * conventional icon PLUS a visible label (item 5, screenshot 4 — an icon-only control here was
+   * reported as confusing). Absent when there is nothing to move (Contents never goes to the bottom;
+   * `hardware` is right-only) rather than present and refusing.
+   */
+  const rightSlotToolbar = (!isMobile && canMoveToBottom && rightActivePanel) ? (
+    <div style={{
+      display: 'flex', justifyContent: 'flex-end', flexShrink: 0,
+      padding: '4px 8px', borderBottom: '1px solid var(--border)',
+    }}>
+      <button
+        onClick={() => moveSlotPanel(rightActivePanel, 'bottom')}
+        title={pt ? 'Mover este painel para a faixa inferior' : 'Move this panel to the bottom band'}
+        aria-label={pt ? 'Mover para baixo' : 'Move to the bottom'}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, height: 26, padding: '0 10px',
+          borderRadius: 7, border: '1px solid var(--border-subtle)', cursor: 'pointer',
+          fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
+          background: 'var(--bg-elevated)', color: 'var(--text-secondary)',
+        }}
+      >
+        <PanelBottomOpen size={13} />
+        {pt ? 'Mover para baixo' : 'Move to the bottom'}
+      </button>
+    </div>
+  ) : null
+
+  /** Whichever of the two headers this viewport uses — never both. */
+  const rightSlotHeader = isMobile ? rightSwitcherMobile : rightSlotToolbar
+
   /** What the right box actually shows: the Studio's own target (StudioHost re-parents its carrier
    *  into it) while `panelSlots` says so; `cli`/`shell` render their own `TerminalRegion`/`ShellBand`
    *  with `placement="aside"` (design §1.5) — ordinary mounts, no persistent carrier needed since
-   *  neither holds a buffer that must survive the move; `ArtifactsAside` otherwise. */
+   *  neither holds a buffer that must survive the move; `hardware` its own `HardwarePanel` (design
+   *  item 3, sharing its content with the modal); `ArtifactsAside` otherwise. */
   const rightSlotContent = rightIsStudio ? (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
-      {rightSwitcher}
+      {rightSlotHeader}
       <div ref={setRightSlotEl} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }} />
     </div>
   ) : rightIsCli && selected ? (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
-      {rightSwitcher}
+      {rightSlotHeader}
       <div style={{ flex: 1, minHeight: 0, padding: 10, display: 'flex', flexDirection: 'column' }}>
         <TerminalRegion
           placement="aside"
@@ -845,7 +876,7 @@ export default function SessionsPage() {
     </div>
   ) : rightIsShell && selected ? (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
-      {rightSwitcher}
+      {rightSlotHeader}
       <div style={{ flex: 1, minHeight: 0, padding: 10, display: 'flex', flexDirection: 'column' }}>
         <ShellBand
           key={`aside-${selected.id}`}
@@ -858,9 +889,14 @@ export default function SessionsPage() {
         />
       </div>
     </div>
+  ) : rightIsHardware ? (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
+      {rightSlotHeader}
+      <HardwarePanel lang={pt ? 'pt' : 'en'} onClose={() => closeSlotPanel('hardware')} />
+    </div>
   ) : (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
-      {rightSwitcher}
+      {rightSlotHeader}
       {artifactsPane}
     </div>
   )
