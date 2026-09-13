@@ -1,22 +1,18 @@
 /**
- * activeFilterCount.ts — PURE mirror of `FiltersBar`'s own dimension count.
+ * activeFilterCount.ts — the ONE count of how many filter DIMENSIONS are currently narrowing what
+ * is on screen.
  *
- * `FiltersBar` computes, internally, how many filter DIMENSIONS are currently narrowing what is on
- * screen — the number its own "+ Filtro" and "Ver filtros ativos" badges show. The Sessions
- * workspace's Filtros tab needs that same number for the badge on its OWN collapsed trigger, before
- * the panel holding `FiltersBar` is ever open — so it cannot simply read the number off the
- * component, and re-deriving a DIFFERENT count would put two disagreeing badges a few pixels apart
- * on the same screen.
- *
- * This is therefore a byte-for-byte mirror of `FiltersBar`'s own list (see its `activeFilterCount`,
- * next to `clearAllFilters` — the two are kept side by side there so a dimension added to one is
- * answered by the other). If that list changes, this one has to change with it; there is no shared
- * import between them because `FiltersBar` computes the count from state that only exists once the
- * bar has mounted (`hasRepoFilter`/`hasTagFilter`/etc., which are themselves plain reads of
- * `filters.repos`/`filters.tags`/… and cost nothing to duplicate here).
+ * `FiltersBar` imports this for its own "+ Filtro" and "Ver filtros ativos" badges (see its
+ * `activeFilterCount`, next to `clearAllFilters` — the two are kept side by side there so a
+ * dimension added to one is answered by the other). The Sessions workspace's Filtros tab imports it
+ * too, for the badge on its own collapsed trigger, BEFORE the panel holding `FiltersBar` is ever
+ * mounted — which is why this lives as a standalone function rather than something read off the
+ * component: a value that only exists once a component has mounted cannot back a badge that must be
+ * right on the very first paint. Every term here is a plain read of `filters.*`, so the function
+ * needs no state of its own.
  *
  * `dateRange` / `customStart` / `customEnd` are deliberately NOT dimensions here: the date presets
- * sit outside the "+ Filtro" menu and are always visible, so `FiltersBar` never counts them either.
+ * sit outside the "+ Filtro" menu and are always visible, so `FiltersBar` never counted them either.
  */
 import type { Filters } from '@agentistics/core'
 

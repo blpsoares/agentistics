@@ -99,6 +99,7 @@ import { ToggleSwitch } from './components/ToggleSwitch'
 import { fleetFilterOptions, filterFleet, SESSION_FILTER_DIMS } from './lib/fleetFilter'
 import { runningConversationIds } from './lib/activeConversations'
 import { countActiveFilters } from './lib/activeFilterCount'
+import { filtrosPanelInert, sessionsFiltersShouldReturnFocus } from './lib/sessionsFiltersPanel'
 import { CentralSessions } from './components/sessions/CentralSessions'
 // The sessions workspace's container geometry, named ONCE (see FleetOverview's header): the
 // filter row in the strip and the body under it have to move together at every width.
@@ -1016,6 +1017,18 @@ const TOPBAR_H = 44
 const SIDEBAR_W = 248
 const SIDEBAR_W_COLLAPSED = 64
 
+/**
+ * The Filtros tab's hanging panel — a fixed, conservative width rather than a computed one.
+ *
+ * This file has no live figure for the artifacts aside's width (that state lives in
+ * `SessionsPage`/`artifactsStore.ts`, a different file, and it is a re-sizable, dragged width that
+ * `ArtifactsState` does not even carry) — see `sessionTopBar`'s own Filtros tab comment for the full
+ * reasoning. `440` is narrow enough that, at that aside's DEFAULT drag width (620px), the two do not
+ * overlap at 1440 or 1024 — the two viewports review and the coordinator asked to verify.
+ */
+const FILTROS_PANEL_W = 440
+const FILTROS_PANEL_ID = 'sessions-filtros-panel'
+
 /** Themed hover tooltip for the collapsed sidebar (icons only). Renders via a portal so it
  *  escapes the sidebar's overflow clipping. Active only when `show` is true (i.e. collapsed);
  *  when expanded the label is already visible, so it just renders its child untouched. */
@@ -1841,12 +1854,15 @@ export default function AppLayout() {
   }, [isMobile])
 
   /**
-   * How much width the filter bar actually has in the strip, and what it therefore draws.
+   * How much width the DASHBOARD's own inline `FiltersBar` actually has in its strip, and what it
+   * therefore draws.
    *
    * The strip's middle is `overflow: hidden` so it can never paint over the view tabs again — but a
    * clipped control is unreachable with nothing on screen saying so, which is worse. So the bar is
    * TOLD how much room it has and gives the date block up first (`headerFit.ts` owns that order and
-   * its thresholds). Only one of the two strips is mounted at a time, so one ref serves both.
+   * its thresholds). The sessions workspace no longer mounts an inline bar of its own to squeeze —
+   * its Filtros controls hang below the strip instead (see `sessionTopBar`'s own tab) — so only
+   * `dashboardTopBar` sets this ref today.
    */
   const [filterSlotEl, setFilterSlotEl] = useState<HTMLDivElement | null>(null)
   const [filterSlotW, setFilterSlotW] = useState(0)
@@ -1897,12 +1913,12 @@ export default function AppLayout() {
   useEffect(() => { setActiveOnly(inSessionsWorkspace) }, [inSessionsWorkspace])
 
   /**
-   * The Filtros tab — a collapsible door under the sessions-workspace strip, replacing the full
-   * `FiltersBar` that used to sit inline in the 44px row (see `sessionTopBar`). Same pattern as the
-   * dashboard's own "Estatísticas" tab (`fleetOpen`/`toggleFleet`, below) and the mobile filter
-   * band's grid-rows animation: `gridTemplateRows` 0fr↔1fr for the glide, a CLIP flag so the growing
-   * panel is `overflow: hidden` only WHILE it animates — never once it has settled — or the
-   * `+ Filtro` popover it holds would open into a box still clipping it.
+   * The Filtros tab — a small pill hanging BELOW the sessions-workspace strip (see `sessionTopBar`
+   * for where it renders), the same pattern the dashboard's own "Estatísticas" tab uses
+   * (`fleetOpen`/`toggleFleet`, below) and the mobile filter band's grid-rows animation:
+   * `gridTemplateRows` 0fr↔1fr for the glide, a CLIP flag so the growing panel is
+   * `overflow: hidden` only WHILE it animates — never once it has settled — or the `+ Filtro`
+   * popover it holds would open into a box still clipping it.
    *
    * COLLAPSED BY DEFAULT (unlike `fleetOpen`, which opens by default on desktop): these are the
    * filters that narrow the fleet, not read-only stats, and the header strip already carries the
@@ -1919,12 +1935,32 @@ export default function AppLayout() {
     return false
   })
   const [sessionsFiltersClip, setSessionsFiltersClip] = useState(false)
-  const toggleSessionsFilters = () => setSessionsFiltersOpen(v => {
-    const n = !v
+  /** The panel's own clipped wrapper (carries `inert` while collapsed) and its trigger — both
+   *  needed to answer "is focus inside the thing about to become unreachable" on collapse. */
+  const sessionsFiltersPanelRef = useRef<HTMLDivElement | null>(null)
+  const sessionsFiltersTriggerRef = useRef<HTMLButtonElement | null>(null)
+  /**
+   * NOT a functional `setState` updater with side effects inside it (the shape `toggleFleet` below
+   * uses) — that runs the focus check and the `localStorage` write every time React (StrictMode
+   * included) re-invokes the updater to verify purity, which is harmless for a `localStorage` write
+   * but not for a focus move. `sessionsFiltersOpen` is read directly instead: this function is only
+   * ever reached from the one button's `onClick`, so there is no concurrent-update race to guard
+   * against here the way there can be for a value derived from a fast-changing prop.
+   */
+  const toggleSessionsFilters = () => {
+    const next = !sessionsFiltersOpen
+    const focusInsidePanel = !!(
+      sessionsFiltersPanelRef.current
+      && document.activeElement
+      && sessionsFiltersPanelRef.current.contains(document.activeElement)
+    )
+    if (sessionsFiltersShouldReturnFocus(next, focusInsidePanel)) {
+      sessionsFiltersTriggerRef.current?.focus()
+    }
+    setSessionsFiltersOpen(next)
     setSessionsFiltersClip(true)
-    try { localStorage.setItem(SESSIONS_FILTERS_OPEN_KEY, n ? '1' : '0') } catch { /* ignore */ }
-    return n
-  })
+    try { localStorage.setItem(SESSIONS_FILTERS_OPEN_KEY, next ? '1' : '0') } catch { /* ignore */ }
+  }
   // The tab's own badge — the same count `FiltersBar` shows on its "Ver filtros ativos" chip once
   // the panel is open. See `activeFilterCount.ts` for why this cannot simply be read off the
   // component instead.
@@ -2361,10 +2397,11 @@ export default function AppLayout() {
    * compacts a bar that would have fitted.
    */
   const stripExtra = (!isCentral && billingReady.ready && planBasis.basis !== null) ? COST_BASIS_W : 0
-  // The SESSIONS strip does not centre its filters at all — its slot carries no padding — so it
-  // is charged none. It was being charged `actionsW` for a padding that is not there, which is
-  // the same double-subtraction seen from its other side.
-  const stripPad = inSessionsWorkspace ? 0 : stripPadding(filterSlotW, actionsW, FULL_BAR_W + stripExtra)
+  // The SESSIONS strip mounts no inline `FiltersBar` of its own to centre or squeeze any more (see
+  // `sessionTopBar`'s Filtros tab), so `filterSlotEl` is never set there and `filterSlotW` is
+  // already 0 on that route — `stripPadding(0, …)` answers 0 on its own, which is what makes a
+  // plain, unconditional call here correct for both strips without an `inSessionsWorkspace` branch.
+  const stripPad = stripPadding(filterSlotW, actionsW, FULL_BAR_W + stripExtra)
   const stripFit = headerFit(Math.max(0, filterSlotW - stripPad), stripExtra)
 
   const setCostBasis = useCallback((b: CostBasis) => {
@@ -3136,44 +3173,15 @@ export default function AppLayout() {
         </div>
       )}
 
-      {/* THE FILTROS TAB TRIGGER, in the centre — replacing the full `FiltersBar` that used to sit
-          inline here. The header strip is a fixed 44px row and cannot grow, so the controls moved
-          into a collapsible panel hanging BELOW the strip (see the `position: absolute; top: 100%`
-          block at the end of this bar) — the same move the dashboard's own strip already made for
-          its "Estatísticas" tab. `flex: 1` + `justifyContent: center` keeps this trigger on the
-          exact centre line the full bar used to occupy, so the title on the left and the action
-          cluster on the right stay exactly where they were; `MIN_BAR_W`/`stripFit`/`setFilterSlotEl`
-          measured how much room the OLD inline bar needed to decide what to drop — a fixed-width
-          button needs none of that. */}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'center' }}>
-        <button
-          onClick={toggleSessionsFilters}
-          aria-expanded={sessionsFiltersOpen}
-          title={lang === 'pt' ? 'Filtros — narrows the fleet list' : 'Filters — narrows the fleet list'}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-            height: 30, padding: '0 10px', borderRadius: 9, cursor: 'pointer',
-            border: '1px solid ' + (sessionsFiltersOpen ? 'var(--anthropic-orange)' : 'var(--border-subtle)'),
-            background: sessionsFiltersOpen ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
-            color: sessionsFiltersOpen ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-            fontFamily: 'inherit', fontSize: 12,
-          }}
-        >
-          <SlidersHorizontal size={14} />
-          <span>{lang === 'pt' ? 'Filtros' : 'Filters'}</span>
-          {sessionsActiveFilterCount > 0 && (
-            <span style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              minWidth: 16, height: 16, padding: '0 4px', borderRadius: 8,
-              background: 'var(--anthropic-orange)', color: '#fff',
-              fontSize: 10, fontWeight: 700,
-            }}>
-              {sessionsActiveFilterCount}
-            </span>
-          )}
-          {sessionsFiltersOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-        </button>
-      </div>
+      {/* Nothing lives in this centre slot any more. The owner asked for the header to hold only
+          the session title and its own utilities — the Filtros controls used to sit here as a
+          119px bordered button (still technically IN the header, just compressed, which is what
+          review flagged), and now hang from a TAB below the strip instead (see the end of this
+          bar), the same technique the dashboard's own "Estatísticas" tab already uses. This empty
+          `flex: 1` spacer is what still pins the title left and the action cluster right — the job
+          the removed button, and the inline `FiltersBar` before it, both did for this slot while
+          either lived here. */}
+      <div style={{ flex: 1, minWidth: 0 }} />
 
       {/* The magnifier pair, here for the reason it is in the dashboard's strip: this workspace
           renders no <header>, so without it the lenses would have no control on this route. */}
@@ -3351,39 +3359,117 @@ export default function AppLayout() {
         />
       )}
 
-      {/* THE FILTROS PANEL — hangs BELOW the strip (`position: absolute; top: 100%`), anchored to
-          the fixed `<TopBar>` div this whole bar rides inside rather than to this row itself (which
-          has no `position` of its own), exactly the way the dashboard's Estatísticas tab is anchored
-          below `dashboardTopBar`. It is centred in the same `PAGE_MAX_WIDTH`/`PAGE_INSET` box the
-          page body uses, because this is the FULL bar the filter slot used to hold — non-`inline`,
-          no `dateCompact`/icon-only squeeze, since it now has a whole row to itself instead of a
-          44px strip to share.
+      {/* THE FILTROS TAB — hangs BELOW the strip, the exact technique `dashboardTopBar`'s own
+          "Estatísticas" tab uses: `position: absolute; top: 100%`, `borderTop: none`, rounded
+          bottom corners, a small pill rather than a row-width control. It anchors to the fixed
+          `<TopBar>` div this whole bar rides inside (that div's `position: fixed` is the nearest
+          POSITIONED ancestor, so `top: 100%` lands on the strip's own bottom edge no matter what
+          this row's own layout is doing) — same anchor, same reasoning as Estatísticas.
+
+          LEFT-ANCHORED AT A KNOWN PIXEL, never spanning the viewport. `TopBar`'s own root is
+          `left: 0; right: 0` — the WHOLE viewport, which is what makes the fixed strip full-bleed —
+          and the previous version of this panel inherited that same span for ITSELF. Reproduced by
+          review at 1440: the card ran x 52→1388, painting over the fleet aside's own search field
+          and its "Painel / Sessões" switch, over the top of the open conversation, and over the
+          artifacts aside's tab row. `sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth` is
+          the EXACT figure `TopBar` itself already receives as `asideWidth` — the fleet aside's own
+          column — plus `PAGE_INSET`, the same inset the session title above starts at. That fixes
+          the LEFT edge exactly.
+
+          The RIGHT edge is a STATED LIMIT, not a measurement: the artifacts aside's width is
+          state that lives in `SessionsPage`/`artifactsStore.ts` (a different file, and a dragged,
+          re-sizable width `ArtifactsState` does not carry — only `open` does), so this component
+          has no live figure for where that aside starts. `FILTROS_PANEL_W` is therefore a fixed,
+          conservative cap rather than a computed one: narrow enough that, at the aside's DEFAULT
+          drag width (620px, `SessionsPage.tsx`), the panel's right edge still clears its left edge
+          at both viewports review and the coordinator asked to verify (1440 and 1024). A reader who
+          drags the artifacts panel far wider than its default could still overlap this one — the
+          same residual risk the review flagged as unresolved by a left-offset alone, now narrowed
+          rather than eliminated. A precise fix needs `artifactsStore.ts` to carry the panel's live
+          width, which is out of this file's ownership.
+
+          zIndex 10, not 300: `TopBar` itself is the z-300 stacking context this whole bar lives
+          inside, so a CHILD's z-index only orders it among the STRIP'S OWN other floating pieces —
+          `SessionActions`'s dropdown (z 21), the stats menu, the hardware popover — never against
+          the page or the asides, which is decided by `TopBar`'s OWN z 300 regardless of what is set
+          here. At 300 this panel painted OVER those three; reproduced by review pressing "Ações da
+          sessão" with the panel open and seeing only its last two rows, the ones below the panel's
+          lower edge. At 10 it still floats above the page and both asides while those three menus
+          reliably paint above IT.
 
           Always MOUNTED, never conditionally rendered: the grid-rows animation (0fr↔1fr, the same
           curve the mobile filter band uses) needs the collapsed state to still be in the DOM to
           glide out of it. `sessionsFiltersClip` keeps this `overflow: hidden` only WHILE the row is
           animating — collapsing OR expanding — and lets it go `visible` once expansion has settled,
-          or the `+ Filtro` popover inside `FiltersBar` would open into a box still clipping it. */}
+          or the `+ Filtro` popover inside `FiltersBar` would open into a box still clipping it.
+          `e.target !== e.currentTarget` on `onTransitionEnd` matters here specifically because
+          `FiltersBar`'s own chip rows animate their OWN `grid-template-rows` — a `transitionend`
+          bubbling up from one of those would otherwise lift the clip before THIS row has finished
+          expanding.
+
+          `inert` while collapsed (`filtrosPanelInert`, `lib/sessionsFiltersPanel.ts`) — the clip is
+          a purely VISUAL fact and, on its own, leaves every control inside still reachable by Tab
+          and announced by a screen reader. Reproduced by review: 12 Tab presses from the closed
+          trigger crossed nine hidden controls, "Limpar filtros" among them — Enter there silently
+          clears every dimension AND turns "Só ativas" off, filling the list with everything on
+          record. If focus was inside the panel at the moment it collapses (`toggleSessionsFilters`,
+          above), it is moved back to the trigger rather than left to fall wherever the browser
+          resets an `inert`ed focus to. */}
       <div style={{
-        position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 300,
-        display: 'flex', justifyContent: 'center', pointerEvents: 'none',
+        position: 'absolute', top: '100%',
+        left: (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth) + PAGE_INSET,
+        zIndex: 10, pointerEvents: 'none',
       }}>
-        <div style={{
-          maxWidth: PAGE_MAX_WIDTH, width: '100%', padding: `0 ${PAGE_INSET}px`,
-          boxSizing: 'border-box', pointerEvents: 'auto',
-        }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', pointerEvents: 'auto' }}>
+          <button
+            ref={sessionsFiltersTriggerRef}
+            onClick={toggleSessionsFilters}
+            aria-expanded={sessionsFiltersOpen}
+            aria-controls={FILTROS_PANEL_ID}
+            title={lang === 'pt' ? 'Filtros — restringe a lista de sessões' : 'Filters — narrows the fleet list'}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5, padding: '2px 10px 3px',
+              border: '1px solid var(--border)', borderTop: 'none',
+              borderRadius: '0 0 8px 8px', background: 'var(--bg-surface)',
+              color: sessionsFiltersOpen ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+              cursor: 'pointer', fontFamily: 'inherit', fontSize: 10.5,
+            }}
+          >
+            {lang === 'pt' ? 'Filtros' : 'Filters'}
+            {sessionsActiveFilterCount > 0 && (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                minWidth: 15, height: 15, padding: '0 4px', borderRadius: 8,
+                background: 'var(--anthropic-orange)', color: '#fff',
+                fontSize: 9.5, fontWeight: 700,
+              }}>
+                {sessionsActiveFilterCount}
+              </span>
+            )}
+            {sessionsFiltersOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          </button>
+
           <div
+            id={FILTROS_PANEL_ID}
             style={{
               display: 'grid',
               gridTemplateRows: sessionsFiltersOpen ? '1fr' : '0fr',
               transition: 'grid-template-rows 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
+              width: FILTROS_PANEL_W, maxWidth: 'calc(100vw - 48px)',
             }}
-            onTransitionEnd={() => { if (sessionsFiltersOpen) setSessionsFiltersClip(false) }}
+            onTransitionEnd={e => {
+              if (e.target !== e.currentTarget) return
+              if (sessionsFiltersOpen) setSessionsFiltersClip(false)
+            }}
           >
-            <div style={{
-              overflow: (!sessionsFiltersOpen || sessionsFiltersClip) ? 'hidden' : 'visible',
-              minHeight: 0,
-            }}>
+            <div
+              ref={sessionsFiltersPanelRef}
+              inert={filtrosPanelInert(sessionsFiltersOpen)}
+              style={{
+                overflow: (!sessionsFiltersOpen || sessionsFiltersClip) ? 'hidden' : 'visible',
+                minHeight: 0,
+              }}
+            >
               <div style={{
                 marginTop: 6, padding: '10px 12px', borderRadius: 10,
                 border: '1px solid var(--border)', background: 'var(--bg-surface)',
@@ -3401,8 +3487,17 @@ export default function AppLayout() {
                   modelGroups={modelGroups}
                   modelsInProject={modelsInProject}
                   users={[]}
-                  // HARNESSES come from the FLEET here and from the metrics everywhere else — see
-                  // the identical note that used to sit beside this prop, above.
+                  /* HARNESSES come from the FLEET here and from the metrics everywhere else. The bar
+                     offered all six the metrics know while the list it filters holds whatever is
+                     running — three on this machine — so picking "antigravity" emptied the list.
+                     Nothing was broken; there were genuinely no antigravity rows. But a filter that
+                     can only ever answer "nothing" is indistinguishable from one that is failing,
+                     and it was reported as exactly that. An option is a promise that something might
+                     be behind it. The WHOLE fleet's assistants, not just the ones the current
+                     switches can show — see `fleetFilterOptions`. The ones being withheld are MARKED
+                     rather than dropped, because a dimension that disappears reads as "this product
+                     does not know about my other assistants", which the Compare page contradicts two
+                     clicks away. */
                   harnesses={fleetOptions.harnessesAll as typeof availableHarnesses}
                   harnessesOutOfView={fleetOptions.harnessesAll.filter(h => !fleetOptions.harnesses.includes(h))}
                   lang={lang}
@@ -3834,9 +3929,10 @@ export default function AppLayout() {
       {/* Page chrome — the MOBILE dashboard's, and only that.
           The sessions workspace used to render this too, on desktop, purely to carry `FiltersBar`:
           a whole sticky band with its own rule, one row of controls in it, directly beneath the
-          fixed strip that was already there. The filters now ride IN that strip (see
-          `sessionTopBar`), so the workspace has ONE bar and this element is not rendered in it at
-          all — on mobile it never was, because `SessionsPage` draws its own bars.
+          fixed strip that was already there. The filters hang from that fixed strip now instead
+          (see `sessionTopBar`'s own Filtros tab, hanging below it), so the workspace has ONE bar
+          and this element is not rendered in it at all — on mobile it never was, because
+          `SessionsPage` draws its own bars.
           The root cause of "the pane's own header scrolled away" was never this strip's presence —
           it was `<main>` lacking a DEFINITE height to clip to, fixed at the wrapper `<div>` above.
           On DESKTOP the dashboard now does the same thing, for the same reason (see
