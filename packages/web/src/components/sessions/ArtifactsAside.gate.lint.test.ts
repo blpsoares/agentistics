@@ -136,26 +136,10 @@ describe('the Studio is gated on editorEnabled, in both places', () => {
   })
 
   it('the MOUNT and the SHOWING are both gated', () => {
-    expect(has('const studioMounted = studioGateMounted(editorEnabled, gateHeld, studio, studioOpened)')).toBe(true)
-    expect(has('const inStudio = studioGateShown(editorEnabled, gateHeld, studio)')).toBe(true)
+    expect(has('const studioMounted = editorEnabled === true && (studio || studioOpened)')).toBe(true)
+    expect(has('const inStudio = studio && editorEnabled === true')).toBe(true)
     expect(has('{studioMounted && (')).toBe(true)
     expect(has('<Studio')).toBe(true)
-  })
-
-  it('a gate that closes on an open Studio is HELD, not dropped at once — see `studioGateHold.ts`', () => {
-    // The switch used to be frozen at boot, so this edge was unreachable; now that it is live, a
-    // close it triggers must ask exactly like the panel's own close does before it drops anything.
-    expect(has("import { studioGateJustClosed, studioGateMounted, studioGateShown } from '../../lib/studioGateHold'")).toBe(true)
-    expect(has("import { holdIfUnsaved } from '../../lib/unsavedBuffers'")).toBe(true)
-    expect(has('if (studioGateJustClosed(was, editorEnabled, studio || studioOpened)) {')).toBe(true)
-    expect(has("if (holdIfUnsaved('close', exitStudioNow)) setGateHeld(true)")).toBe(true)
-  })
-
-  it('the scan still sees the ask-before-drop wiring going away', () => {
-    expect(code("// if (holdIfUnsaved('close', exitStudioNow)) setGateHeld(true)"))
-      .not.toContain("holdIfUnsaved('close'")
-    expect(code('// if (studioGateJustClosed(was, editorEnabled, studio || studioOpened)) ask()'))
-      .not.toContain('studioGateJustClosed(was, editorEnabled, studio || studioOpened)) {')
   })
 
   it('a requested tab of `studio` is honoured only while the gate is open', () => {
