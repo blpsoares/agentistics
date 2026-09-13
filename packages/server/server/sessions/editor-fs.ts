@@ -14,7 +14,7 @@ import type { StartHost } from '../cli-start'
 import { gitEnv } from '../backup/repo-probe'
 import { planSessionDirectory, type SessionDirPlan } from './editor-directory'
 import { containedInRoot, resolveTreePath } from './editor-path'
-import { childrenFromDirents, collapseToChildren, type TreeChild } from './editor-list'
+import { childrenFromDirents, collapseToChildren, mergeEmptyDirs, type TreeChild } from './editor-list'
 import { looksBinary } from './artifact-web'
 import { decodeUtf8Lossless } from './editor-text'
 import type { MediaKind } from './artifact-media'
@@ -114,10 +114,98 @@ export async function listChildren(root: string, requestedPath: string): Promise
   const relDir = real === realRoot ? '' : real.slice(realRoot.length + 1)
 
   const git = await gitListRecursive(realRoot, relDir)
-  if (git !== null) return { ok: true, children: collapseToChildren(git) }
+  if (git !== null) {
+    const children = collapseToChildren(git)
+    // `git ls-files` — recursive or `--directory`-collapsed, see `gitUntrackedEmptyDirs`'s own
+    // header — can only ever name a FILE, tracked or untracked. An empty directory holds no file
+    // at all, so no form of it is ever going to produce one; this is the other half, added on top
+    // rather than folded into `gitListRecursive` because it answers a different question (what
+    // directories exist here) through a different mechanism (readdir + check-ignore, not
+    // ls-files) and only for directories git's own listing did not already account for.
+    const known = new Set(children.filter(c => c.kind === 'dir').map(c => c.name))
+    const emptyDirs = await gitUntrackedEmptyDirs(realRoot, relDir, known)
+    return { ok: true, children: mergeEmptyDirs(children, emptyDirs) }
+  }
 
   const entries = await readdir(real, { withFileTypes: true })
   return { ok: true, children: childrenFromDirents(entries) }
+}
+
+/**
+ * The untracked, EMPTY directories directly under `relDir` (already-known dirs excluded) — the
+ * one thing no shape of `git ls-files` can ever produce, because it only ever names files. Two
+ * candidates were weighed:
+ *
+ * 1. A second `git ls-files --others --exclude-standard --directory -- <pathspec>` call. Its
+ *    `--directory` flag DOES print a trailing-slash entry for a genuinely empty directory (
+ *    verified: an empty dir with no files at all, tracked or untracked, still comes back as
+ *    `name/`) — but only up to the point where an ENTIRE pathspec-rooted subtree is untracked. In
+ *    that case git collapses the WHOLE subtree to the pathspec itself (`git ls-files --directory
+ *    -- deep` on `deep/a/b/c`, all empty, answers just `deep/` — not `deep/a/`), which is exactly
+ *    self-referential when `relDir` IS that pathspec: after stripping the `relDir/` prefix the
+ *    entry is the empty string, and the one level of nesting one directory below `relDir` is lost
+ *    with it. That failure mode is silent (an empty result reads as "no children" rather than as
+ *    a refusal), which rules it out here.
+ * 2. `readdir` of the directory being listed, for its child DIRECTORIES only, filtered through
+ *    `git check-ignore --stdin`. This is what runs: it asks git for the one thing `ls-files` is
+ *    structurally unable to answer (does a name that names no file even exist), and defers to git
+ *    for the one thing this module must never reimplement (is it ignored) — never both from the
+ *    same call, and never a guess at `.gitignore`'s own semantics. Bounded to one `readdir` (one
+ *    directory level, matching the "one directory per tree-expand" contract everywhere else in
+ *    this module) plus one batched `check-ignore`, and that second call runs at all only when
+ *    `readdir` actually turned up a directory git's own listing did not already name.
+ */
+async function gitUntrackedEmptyDirs(
+  root: string, relDir: string, known: ReadonlySet<string>,
+): Promise<string[]> {
+  const dirAbs = relDir === '' ? root : `${root}/${relDir}`
+  let entries
+  try {
+    entries = await readdir(dirAbs, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  // `.isDirectory()` on a `Dirent` from a non-`follow`ing `readdir` is false for a symlink even
+  // when it points at a directory — so a symlink is left exactly as every other function in this
+  // module already treats it (a plain entry, never expanded), with no extra check needed here.
+  // `.git` is excluded unconditionally: a repository's own control directory is never a row in
+  // this tree, at the root or (a nested repo/submodule) anywhere else.
+  const candidates = entries
+    .filter(e => e.isDirectory() && e.name !== '.git' && !known.has(e.name))
+    .map(e => e.name)
+  if (candidates.length === 0) return []
+
+  const pathspecs = candidates.map(name => (relDir === '' ? name : `${relDir}/${name}`))
+  const ignored = await gitCheckIgnore(root, pathspecs)
+  // `null` means the check itself could not answer (git failed to run at all) — degrade to
+  // reporting no new directories rather than guessing either way; a directory that stays hidden
+  // for one more request is a smaller fault than one shown despite `.gitignore` naming it.
+  if (ignored === null) return []
+  return candidates.filter((_, i) => !ignored.has(pathspecs[i]!))
+}
+
+/**
+ * One batched `git check-ignore --stdin` call for every candidate path at once, rather than one
+ * process per directory — `--stdin` echoes back exactly the paths (one per line) that ARE
+ * ignored, so "not in the returned set" is the answer for everything else, including a path that
+ * does not exist at all (which `check-ignore` treats the same as "not ignored", never an error).
+ * Exit code 1 means "ran fine, nothing here is ignored" (matching `decideGitGrepOutcome`'s own
+ * reading of `git grep`'s exit codes) and is not a failure; only a `null` return is.
+ */
+async function gitCheckIgnore(root: string, paths: string[]): Promise<Set<string> | null> {
+  try {
+    const p = Bun.spawn(['git', '-C', root, 'check-ignore', '--stdin'], {
+      stdout: 'pipe', stderr: 'pipe', stdin: 'pipe', env: gitEnv(),
+    })
+    p.stdin.write(`${paths.join('\n')}\n`)
+    p.stdin.end()
+    const out = await new Response(p.stdout).text()
+    const code = await p.exited
+    if (code !== 0 && code !== 1) return null
+    return new Set(out.split('\n').filter(Boolean))
+  } catch {
+    return null
+  }
 }
 
 /**

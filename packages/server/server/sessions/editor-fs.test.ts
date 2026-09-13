@@ -149,6 +149,88 @@ describe('listChildren', () => {
   })
 })
 
+describe('listChildren — empty (non-ignored) directories are listed even though git tracks no file in them', () => {
+  // Isolated from `gitRepo` above so this block's exact `toEqual`s never have to track that
+  // fixture's own unrelated tracked/untracked/ignored shape.
+  let repo = ''
+
+  beforeAll(() => {
+    repo = join(root, 'empty-dirs-repo')
+    mkdirSync(repo)
+    git(repo, 'init', '-q', '-b', 'main')
+    git(repo, 'config', 'user.email', 't@t')
+    git(repo, 'config', 'user.name', 't')
+    writeFileSync(join(repo, 'tracked.txt'), 'k\n')
+    git(repo, 'add', 'tracked.txt')
+    git(repo, 'commit', '-q', '-m', 'init')
+
+    mkdirSync(join(repo, 'empty-at-root'))
+
+    mkdirSync(join(repo, 'sub'))
+    writeFileSync(join(repo, 'sub', 'file.txt'), 'f\n')
+    git(repo, 'add', 'sub/file.txt')
+    git(repo, 'commit', '-q', '-m', 'add sub file')
+    mkdirSync(join(repo, 'sub', 'empty-in-sub'))
+
+    writeFileSync(join(repo, '.gitignore'), 'build/\nnode_modules/\n')
+    git(repo, 'add', '.gitignore')
+    git(repo, 'commit', '-q', '-m', 'add gitignore')
+    mkdirSync(join(repo, 'build'))
+    mkdirSync(join(repo, 'node_modules'))
+
+    mkdirSync(join(repo, 'untracked-with-file'))
+    writeFileSync(join(repo, 'untracked-with-file', 'inner.txt'), 'i\n')
+  })
+
+  test('an empty directory at the root is listed as a dir', async () => {
+    const r = await listChildren(repo, '')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.children).toContainEqual({ name: 'empty-at-root', kind: 'dir' })
+  })
+
+  test('an empty directory inside a tracked subfolder is listed as a dir, at that level', async () => {
+    const r = await listChildren(repo, 'sub')
+    expect(r).toEqual({
+      ok: true,
+      children: [
+        { name: 'empty-in-sub', kind: 'dir' },
+        { name: 'file.txt', kind: 'file' },
+      ],
+    })
+  })
+
+  test('an empty directory matched by .gitignore (a directory pattern) is never listed', async () => {
+    const r = await listChildren(repo, '')
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.children.some(c => c.name === 'build')).toBe(false)
+      expect(r.children.some(c => c.name === 'node_modules')).toBe(false)
+    }
+  })
+
+  test('an untracked NON-empty directory keeps working exactly as before', async () => {
+    const r = await listChildren(repo, '')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.children).toContainEqual({ name: 'untracked-with-file', kind: 'dir' })
+    const inner = await listChildren(repo, 'untracked-with-file')
+    expect(inner).toEqual({ ok: true, children: [{ name: 'inner.txt', kind: 'file' }] })
+  })
+
+  test('the whole root listing is exactly: tracked + untracked + empty dirs, ignored dirs excluded', async () => {
+    const r = await listChildren(repo, '')
+    expect(r).toEqual({
+      ok: true,
+      children: [
+        { name: 'empty-at-root', kind: 'dir' },
+        { name: 'sub', kind: 'dir' },
+        { name: 'untracked-with-file', kind: 'dir' },
+        { name: '.gitignore', kind: 'file' },
+        { name: 'tracked.txt', kind: 'file' },
+      ],
+    })
+  })
+})
+
 describe('listChildren — a raw fs mutation of a git-TRACKED path never leaves a phantom row', () => {
   // The Studio's rename/delete act with `fs.rename`/`rm`, not `git mv`/`git rm` — so the INDEX
   // still names the old path after the disk no longer does. A fresh repo, isolated from the
