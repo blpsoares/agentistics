@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import {
   DEFAULT_LAST_SLOT, EMPTY_SLOT_LAYOUT, PANEL_IDS, allowed, closePanel, getPanelLayout,
   hidePanel, isPanelShown, movePanel, openPanel, readLayout, relocatePanel, resetPanelSlots,
-  resolveForViewport, setBottomOpen, showPanel, subscribePanelLayout,
-  type PanelId, type SlotId, type SlotLayout,
+  resolveForGates, resolveForViewport, setBottomOpen, showPanel, subscribePanelLayout,
+  type PanelGates, type PanelId, type SlotId, type SlotLayout,
 } from './panelSlots'
 import { answerUnsaved, getUnsaved, reportUnsaved, resetUnsaved } from './unsavedBuffers'
 
@@ -120,6 +120,11 @@ describe('closePanel', () => {
     expect(next.bottom).toBe('cli')
     expect(next.bottomOpen).toBe(true)
   })
+
+  test('closing the bottom occupant also clears bottomOpen — nothing left to show', () => {
+    const shown = openPanel(EMPTY_SLOT_LAYOUT, 'shell', 'bottom')
+    expect(closePanel(shown, 'shell').bottomOpen).toBe(false)
+  })
 })
 
 describe('movePanel', () => {
@@ -158,6 +163,14 @@ describe('movePanel', () => {
         }
       }
     }
+  })
+
+  test('vacating the bottom slot resets bottomOpen — a panel moved to the right leaves no orphaned flag (M2)', () => {
+    const start = openPanel(EMPTY_SLOT_LAYOUT, 'studio', 'bottom')
+    expect(start.bottomOpen).toBe(true)
+    const next = movePanel(start, 'studio', 'right')
+    expect(next.bottom).toBeNull()
+    expect(next.bottomOpen).toBe(false)
   })
 })
 
@@ -206,6 +219,83 @@ describe('resolveForViewport — the phone reading', () => {
     resolveForViewport(stored, true) // read as a phone once
     // The desktop reading is computed fresh from the SAME stored value, never from the phone's view.
     expect(resolveForViewport(stored, false)).toEqual(stored)
+  })
+})
+
+describe('resolveForGates — a closed gate reads the panel as absent (C1)', () => {
+  const OPEN: PanelGates = { editorEnabled: true, shellEnabled: true, relayed: false }
+
+  test('every gate open leaves the layout untouched', () => {
+    const layout = openPanel(openPanel(EMPTY_SLOT_LAYOUT, 'studio', 'right'), 'shell', 'bottom')
+    expect(resolveForGates(layout, OPEN)).toBe(layout)
+  })
+
+  test('editorEnabled off removes a right-slot Studio — the C1 repro', () => {
+    const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'studio' }
+    const resolved = resolveForGates(stored, { ...OPEN, editorEnabled: false })
+    expect(resolved.right).toBeNull()
+    expect(isPanelShown(resolved, 'studio')).toBe(false)
+  })
+
+  test('editorEnabled off removes a bottom-slot Studio too, and clears bottomOpen with it', () => {
+    const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, bottom: 'studio', bottomOpen: true }
+    const resolved = resolveForGates(stored, { ...OPEN, editorEnabled: false })
+    expect(resolved.bottom).toBeNull()
+    expect(resolved.bottomOpen).toBe(false)
+  })
+
+  test('shellEnabled off removes shell, cli is untouched', () => {
+    const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'shell', bottom: 'cli', bottomOpen: true }
+    const resolved = resolveForGates(stored, { ...OPEN, shellEnabled: false })
+    expect(resolved.right).toBeNull()
+    expect(resolved.bottom).toBe('cli')
+  })
+
+  test('a relayed session has no cli or shell stream — both are removed wherever they sit', () => {
+    const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'cli', bottom: 'shell', bottomOpen: true }
+    const resolved = resolveForGates(stored, { ...OPEN, relayed: true })
+    expect(resolved.right).toBeNull()
+    expect(resolved.bottom).toBeNull()
+  })
+
+  test('contents has no gate of its own', () => {
+    const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'contents' }
+    expect(resolveForGates(stored, { editorEnabled: false, shellEnabled: false, relayed: true })).toBe(stored)
+  })
+
+  test('every panel × every gate combination: a closed gate never leaves its panel shown', () => {
+    for (const editorEnabled of [true, false]) {
+      for (const shellEnabled of [true, false]) {
+        for (const relayed of [true, false]) {
+          const gates: PanelGates = { editorEnabled, shellEnabled, relayed }
+          for (const panel of PANEL_IDS) {
+            for (const slot of SLOTS) {
+              if (!allowed(slot, panel)) continue
+              const layout = openPanel(EMPTY_SLOT_LAYOUT, panel, slot)
+              const resolved = resolveForGates(layout, gates)
+              const shouldBeOpen =
+                panel === 'contents' ? true
+                : panel === 'studio' ? editorEnabled
+                : panel === 'cli' ? !relayed
+                : shellEnabled && !relayed
+              expect(isPanelShown(resolved, panel)).toBe(shouldBeOpen)
+            }
+          }
+        }
+      }
+    }
+  })
+
+  test('reading through the gate never touches the live layout — pure in, pure out', () => {
+    resetPanelSlots()
+    showPanel('studio', 'right')
+    const live = getPanelLayout()
+    // A caller reading through a closed gate sees the Studio gone...
+    expect(resolveForGates(live, { ...OPEN, editorEnabled: false }).right).toBeNull()
+    // ...but the LIVE layout — what every other reader still sees, and what gets persisted — is
+    // exactly what it was. `resolveForGates` never commits, exactly like `resolveForViewport`.
+    expect(getPanelLayout()).toBe(live)
+    expect(getPanelLayout().right).toBe('studio')
   })
 })
 
@@ -317,5 +407,41 @@ describe('the imperative store — showPanel / hidePanel / relocatePanel', () =>
     showPanel('studio', 'right')
     expect(getPanelLayout().right).toBe('studio')
     expect(getUnsaved().question).toBeNull()
+  })
+
+  test('hidePanel’s `after` runs immediately when there was nothing to close', () => {
+    let ran = 0
+    hidePanel('studio', () => { ran += 1 })
+    expect(ran).toBe(1)
+  })
+
+  test('hidePanel’s `after` runs immediately on a clean close', () => {
+    showPanel('studio')
+    let ran = 0
+    hidePanel('studio', () => { ran += 1 })
+    expect(ran).toBe(1)
+    expect(isPanelShown(getPanelLayout(), 'studio')).toBe(false)
+  })
+
+  test('hidePanel’s `after` is HELD with the question, and runs only on discard — this is I2’s fix', () => {
+    showPanel('studio', 'right')
+    reportUnsaved('studio', ['README.md'])
+    let ran = 0
+    hidePanel('studio', () => { ran += 1 })
+    expect(ran).toBe(0)
+    expect(isPanelShown(getPanelLayout(), 'studio')).toBe(true)
+    answerUnsaved(true)
+    expect(ran).toBe(1)
+    expect(isPanelShown(getPanelLayout(), 'studio')).toBe(false)
+  })
+
+  test('hidePanel’s `after` never runs on "keep editing"', () => {
+    showPanel('studio', 'right')
+    reportUnsaved('studio', ['README.md'])
+    let ran = 0
+    hidePanel('studio', () => { ran += 1 })
+    answerUnsaved(false)
+    expect(ran).toBe(0)
+    expect(isPanelShown(getPanelLayout(), 'studio')).toBe(true)
   })
 })

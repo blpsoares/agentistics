@@ -18,7 +18,7 @@
  */
 
 import { useSyncExternalStore } from 'react'
-import { showPanel } from './panelSlots'
+import { getPanelLayout, hidePanel, showPanel } from './panelSlots'
 
 export interface ArtifactsState {
   /** Which session the count and the open flag describe. `null` before one is selected. */
@@ -97,12 +97,22 @@ export function openArtifacts(tab?: string, ref?: string): void {
   // its own slot and touches nothing here. This store's `open`/`dismissed`/`tabRequest` describe the
   // CONTENTS panel alone, exactly as `contents` is its own `PanelId` in the new model.
   if (tab === 'studio') { showPanel('studio'); return }
-  emit({
+  const show = () => emit({
     ...state, open: true,
     // `ref` names a STEP to open once the tab is there — the edge strip names an action, and
     // pressing it should land on that row rather than on the top of a feed to be searched.
     ...(tab === undefined ? {} : { tabRequest: { tab, at: Date.now(), ...(ref ? { ref } : {}) } }),
   })
+  // CONTENTS AND THE STUDIO SHARE THE RIGHT SLOT. Opening Contents while the Studio sits there must
+  // DISPLACE it (design §1.2/§1.3) — asking first when it is dirty, through the very `hidePanel`
+  // that already asks for a direct close — or Contents lit as "open" behind a Studio the reader
+  // never left: the header's button, a note chip's `openArtifacts('live', ref)` and the metrics
+  // card's `openArtifacts('metrics')` all went through this one function and all showed nothing.
+  // `after` is what fixes the second half of that: Contents opens only once the Studio has actually
+  // gone, whether that is immediate (nothing dirty) or after the reader answers "discard" — never
+  // eagerly, which is what let it light up behind a Studio kept via "Continuar editando".
+  if (getPanelLayout().right === 'studio') { hidePanel('studio', show); return }
+  show()
 }
 
 /**

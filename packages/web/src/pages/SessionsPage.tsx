@@ -19,9 +19,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
-import { ChevronLeft, FileText, FolderTree, MessagesSquare, PanelBottomOpen, Plus, TerminalSquare } from 'lucide-react'
+import {
+  ChevronLeft, FileText, FolderTree, MessagesSquare, PanelBottomOpen, Plus, TerminalSquare,
+  X as XIcon,
+} from 'lucide-react'
 import { StudioHost } from '../components/sessions/StudioHost'
-import { isPanelShown, resolveForViewport, usePanelSlots } from '../lib/panelSlots'
+import {
+  isPanelShown, mountPanel, resolveForGates, resolveForViewport, usePanelSlots, type PanelGates,
+} from '../lib/panelSlots'
+import { getCentralMachine } from '../lib/centralMachinePick'
 import type { AppContext } from '../lib/app-context'
 import { useFleet, useFleetIndex, type FleetActionId } from '../lib/fleet'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -152,6 +158,14 @@ export default function SessionsPage() {
    */
   const editorEnabled = ctx.editorEnabled === true
   const editorAutosave = ctx.editorAutosave
+  /**
+   * Is THIS session reached through a central's relay? The same fact `SessionPanel` reads for the
+   * same reason: a relayed session's `cli`/`shell` panes have no stream here at all (`/api/fleet` is
+   * refused whole on a central), so those two switcher entries — and a `bottom`/`right` slot that
+   * still names one from before the connection changed — must read as absent, never as present and
+   * refusing. See `lib/panelSlots.ts`'s `resolveForGates`.
+   */
+  const relayed = getCentralMachine() !== null
 
   /**
    * WHERE A REOPEN LANDS — one place, for all three controls on this page that can perform one.
@@ -383,10 +397,19 @@ export default function SessionsPage() {
    * rewriting what a desktop would see. `rightSlotEl` / `bottomStudioEl` are the physical DOM boxes
    * `StudioHost` moves its persistent carrier into — see that component's own header for why a MOVE
    * must never be a remount.
+   *
+   * `resolveForGates` is applied on TOP of that, for the same reason and the same way: a layout
+   * stored while `editorEnabled` (or `shellEnabled`, or a local session) was true must not render an
+   * empty, unclosable pane the moment the gate closes — turning the switch off in Settings, opening
+   * a different, relayed session, reloading on a machine where the preference has changed. Neither
+   * resolution rewrites storage; turning the gate back on restores the layout exactly as it was left.
    */
   const { layout: rawSlotLayout, openPanel: openSlotPanel, closePanel: closeSlotPanel, movePanel: moveSlotPanel } = usePanelSlots()
-  const slotLayout = resolveForViewport(rawSlotLayout, isMobile)
+  const panelGates: PanelGates = { editorEnabled, shellEnabled, relayed }
+  const slotLayout = resolveForGates(resolveForViewport(rawSlotLayout, isMobile), panelGates)
   const rightIsStudio = slotLayout.right === 'studio'
+  const rightIsCli = slotLayout.right === 'cli'
+  const rightIsShell = slotLayout.right === 'shell'
   const bottomIsStudio = slotLayout.bottom === 'studio'
   const [rightSlotEl, setRightSlotEl] = useState<HTMLDivElement | null>(null)
   const [bottomStudioEl, setBottomStudioEl] = useState<HTMLDivElement | null>(null)
@@ -423,10 +446,12 @@ export default function SessionsPage() {
    */
 
   const artLayout = resolveArtifactLayout({
-    // The RIGHT SLOT is open whenever Contents wants it OR panelSlots has put the Studio there —
-    // opening the Studio from the header button must show the box even though it never touched
-    // `art.open`; see `StudioHost.tsx` and `lib/panelSlots.ts`.
-    open: (art.open || rightIsStudio) && selected !== undefined,
+    // The RIGHT SLOT is open whenever Contents wants it OR panelSlots has put the Studio, Claude
+    // Code or the Shell there — opening any of the three from a switcher must show the box even
+    // though none of them touch `art.open`; see `StudioHost.tsx` and `lib/panelSlots.ts`. Missing
+    // `rightIsCli`/`rightIsShell` here is exactly the shape of bug this comment already warns
+    // about for the Studio: the switcher can pick the panel and the box never opens to show it.
+    open: (art.open || rightIsStudio || rightIsCli || rightIsShell) && selected !== undefined,
     width: typeof window === 'undefined' ? 1440 : window.innerWidth,
     isMobile,
     // Phase B ships without the reversal control; the split-rail default is what the plan measured.
@@ -602,31 +627,53 @@ export default function SessionsPage() {
   )
 
   /**
-   * THE RIGHT SLOT'S OWN SWITCHER (design §1.3) — present only when there is a second thing this
-   * slot could show, i.e. the Studio's gate is open. `Contents` keeps going through the OLD
-   * `artifactsStore`, deliberately: `contents` is `panelSlots.ts`'s own `PanelId` too, but this pass
-   * routes only `studio` (and, on a later pass, `cli`/`shell`) through it, so a request for it never
-   * touches this store — see `panelSlots.showPanel`'s own doc comment.
+   * THE RIGHT SLOT'S OWN SWITCHER (design §1.3) — `Conteúdo · Studio · Claude Code · Shell`, an
+   * entry ABSENT (never greyed) wherever its gate is closed. `Contents` keeps going through the OLD
+   * `artifactsStore`, deliberately: `contents` is `panelSlots.ts`'s own `PanelId` too, but this
+   * routes only `studio`/`cli`/`shell` through it, so a request for Contents never touches this
+   * store — see `panelSlots.showPanel`'s own doc comment. `cli`/`shell` are desktop-only here: on a
+   * phone they open as today's dedicated fullscreen pane instead (design §1.6), so the entries are
+   * absent under `isMobile` rather than opening an inline pane `resolveForViewport` never reads.
    */
-  const rightSwitcher = editorEnabled && selected ? (
-    <div role="tablist" aria-label={pt ? 'Studio ou Conteúdo' : 'Studio or Contents'} style={{
-      display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0,
+  const rightActivePanel: 'studio' | 'cli' | 'shell' | null = rightIsStudio
+    ? 'studio' : rightIsCli ? 'cli' : rightIsShell ? 'shell' : null
+  // The 44px mobile touch target is PROJECTED by the `.ag-tap-icon` class already on both buttons
+  // below (`index.css`'s invisible-hitbox rule), never painted here — a literal `width/height:
+  // isMobile ? 44` on an icon button is the exact shape `touchTarget.lint.test.ts` refuses: the
+  // painted box would be three times the icon inside it.
+  const rightSlotIconBtn: CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: 24, height: 22, flexShrink: 0, borderRadius: 6, padding: 0,
+    border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+    color: 'var(--text-secondary)', cursor: 'pointer',
+  }
+  const rightSwitcher = selected ? (
+    <div role="tablist" aria-label={pt ? 'O que mostrar' : 'What to show'} style={{
+      display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, flexWrap: 'wrap',
       padding: '4px 6px', borderBottom: '1px solid var(--border)',
     }}>
-      {([
-        ['contents', pt ? 'Conteúdo' : 'Contents', <FileText key="c" size={12} />, !rightIsStudio],
-        ['studio', 'Studio', <FolderTree key="s" size={12} />, rightIsStudio],
-      ] as const).map(([id, label, icon, on]) => (
+      {(
+        [
+          { id: 'contents' as const, label: pt ? 'Conteúdo' : 'Contents', icon: <FileText key="c" size={12} />, on: !rightActivePanel, shown: true },
+          { id: 'studio' as const, label: 'Studio', icon: <FolderTree key="s" size={12} />, on: rightIsStudio, shown: editorEnabled === true },
+          { id: 'cli' as const, label: targetLabel('cli', selected.harness, pt ? 'pt' : 'en'), icon: <TerminalSquare key="cli" size={12} />, on: rightIsCli, shown: !isMobile && !relayed },
+          { id: 'shell' as const, label: targetLabel('shell', selected.harness, pt ? 'pt' : 'en'), icon: <TerminalSquare key="sh" size={12} />, on: rightIsShell, shown: !isMobile && shellEnabled === true && !relayed },
+        ]
+      ).filter(entry => entry.shown).map(({ id, label, icon, on }) => (
         <button
           key={id}
           role="tab"
           aria-selected={on}
           onClick={() => {
-            if (id === 'studio') openSlotPanel('studio', 'right')
-            else { closeSlotPanel('studio'); openArtifacts() }
+            // `openArtifacts()` itself displaces a right-slot panel, asking first when it is the
+            // Studio and dirty (`lib/artifactsStore.ts`) — a separate `closeSlotPanel` here would
+            // ask a second, redundant question and could open Contents before the first is answered.
+            if (id === 'contents') openArtifacts()
+            else openSlotPanel(id, 'right')
           }}
           style={{
-            display: 'flex', alignItems: 'center', gap: 5, padding: '4px 9px',
+            display: 'flex', alignItems: 'center', gap: 5,
+            minHeight: isMobile ? 44 : 22, padding: isMobile ? '0 14px' : '4px 9px',
             borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
             fontSize: 11.5, fontWeight: on ? 700 : 500,
             background: on ? 'var(--bg-elevated)' : 'transparent',
@@ -634,31 +681,70 @@ export default function SessionsPage() {
           }}
         >{icon}{label}</button>
       ))}
-      {/* ABSENT on mobile — a phone has no bottom slot at all (`dockedAllowed` in
-          `lib/terminalSurface.ts`), so a "move to bottom" control there would move the Studio
-          somewhere `resolveForViewport` immediately reads back as the right sheet it already is. */}
-      {rightIsStudio && !isMobile && (
+      <span style={{ flex: 1 }} />
+      {/* "MOVE TO BOTTOM" is ABSENT on mobile — a phone has no bottom slot at all (`dockedAllowed`
+          in `lib/terminalSurface.ts`), so it would move a panel somewhere `resolveForViewport`
+          immediately reads back as the right sheet it already is. */}
+      {rightActivePanel && !isMobile && (
         <button className="ag-tap-icon"
-          onClick={() => moveSlotPanel('studio', 'bottom')}
-          title={pt ? 'Mover o Studio para baixo' : 'Move the Studio to the bottom'}
-          aria-label={pt ? 'Mover o Studio para baixo' : 'Move the Studio to the bottom'}
-          style={{
-            marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            width: 24, height: 22, borderRadius: 6, padding: 0,
-            border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
-            color: 'var(--text-secondary)', cursor: 'pointer',
-          }}
+          onClick={() => moveSlotPanel(rightActivePanel, 'bottom')}
+          title={pt ? 'Mover para baixo' : 'Move to the bottom'}
+          aria-label={pt ? 'Mover para baixo' : 'Move to the bottom'}
+          style={rightSlotIconBtn}
         ><PanelBottomOpen size={13} /></button>
+      )}
+      {/* CLOSE — the review's C1/I3 finding: the right slot had a way IN for the Studio (and now
+          cli/shell) but no way OUT beside displacing it with another panel. Closing the Studio asks
+          first when dirty, through the very `hidePanel` `closeSlotPanel` already calls. */}
+      {rightActivePanel && (
+        <button className="ag-tap-icon"
+          onClick={() => closeSlotPanel(rightActivePanel)}
+          title={pt ? 'Fechar' : 'Close'}
+          aria-label={pt ? 'Fechar' : 'Close'}
+          style={rightSlotIconBtn}
+        ><XIcon size={13} /></button>
       )}
     </div>
   ) : null
 
   /** What the right box actually shows: the Studio's own target (StudioHost re-parents its carrier
-   *  into it) while `panelSlots` says so, `ArtifactsAside` otherwise — unchanged. */
+   *  into it) while `panelSlots` says so; `cli`/`shell` render their own `TerminalRegion`/`ShellBand`
+   *  with `placement="aside"` (design §1.5) — ordinary mounts, no persistent carrier needed since
+   *  neither holds a buffer that must survive the move; `ArtifactsAside` otherwise. */
   const rightSlotContent = rightIsStudio ? (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
       {rightSwitcher}
       <div ref={setRightSlotEl} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }} />
+    </div>
+  ) : rightIsCli && selected ? (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
+      {rightSwitcher}
+      <div style={{ flex: 1, minHeight: 0, padding: 10, display: 'flex', flexDirection: 'column' }}>
+        <TerminalRegion
+          placement="aside"
+          id={selected.id}
+          theme={theme === 'light' ? 'light' : 'dark'}
+          lang={pt ? 'pt' : 'en'}
+          fill
+          {...(rowIndex.get(selected.id) ? { row: rowIndex.get(selected.id)! } : {})}
+          act={act}
+        />
+      </div>
+    </div>
+  ) : rightIsShell && selected ? (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
+      {rightSwitcher}
+      <div style={{ flex: 1, minHeight: 0, padding: 10, display: 'flex', flexDirection: 'column' }}>
+        <ShellBand
+          key={`aside-${selected.id}`}
+          placement="aside"
+          sessionId={selected.id}
+          {...(selected.cwd ? { cwd: selected.cwd } : {})}
+          {...(selected.harness ? { harness: selected.harness } : {})}
+          lang={pt ? 'pt' : 'en'}
+          theme={theme === 'light' ? 'light' : 'dark'}
+        />
+      </div>
     </div>
   ) : (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
@@ -1508,20 +1594,30 @@ export default function SessionsPage() {
           pane is fully closed, and nesting it there would unmount it the moment that pane closed.
           Mounted only once the reader has actually opened it (`isPanelShown`), and only while the
           gate is open — the same two conditions `ArtifactsAside`'s own Studio mount used to read
-          before this feature moved the Studio out of it. */}
-      {editorEnabled && selected && isPanelShown(slotLayout, 'studio') && (
-        <StudioHost
-          sessionId={selected.id}
-          lang={pt ? 'pt' : 'en'}
-          autosave={editorAutosave === true}
-          turns={artifactTurns}
+          before this feature moved the Studio out of it.
+
+          MOUNTED THROUGH `mountPanel` (`lib/panelSlots.ts`), not a hand-written `cond && (<StudioHost
+          .../>)`: a move (right↔bottom) changes `target` below without changing WHETHER this is
+          shown, and `mountPanel` is what makes "no `key=` of its own, exactly one call site" a fact
+          about a function every caller shares rather than a rule this page has to keep re-observing.
+          `sessionsPage.lint.test.ts`'s own I4 block still pins the call SITE (there is no jsdom here
+          to render against), and `panelSlots.mountPanel.test.ts` pins the FUNCTION itself against
+          real `React.ReactElement` objects. */}
+      {selected && mountPanel(
+        editorEnabled === true && isPanelShown(slotLayout, 'studio'),
+        StudioHost,
+        {
+          sessionId: selected.id,
+          lang: pt ? 'pt' : 'en',
+          autosave: editorAutosave === true,
+          turns: artifactTurns,
           // INTERIM: `Studio.tsx`'s own bar still carries a "‹ Contents" control calling `onExit`
           // (W1-A's block — removing it is one of the one-line changes named in this session's
           // report). Until it is gone, `onExit` closes the panel outright, which is the closest
           // reading of "leave" the new model has — displacing it never asks, closing it does.
-          onExit={() => closeSlotPanel('studio')}
-          target={studioTarget}
-        />
+          onExit: () => closeSlotPanel('studio'),
+          target: studioTarget,
+        },
       )}
       {/* Mobile-only chrome, and a slot that is always here so it can never shift the pane. */}
       {isMobile ? filtersSheet : null}

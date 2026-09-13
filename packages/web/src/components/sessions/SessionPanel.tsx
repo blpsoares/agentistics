@@ -33,6 +33,7 @@ import { TerminalRegion } from '../RecentSessions'
 import { SessionChat, type SessionChatProps } from './SessionChat'
 import { SessionActions } from './SessionActions'
 import { ShellBand } from './ShellBand'
+import { targetLabel } from '../../lib/terminalTarget'
 
 export type SessionView = 'chat' | 'terminal'
 
@@ -141,7 +142,10 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
    * absent here exactly as it reads as the right sheet there.
    */
   const isMobile = useIsMobile()
-  const { layout: rawSlotLayout, closePanel: closeSlotPanel, movePanel: moveSlotPanel, setBottomOpen } = usePanelSlots()
+  const {
+    layout: rawSlotLayout, openPanel: openSlotPanel, closePanel: closeSlotPanel,
+    movePanel: moveSlotPanel, setBottomOpen,
+  } = usePanelSlots()
   const slotLayout = resolveForViewport(rawSlotLayout, isMobile)
   const bottomIsStudio = !isMobile && editorEnabled === true && slotLayout.bottom === 'studio'
 
@@ -271,6 +275,12 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
           onToggleOpen={() => setBottomOpen(!slotLayout.bottomOpen)}
           onMoveToRight={() => moveSlotPanel('studio', 'right')}
           onClose={() => closeSlotPanel('studio')}
+          // Claude Code and Shell join the same segment (design §1.3) — picking either DISPLACES
+          // the Studio through `panelSlots.openPanel`, asking first only when it is dirty
+          // (`showPanel`'s own `studioDisplaced` check), never a second, redundant question.
+          {...(!relayed ? { onSelectCli: () => openSlotPanel('cli', 'bottom') } : {})}
+          {...(shellEnabled && !relayed ? { onSelectShell: () => openSlotPanel('shell', 'bottom') } : {})}
+          harness={session.harness}
           {...(onStudioBandRef ? { contentRef: onStudioBandRef } : {})}
         />
       ) : shellEnabled && !relayed && (
@@ -282,6 +292,10 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
           {...(session.harness ? { harness: session.harness } : {})}
           lang={lang}
           theme={theme}
+          studioEnabled={editorEnabled === true}
+          onSelectStudio={() => openSlotPanel('studio', 'bottom')}
+          onSelectTerminal={id => openSlotPanel(id, 'bottom')}
+          onMoveToRight={id => moveSlotPanel(id, 'right')}
         />
       )}
     </div>
@@ -295,12 +309,21 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
  * while `open`, and the caller (`SessionsPage`) reads that same fact as "park it" rather than
  * "unmount it" — see `StudioHost.tsx`.
  */
-function StudioBand({ lang, open, onToggleOpen, onMoveToRight, onClose, contentRef }: {
+function StudioBand({
+  lang, open, onToggleOpen, onMoveToRight, onClose, onSelectCli, onSelectShell, harness, contentRef,
+}: {
   lang: 'pt' | 'en'
   open: boolean
   onToggleOpen: () => void
   onMoveToRight: () => void
   onClose: () => void
+  /** Present only when the target may be reached — absent, never disabled, per §1.5's gates. Picking
+   *  either DISPLACES the Studio (`openPanel('cli'|'shell', 'bottom')`), asking first only if it is
+   *  dirty — the same segment `ShellBand`'s own docked bar shows for cli/shell, now offering Studio
+   *  back the other way. */
+  onSelectCli?: () => void
+  onSelectShell?: () => void
+  harness?: string
   contentRef?: (el: HTMLDivElement | null) => void
 }) {
   const pt = lang === 'pt'
@@ -322,9 +345,36 @@ function StudioBand({ lang, open, onToggleOpen, onMoveToRight, onClose, contentR
         }}
       >
         <span style={{ color: 'var(--anthropic-orange)', display: 'inline-flex' }}><FolderTree size={14} /></span>
-        <span style={{ flex: 1, fontSize: 11.5, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-secondary)' }}>
+        <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-secondary)' }}>
           STUDIO
         </span>
+        {(onSelectCli || onSelectShell) && (
+          <div role="tablist" aria-label={pt ? 'Qual terminal' : 'Which terminal'} onClick={e => e.stopPropagation()}
+            style={{
+              display: 'flex', gap: 3, padding: 3, borderRadius: 8, flexShrink: 0,
+              background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+            }}
+          >
+            {([
+              ...(onSelectCli ? [['cli', targetLabel('cli', harness, lang), onSelectCli] as const] : []),
+              ...(onSelectShell ? [['shell', targetLabel('shell', harness, lang), onSelectShell] as const] : []),
+            ]).map(([id, label, onSelect]) => (
+              <button
+                key={id}
+                role="tab"
+                aria-selected={false}
+                onClick={onSelect}
+                style={{
+                  minHeight: 22, padding: '0 9px',
+                  borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+                  fontSize: 11, fontWeight: 650, border: 'none', whiteSpace: 'nowrap',
+                  background: 'transparent', color: 'var(--text-tertiary)',
+                }}
+              >{label}</button>
+            ))}
+          </div>
+        )}
+        <span style={{ flex: 1 }} />
         <button className="ag-tap-icon"
           onClick={e => { e.stopPropagation(); onMoveToRight() }}
           title={pt ? 'Mover o Studio para a direita' : 'Move the Studio to the right'}

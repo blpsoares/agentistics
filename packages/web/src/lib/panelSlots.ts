@@ -32,7 +32,7 @@
  * asks: nothing is dropped by changing which slot shows a panel that stays mounted throughout.
  */
 
-import { useSyncExternalStore } from 'react'
+import { createElement, useSyncExternalStore, type ComponentType, type ReactElement } from 'react'
 import { holdIfUnsaved } from './unsavedBuffers'
 
 export type PanelId = 'contents' | 'studio' | 'cli' | 'shell'
@@ -71,13 +71,20 @@ export function allowed(slot: SlotId, panel: PanelId): boolean {
 }
 
 /** The layout with `panel` removed from wherever it sits. A no-op (same values) when it is not
- *  shown anywhere — callers compare against this to detect "nothing changed". */
+ *  shown anywhere — callers compare against this to detect "nothing changed".
+ *
+ *  VACATING THE BOTTOM SLOT ALSO CLEARS `bottomOpen` — the same invariant `readLayout` already
+ *  enforces on the way IN (`bottomOpen: bottom !== null && r.bottomOpen === true`). Without it,
+ *  moving the Studio from the bottom to the right left `{ bottom: null, bottomOpen: true }` sitting
+ *  in the live layout (and in storage) until the next full reload silently repaired it. */
 function withoutPanel(layout: SlotLayout, panel: PanelId): SlotLayout {
   if (layout.right !== panel && layout.bottom !== panel) return layout
+  const bottomCleared = layout.bottom === panel
   return {
     ...layout,
     right: layout.right === panel ? null : layout.right,
-    bottom: layout.bottom === panel ? null : layout.bottom,
+    bottom: bottomCleared ? null : layout.bottom,
+    bottomOpen: bottomCleared ? false : layout.bottomOpen,
   }
 }
 
@@ -136,6 +143,46 @@ export function setBottomOpen(layout: SlotLayout, open: boolean): SlotLayout {
 export function resolveForViewport(layout: SlotLayout, isMobile: boolean): SlotLayout {
   if (!isMobile || layout.bottom !== 'studio') return layout
   return { ...layout, right: 'studio', bottom: null }
+}
+
+/**
+ * The three server-decided facts that close a panel outright rather than merely greying its entry
+ * (design §1.5's "every switcher entry is ABSENT when its gate is closed"): whether this machine
+ * serves the repository explorer at all, whether it serves the per-session shell, and whether this
+ * session is reached through a central's relay (which has no `cli`/`shell` stream of its own — the
+ * whole `/api/fleet` prefix is refused there).
+ */
+export interface PanelGates {
+  editorEnabled: boolean
+  shellEnabled: boolean
+  relayed: boolean
+}
+
+/** May this panel ever be shown, given what the server/session actually allows right now? */
+function gateOpen(panel: PanelId, gates: PanelGates): boolean {
+  if (panel === 'studio') return gates.editorEnabled
+  if (panel === 'cli') return !gates.relayed
+  if (panel === 'shell') return gates.shellEnabled && !gates.relayed
+  return true // `contents` has no gate of its own.
+}
+
+/**
+ * THE LAYOUT AS THE GATES ACTUALLY ALLOW IT — read-time, exactly like `resolveForViewport`, and
+ * NEVER written back to storage. A stored `right: 'studio'` from a browser where the repository
+ * explorer was once on must not render an empty, unclosable pane the moment `editorEnabled` turns
+ * off (a preference change, a different session, a machine reached through a central): the panel
+ * is read as simply absent from wherever it sat, exactly as if it had never been opened, so the
+ * slot falls back to showing whatever else belongs there (`contents`, on the right).
+ *
+ * Applied on every read alongside `resolveForViewport` — never only in one caller — or the same
+ * stale-storage shape reopens on the next surface that reads `panelSlots` without the gate.
+ */
+export function resolveForGates(layout: SlotLayout, gates: PanelGates): SlotLayout {
+  let next = layout
+  for (const panel of PANEL_IDS) {
+    if (!gateOpen(panel, gates) && isPanelShown(next, panel)) next = closePanel(next, panel)
+  }
+  return next
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -220,12 +267,21 @@ export function showPanel(panel: PanelId, slot?: SlotId): void {
   commit(next)
 }
 
-/** Close a panel imperatively. Closing the Studio itself asks first when it is dirty. */
-export function hidePanel(panel: PanelId): void {
+/**
+ * Close a panel imperatively. Closing the Studio itself asks first when it is dirty.
+ *
+ * `after`, when given, runs once the panel is ACTUALLY gone — immediately if there was nothing to
+ * ask about (including "it was not shown at all"), or once the reader discards. It never runs on
+ * "keep editing". This is what lets a caller displace the Studio and then do something of its own
+ * (`artifactsStore.openArtifacts` opening Contents in the slot the Studio just vacated) without
+ * asking twice or opening behind a Studio the reader chose to keep.
+ */
+export function hidePanel(panel: PanelId, after?: () => void): void {
   const next = closePanel(state, panel)
-  if (next === state) return
-  if (panel === 'studio' && holdIfUnsaved('close', () => commit(next))) return
+  if (next === state) { after?.(); return }
+  if (panel === 'studio' && holdIfUnsaved('close', () => { commit(next); after?.() })) return
   commit(next)
+  after?.()
 }
 
 /** Move a panel to the other slot imperatively. Never asks — see `movePanel`. */
@@ -262,4 +318,27 @@ export function usePanelSlots(): PanelSlotsApi {
     movePanel: relocatePanel,
     setBottomOpen: setBandOpen,
   }
+}
+
+/**
+ * MOUNTS `Component` AT MOST ONCE, WITH NO `key` OF ITS OWN, wherever `shown` is true — the exact
+ * shape §1.4's guarantee depends on. React identifies an element by (type, key, position in its
+ * parent's children); `createElement(Component, props)` here never reads a `key` out of `props`
+ * because none of this module's own callers ever put one there, so a caller that renders THIS
+ * function's result at a stable position in its own tree cannot, by construction, force React to
+ * remount it on a re-render — which is precisely what broke when a reviewer added
+ * `key={rightIsStudio ? 'right' : 'bottom'}` directly on `<StudioHost>` in `SessionsPage.tsx`: a
+ * `key` that changes with the very state a move updates is a key that changes on every move.
+ *
+ * `SessionsPage.tsx` calls this at the Studio's ONE mount site instead of writing `shown && (<Studio
+ * Host .../>)` by hand, so `panelSlots.mountPanel.test.ts` can assert the guarantee against REAL
+ * `React.ReactElement` objects (`.key`, `.type` — `React.isValidElement`) rather than against the
+ * page's source text, which is what `sessionsPage.lint.test.ts`'s own I4 block already does and
+ * could not, on its own, see past a comment or a rename (see that file's own header on why a
+ * DOM-level test is not available here at all: there is no jsdom in this repo's test runner).
+ */
+export function mountPanel<P extends object>(
+  shown: boolean, Component: ComponentType<P>, props: P,
+): ReactElement<P> | null {
+  return shown ? createElement(Component, props) : null
 }

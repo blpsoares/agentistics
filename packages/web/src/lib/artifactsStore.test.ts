@@ -3,7 +3,7 @@ import {
   closeArtifacts, getArtifacts, openArtifacts, resetArtifacts, setArtifactCount, toggleArtifacts,
 } from './artifactsStore'
 import { answerUnsaved, getUnsaved, reportUnsaved, resetUnsaved } from './unsavedBuffers'
-import { getPanelLayout, isPanelShown, resetPanelSlots } from './panelSlots'
+import { getPanelLayout, isPanelShown, resetPanelSlots, showPanel } from './panelSlots'
 
 beforeEach(() => { resetArtifacts(); resetUnsaved(); resetPanelSlots() })
 
@@ -126,4 +126,57 @@ test('openArtifacts("studio") opens the STUDIO panel via panelSlots, and never t
   openArtifacts('studio')
   expect(isPanelShown(getPanelLayout(), 'studio')).toBe(true)
   expect(getArtifacts()).toMatchObject({ open: false, tabRequest: null })
+})
+
+/**
+ * I2 — CONTENTS AND THE STUDIO SHARE THE RIGHT SLOT, SO OPENING ONE DISPLACES THE OTHER.
+ *
+ * Before this fix, `openArtifacts()` set `open: true` unconditionally: the header's Contents
+ * button, a note chip's `openArtifacts('live', ref)` and `openArtifacts('metrics')` all lit
+ * Contents as "open" while `rightSlotContent` (`SessionsPage.tsx`) kept showing the Studio, because
+ * nothing had told `panelSlots` to let go of it. A clean Studio must be displaced outright; a dirty
+ * one must ask first, through the SAME `unsavedBuffers.ts` question `panelSlots.hidePanel` already
+ * asks — and Contents may only open once that question is settled with "discard".
+ */
+test('opening Contents displaces a CLEAN right-slot Studio outright', () => {
+  showPanel('studio', 'right')
+  openArtifacts()
+  expect(getPanelLayout().right).toBeNull()
+  expect(getArtifacts().open).toBe(true)
+})
+
+test('opening Contents over a DIRTY right-slot Studio asks first, and does not open until answered', () => {
+  showPanel('studio', 'right')
+  reportUnsaved('studio', ['README.md'])
+  openArtifacts()
+  // Held: neither side has moved yet.
+  expect(getPanelLayout().right).toBe('studio')
+  expect(getArtifacts().open).toBe(false)
+  expect(getUnsaved().question).toEqual({ cause: 'close' })
+  answerUnsaved(true)
+  expect(getPanelLayout().right).toBeNull()
+  expect(getArtifacts().open).toBe(true)
+})
+
+test('"keep editing" leaves the Studio in place AND Contents unopened — the reverse of I2\'s repro', () => {
+  showPanel('studio', 'right')
+  reportUnsaved('studio', ['README.md'])
+  openArtifacts()
+  answerUnsaved(false)
+  expect(getPanelLayout().right).toBe('studio')
+  expect(getArtifacts().open).toBe(false)
+})
+
+test('a Studio parked at the BOTTOM is untouched by opening Contents — they do not share that slot', () => {
+  showPanel('studio', 'bottom')
+  openArtifacts()
+  expect(getPanelLayout().bottom).toBe('studio')
+  expect(getArtifacts().open).toBe(true)
+})
+
+test('a tab/ref request survives the displacement — the note chip’s own repro', () => {
+  showPanel('studio', 'right')
+  openArtifacts('live', 'step-1')
+  expect(getPanelLayout().right).toBeNull()
+  expect(getArtifacts().tabRequest).toMatchObject({ tab: 'live', ref: 'step-1' })
 })

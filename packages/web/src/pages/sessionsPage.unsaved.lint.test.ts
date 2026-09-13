@@ -23,6 +23,7 @@ const WEB_SRC = join(import.meta.dir, '..')
 const PAGE = stripComments(readFileSync(join(import.meta.dir, 'SessionsPage.tsx'), 'utf8'))
 const STUDIO = stripComments(readFileSync(join(WEB_SRC, 'components/sessions/Studio.tsx'), 'utf8'))
 const STORE = stripComments(readFileSync(join(WEB_SRC, 'lib/artifactsStore.ts'), 'utf8'))
+const PANEL_SLOTS = stripComments(readFileSync(join(WEB_SRC, 'lib/panelSlots.ts'), 'utf8'))
 const GUARD = stripComments(readFileSync(join(WEB_SRC, 'components/sessions/UnsavedChangesGuard.tsx'), 'utf8'))
 
 /**
@@ -95,9 +96,30 @@ describe('SessionsPage holds the pane drop behind the question', () => {
 })
 
 describe('the links the guard depends on', () => {
-  test('the one close function asks before it closes', () => {
-    expect(/export function closeArtifacts\(\): void \{\s*if \(state\.open && holdIfUnsaved\('close', closeNow\)\) return\s*closeNow\(\)\s*\}/
-      .test(STORE)).toBe(true)
+  /**
+   * WHERE THE ASK NOW LIVES — updated for the panels-and-slots feature (design §1).
+   *
+   * This test used to pin the ask INSIDE `closeArtifacts`, from before the Studio was pulled out of
+   * `ArtifactsAside` into its own panel (`lib/panelSlots.ts`). That commit deleted the pinned line
+   * and this test stayed green regardless — a full `bun test` run at HEAD is red on it, which is
+   * exactly the gap a lint test exists to close.
+   *
+   * THE NEW INVARIANT: `closeArtifacts` holds NOTHING (the Studio is no longer its concern — see the
+   * doc comment on `artifactsStore.closeArtifacts` and `artifactsStore.test.ts`'s own coverage of
+   * that), and the ask moved to the ONE place that can actually displace or close the Studio now:
+   * `panelSlots.ts`'s `showPanel` (a displacing open) and `hidePanel` (a direct close).
+   */
+  test('closeArtifacts itself holds nothing — the Studio is its own panel now, not this one\'s', () => {
+    expect(STORE.includes('export function closeArtifacts(): void {\n  closeNow()\n}')).toBe(true)
+  })
+
+  test('showPanel asks before a displacing open drops the Studio, and hidePanel asks before a direct close', () => {
+    expect(PANEL_SLOTS.includes(
+      "if (studioDisplaced && holdIfUnsaved('close', () => commit(next))) return",
+    )).toBe(true)
+    expect(PANEL_SLOTS.includes(
+      "if (panel === 'studio' && holdIfUnsaved('close', () => { commit(next); after?.() })) return",
+    )).toBe(true)
   })
 
   test('the Studio REPORTS its dirty paths, and clears them when it unmounts', () => {
@@ -152,10 +174,30 @@ describe('the links the guard depends on', () => {
     expect(popGuardInstalledBeforeRender(MAIN.replace(/^installHistoryPopGuard\(\)$/m, ''))).toBe(false)
   })
 
-  test('the scan still sees a close that skips the question, and a Studio that stopped reporting', () => {
-    const bypass = STORE.replace("if (state.open && holdIfUnsaved('close', closeNow)) return", '')
-    expect(/export function closeArtifacts\(\): void \{\s*if \(state\.open && holdIfUnsaved\('close', closeNow\)\) return/
-      .test(bypass)).toBe(false)
+  test('the scan still sees either guarantee bypassed, and a Studio that stopped reporting', () => {
+    // `closeArtifacts` grows the old bypassed shape back.
+    const oldShape = STORE.replace(
+      'export function closeArtifacts(): void {\n  closeNow()\n}',
+      "export function closeArtifacts(): void {\n  if (state.open && holdIfUnsaved('close', closeNow)) return\n  closeNow()\n}",
+    )
+    expect(oldShape.includes('export function closeArtifacts(): void {\n  closeNow()\n}')).toBe(false)
+    // `showPanel` stops asking before a displacing open drops the Studio.
+    const noAskOnShow = PANEL_SLOTS.replace(
+      "if (studioDisplaced && holdIfUnsaved('close', () => commit(next))) return", '',
+    )
+    expect(noAskOnShow.includes(
+      "if (studioDisplaced && holdIfUnsaved('close', () => commit(next))) return",
+    )).toBe(false)
+    // `hidePanel` stops asking before a direct close drops the Studio.
+    const noAskOnHide = PANEL_SLOTS.replace(
+      "if (panel === 'studio' && holdIfUnsaved('close', () => { commit(next); after?.() })) return", '',
+    )
+    expect(noAskOnHide.includes(
+      "if (panel === 'studio' && holdIfUnsaved('close', () => { commit(next); after?.() })) return",
+    )).toBe(false)
+    // Prose naming either ask is not the ask.
+    expect(stripComments("// if (studioDisplaced && holdIfUnsaved('close', () => commit(next))) return")
+      .includes("if (studioDisplaced && holdIfUnsaved('close', () => commit(next))) return")).toBe(false)
     expect(/reportUnsaved\(unsavedOwner, /.test(stripComments('// reportUnsaved(unsavedOwner, paths)'))).toBe(false)
   })
 })

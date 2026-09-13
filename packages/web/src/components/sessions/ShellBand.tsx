@@ -41,7 +41,8 @@
 
 import { Suspense, lazy, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import {
-  ChevronDown, ChevronUp, ChevronLeft, Loader2, Maximize2, RotateCcw, TerminalSquare, Trash2,
+  ChevronDown, ChevronUp, ChevronLeft, FolderTree, Loader2, Maximize2, PanelRightOpen,
+  RotateCcw, TerminalSquare, Trash2,
 } from 'lucide-react'
 import { useDocumentVisible } from '../../hooks/useDocumentVisible'
 import { keyStripShown } from '../../lib/terminalSurface'
@@ -137,22 +138,52 @@ export interface ShellBandProps {
    * WHERE this shell is drawn. `docked` is the band under the composer — the placement whose whole
    * point is SIMULTANEITY, reading the conversation while a build runs beside it. `dedicated` is
    * the shell filling its own screen: no bar, no drag handle, no collapsed state, because you got
-   * here by asking for it and the way back is the screen's own control.
+   * here by asking for it and the way back is the screen's own control. `aside` (design §1.5) is
+   * the RIGHT SLOT's own placement — it fills its box exactly like `dedicated` (no bar, no drag
+   * handle: the slot's own switcher and close are the way out), but it is embedded beside the
+   * conversation rather than a screen of its own, so it carries no key strip route and no
+   * fullscreen control of its own.
    *
-   * The two share every rule that matters — one stream, one write channel, one emulator, the same
+   * The three share every rule that matters — one stream, one write channel, one emulator, the same
    * unwatch discipline — which is the entire reason this is a prop and not a second component.
    */
-  placement?: 'docked' | 'dedicated'
+  placement?: 'docked' | 'dedicated' | 'aside'
   /** Offered only when there is somewhere to go: the band's "take the whole screen" control. */
   onOpenFullscreen?: () => void
+  /**
+   * May the DOCKED band also offer Studio as a third segment (design §1.3's "Claude Code | Shell
+   * segment gains Studio")? The same already-resolved `editorEnabled` `SessionPanel` reads. Ignored
+   * outside `docked` — `aside`/`dedicated` show one stream and nothing else sits beside them.
+   */
+  studioEnabled?: boolean
+  /** Selecting Studio from the docked band's own segment — `openPanel('studio', 'bottom')`, which
+   *  displaces whichever of cli/shell this band was showing (asking first only if the STUDIO being
+   *  displaced elsewhere is dirty — moving TO it never drops anything of this band's own). Ignored
+   *  outside `docked`. */
+  onSelectStudio?: () => void
+  /** Told the target every time a person actually PICKS one from the docked band's own segment —
+   *  kept in sync with `panelSlots.ts`'s own `bottom` field, which is what lets "move to right" and
+   *  a later "which panel is at the bottom" question answer correctly for cli/shell exactly as they
+   *  already do for the Studio. This band's OWN `target` state remains the thing that actually
+   *  decides what is on screen — this is a notification, not a second source of truth. */
+  onSelectTerminal?: (target: TerminalTarget) => void
+  /** Move whichever pane THIS band is currently showing to the right slot. Docked only — `aside` is
+   *  already the right slot, and `dedicated` has no slot to move into. */
+  onMoveToRight?: (target: TerminalTarget) => void
 }
 
-export function ShellBand({ sessionId, cwd, lang, theme, harness, placement = 'docked', onOpenFullscreen }: ShellBandProps) {
+export function ShellBand({
+  sessionId, cwd, lang, theme, harness, placement = 'docked', onOpenFullscreen,
+  studioEnabled, onSelectStudio, onSelectTerminal, onMoveToRight,
+}: ShellBandProps) {
   const t = TXT[lang]
   const isMobile = useIsMobile()
   const documentVisible = useDocumentVisible()
 
-  const dedicated = placement === 'dedicated'
+  // `dedicated` AND `aside` both fill whatever box they are given, with no bar of their own — see
+  // the `placement` doc comment above. Kept as one boolean because every rule that follows from
+  // "this is the whole box, not a collapsible band" is the same for both.
+  const dedicated = placement === 'dedicated' || placement === 'aside'
   const [prefs, setPrefs] = useState(() => readBandPrefs())
   /**
    * WHICH terminal this band is showing. It is the band's own state and not the session's, because
@@ -420,6 +451,69 @@ export function ShellBand({ sessionId, cwd, lang, theme, harness, placement = 'd
     </div>
   )
 
+  /**
+   * THE DOCKED BAND'S OWN SEGMENT, WITH STUDIO AS A THIRD OPTION (design §1.3: "today's Claude Code
+   * | Shell segment gains Studio"). A separate variable from `targetSwitch` rather than a third
+   * entry in `TERMINAL_TARGETS` — that array drives `targetScope` / `targetStreamId`, which speak
+   * only of the two terminal STREAMS this band actually resolves; Studio streams nothing and has no
+   * scope, so teaching it to the pure terminal-target module would be answering a question about
+   * this band's own chrome with a change to a module three other surfaces read.
+   *
+   * Picking Studio never touches this band's own `target` state — it calls `onSelectStudio`, which
+   * moves the STUDIO panel into the bottom slot (`panelSlots.ts`); `SessionPanel` then swaps this
+   * whole band out for the Studio's own bottom band on the very next render, exactly as picking the
+   * Studio already does from the right slot's switcher. Only shown while DOCKED: `dedicated` and
+   * `aside` already show one stream and nothing else sits beside them.
+   */
+  const dockedTargetSwitch = (
+    <div role="tablist" aria-label={t.whichTerminal} style={{
+      display: 'flex', gap: 3, padding: 3, borderRadius: 8, flexShrink: 0,
+      background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+    }}>
+      {TERMINAL_TARGETS.map(id => {
+        const on = target === id
+        return (
+          <button
+            key={id}
+            role="tab"
+            aria-selected={on}
+            onClick={e => {
+              e.stopPropagation()
+              chooseTarget(id)
+              onSelectTerminal?.(id)
+              if (!bandOpen) setBand({ open: true })
+            }}
+            style={{
+              minHeight: 22, padding: '0 9px',
+              borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+              fontSize: 11, fontWeight: 650, border: 'none', whiteSpace: 'nowrap',
+              background: on ? 'var(--bg-surface)' : 'transparent',
+              color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
+            }}
+          >
+            {targetLabel(id, harness, lang)}
+          </button>
+        )
+      })}
+      {studioEnabled && (
+        <button
+          role="tab"
+          aria-selected={false}
+          onClick={e => { e.stopPropagation(); onSelectStudio?.() }}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+            minHeight: 22, padding: '0 9px',
+            borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+            fontSize: 11, fontWeight: 650, border: 'none', whiteSpace: 'nowrap',
+            background: 'transparent', color: 'var(--text-tertiary)',
+          }}
+        >
+          <FolderTree size={11} />Studio
+        </button>
+      )}
+    </div>
+  )
+
   const where = shellWhere(cwd)
 
   const screen = (
@@ -558,10 +652,12 @@ export function ShellBand({ sessionId, cwd, lang, theme, harness, placement = 'd
     </div>
   )
 
-  // ---- dedicated: the shell IS the screen ------------------------------------------------------
-  // No bar, no drag handle, no collapsed state: you navigated here, and the way back belongs to the
-  // screen around it. The key strip follows `keyStripShown` — a phone has no ctrl key, and this is
-  // the placement a phone always gets.
+  // ---- dedicated / aside: the shell fills the whole box it is given -----------------------------
+  // No bar, no drag handle, no collapsed state: `dedicated` because you navigated to a screen that
+  // is nothing else, `aside` because the right slot's own switcher and close are the way out. The
+  // key strip follows `keyStripShown` — a phone has no ctrl key, and `dedicated` is the placement a
+  // phone always gets (`aside` is desktop-only — see §1.6, the right slot opens as `dedicated` on a
+  // phone instead).
   if (dedicated) {
     return (
       <div style={{
@@ -715,8 +811,21 @@ export function ShellBand({ sessionId, cwd, lang, theme, harness, placement = 'd
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{where}</span>}
         {!where && <span style={{ flex: 1 }} />}
-        {targetSwitch}
+        {dockedTargetSwitch}
         {busy && <Loader2 size={13} className="ag-spin" style={{ color: 'var(--text-tertiary)' }} />}
+        {/* MOVE WHICHEVER PANE THIS BAND IS SHOWING TO THE RIGHT SLOT (design §1.3's "plus 'move to
+            right'") — the same gesture the Studio's own band already offers, generalized to cli and
+            shell now that both can sit in the right slot too (§1.5). */}
+        {prefs.open && onMoveToRight && (
+          <button className="ag-tap-icon"
+            onClick={e => { e.stopPropagation(); onMoveToRight(target) }}
+            title={lang === 'pt' ? 'Mover para a direita' : 'Move to the right'}
+            aria-label={lang === 'pt' ? 'Mover para a direita' : 'Move to the right'}
+            style={iconBtn}
+          >
+            <PanelRightOpen size={13} />
+          </button>
+        )}
         {/* TAKE THE WHOLE SCREEN. Offered only with a shell open and somewhere to go, so the bar of
             a band nobody has opened carries nothing that cannot act. It is the only way to the
             shell's own screen — the route has accepted `?pane=shell` since phase 3b and nothing

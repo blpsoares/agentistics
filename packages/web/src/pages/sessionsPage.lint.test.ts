@@ -12,7 +12,7 @@
  * the same approach `tokens.lint.test.ts` and `backup-route-body.lint.test.ts` take to invariants
  * that live in source rather than in a value.
  */
-import { test, expect } from 'bun:test'
+import { describe, test, expect } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { stripComments } from '../lib/stripComments'
@@ -146,13 +146,15 @@ test('and it is the only reading of `ctx.editorEnabled` on this page', () => {
 })
 
 test('every Studio entry on this page is gated on that one value', () => {
-  // The mobile session-menu row (unchanged), the right slot's own switcher, and the `StudioHost`
-  // mount that actually renders it — the Studio moved out of `ArtifactsAside` (`lib/panelSlots.ts`),
-  // so the prop that used to gate ITS strip entry and layer (`editorEnabled={editorEnabled}`) is
-  // gone with it; these three are what replaced it.
+  // The mobile session-menu row (unchanged), the right switcher's OWN `studio` entry (the switcher
+  // itself is no longer gated wholesale — §1.5 added `cli`/`shell` entries that must stay reachable
+  // even where `editorEnabled` is false), and the `StudioHost` mount that actually renders it — the
+  // Studio moved out of `ArtifactsAside` (`lib/panelSlots.ts`), so the prop that used to gate ITS
+  // strip entry and layer (`editorEnabled={editorEnabled}`) is gone with it; these three are what
+  // replaced it.
   expect(/\.\.\.\(editorEnabled \? \[\{\s*\n\s*id: 'studio',/.test(SRC)).toBe(true)
-  expect(has('const rightSwitcher = editorEnabled && selected ? (')).toBe(true)
-  expect(has("{editorEnabled && selected && isPanelShown(slotLayout, 'studio') && (")).toBe(true)
+  expect(has("shown: editorEnabled === true },")).toBe(true)
+  expect(has("editorEnabled === true && isPanelShown(slotLayout, 'studio'),")).toBe(true)
 })
 
 test('the scan still sees the defect it exists to catch', () => {
@@ -195,4 +197,72 @@ test('the scan still sees either of those going dead', () => {
   expect(stripComments('// setOutsideNote(d.outside)').includes('setOutsideNote(d.outside)')).toBe(false)
   expect(stripComments('const x = 1 // setOutsideNote(d.outside)').includes('setOutsideNote(d.outside)'))
     .toBe(false)
+})
+
+/**
+ * I4 — THE STUDIO'S MOVE-NEVER-REMOUNTS GUARANTEE HAS A MOUNT SITE, AND THE MOUNT SITE CAN BREAK IT
+ * ALL BY ITSELF. `StudioHost.lint.test.ts` pins the re-parenting MECHANISM inside `StudioHost.tsx`;
+ * it says nothing about how this page MOUNTS that component, and a reviewer proved the gap: adding
+ * `key={rightIsStudio ? 'right' : 'bottom'}` to a hand-written `cond && (<StudioHost .../>)` here —
+ * a realistic regression, the exact shape a "give React a hint" edit would produce — makes every
+ * move a fresh React element by definition (a `key` change is what `key` is FOR), and every test in
+ * the suite that existed before this one stayed green: `StudioHost.lint.test.ts` only reads
+ * `StudioHost.tsx`, and `panelSlots.test.ts` never renders anything. In the browser this dropped one
+ * open Monaco model, one open editor and doubled the root tree fetch, silently — no discard
+ * question, because a remount is not a close.
+ *
+ * THE FIX moves the mount through `lib/panelSlots.ts`'s `mountPanel` — a function that constructs
+ * the element itself (`createElement(Component, props)`) and reads no `key` out of `props`, so a
+ * `key` cannot be added at this call site the way it could on a literal JSX tag. That guarantee is
+ * pinned against REAL `React.ReactElement` objects in `panelSlots.mountPanel.test.ts` — a genuine
+ * structural test over the element tree, not a source scan, since there is no jsdom here to render
+ * this whole page against.
+ *
+ * What THIS file still owns is the CALL SITE: `mountPanel` is generic and could, in principle, be
+ * called for `StudioHost` from two different places, or with a `key:` field slipped into the props
+ * object it is handed (`createElement` DOES special-case a `key` field on the props object exactly
+ * as it does on JSX — `mountPanel`'s own guarantee holds only because none of ITS callers do that).
+ * So the bare identifier `StudioHost` is pinned to appear exactly THREE times — twice on the import
+ * line (`import { StudioHost } from '.../StudioHost'`, the second one the file name inside the
+ * string) and once as the one `mountPanel(…, StudioHost, {…})` call — and that call's props object
+ * is pinned to carry no `key`.
+ */
+describe('StudioHost is mounted once, through mountPanel, with no key slipped into its props (I4)', () => {
+  const CALL_GUARD = 'mountPanel(\n        editorEnabled === true && isPanelShown(slotLayout, \'studio\'),\n        StudioHost,'
+
+  test('the bare identifier appears exactly three times: twice on the import line, once in the mountPanel call', () => {
+    expect([...SRC.matchAll(/\bStudioHost\b/g)]).toHaveLength(3)
+  })
+
+  test('the one call site passes the SAME `shown` condition every gate on this page uses, not a slot-dependent ternary', () => {
+    expect(has(CALL_GUARD)).toBe(true)
+    expect(SRC).not.toMatch(/rightIsStudio\s*\?\s*mountPanel/)
+    expect(SRC).not.toMatch(/bottomIsStudio\s*\?\s*mountPanel/)
+  })
+
+  test('the props object handed to mountPanel carries no `key` field', () => {
+    const start = SRC.indexOf(CALL_GUARD)
+    const close = SRC.indexOf('\n      )}', start)
+    expect(start).toBeGreaterThan(-1)
+    expect(close).toBeGreaterThan(start)
+    expect(SRC.slice(start, close)).not.toMatch(/(^|[,{])\s*key\s*:/)
+  })
+
+  test('the scan still sees a key slipped into the props object, keyed on which slot is showing it', () => {
+    const planted = SRC.replace(
+      'sessionId: selected.id,',
+      "key: rightIsStudio ? 'right' : 'bottom',\n          sessionId: selected.id,",
+    )
+    const start = planted.indexOf(CALL_GUARD)
+    const close = planted.indexOf('\n      )}', start)
+    expect(planted.slice(start, close)).toMatch(/(^|[,{])\s*key\s*:/)
+  })
+
+  test('the scan still sees a second mount site, or the guard moved away from the call', () => {
+    const secondMount = `${SRC}\nmountPanel(true, StudioHost, { sessionId: 'x', lang: 'en', autosave: false, turns: [], target: null })`
+    expect([...secondMount.matchAll(/\bStudioHost\b/g)]).toHaveLength(4)
+    expect(has(CALL_GUARD)).toBe(true) // sanity: the needle exists in the real file
+    const guardMovedAway = SRC.replace(CALL_GUARD, "editorEnabled === true && isPanelShown(slotLayout, 'studio') && (\n        <div />")
+    expect(guardMovedAway.includes(CALL_GUARD)).toBe(false)
+  })
 })
