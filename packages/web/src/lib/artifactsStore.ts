@@ -18,7 +18,7 @@
  */
 
 import { useSyncExternalStore } from 'react'
-import { getPanelLayout, hidePanel, showPanel } from './panelSlots'
+import { getPanelLayout, hidePanel, rightSlotShowing, showPanel } from './panelSlots'
 
 export interface ArtifactsState {
   /** Which session the count and the open flag describe. `null` before one is selected. */
@@ -103,15 +103,21 @@ export function openArtifacts(tab?: string, ref?: string): void {
     // pressing it should land on that row rather than on the top of a feed to be searched.
     ...(tab === undefined ? {} : { tabRequest: { tab, at: Date.now(), ...(ref ? { ref } : {}) } }),
   })
-  // CONTENTS AND THE STUDIO SHARE THE RIGHT SLOT. Opening Contents while the Studio sits there must
-  // DISPLACE it (design §1.2/§1.3) — asking first when it is dirty, through the very `hidePanel`
-  // that already asks for a direct close — or Contents lit as "open" behind a Studio the reader
-  // never left: the header's button, a note chip's `openArtifacts('live', ref)` and the metrics
-  // card's `openArtifacts('metrics')` all went through this one function and all showed nothing.
-  // `after` is what fixes the second half of that: Contents opens only once the Studio has actually
-  // gone, whether that is immediate (nothing dirty) or after the reader answers "discard" — never
-  // eagerly, which is what let it light up behind a Studio kept via "Continuar editando".
-  if (getPanelLayout().right === 'studio') { hidePanel('studio', show); return }
+  // CONTENTS AND WHATEVER ELSE HOLDS THE RIGHT SLOT SHARE IT. Opening Contents while ANY panel sits
+  // there — the Studio, and now `cli`/`shell` too (C2, this defect's second showing: I2 fixed it for
+  // the Studio alone and the same gap reopened the moment `cli`/`shell` could reach the slot) — must
+  // DISPLACE it, asking first only when the Studio is dirty, through the very `hidePanel` that
+  // already asks for a direct close — or Contents lights as "open" behind a panel the reader never
+  // left: the header's button, a note chip's `openArtifacts('live', ref)`, the metrics card's
+  // `openArtifacts('metrics')` and the right switcher's own "Conteúdo" tab all go through this one
+  // function. `after` is what fixes the second half of that: Contents opens only once the occupant
+  // has actually gone, whether that is immediate (nothing dirty) or after the reader answers
+  // "discard" — never eagerly, which is what let it light up behind a Studio kept via "Continuar
+  // editando". `hidePanel` only ever asks for the Studio (`panelSlots.hidePanel`'s own studio-only
+  // hold) — displacing `cli`/`shell` here asks nothing, which is correct: nothing of theirs is
+  // dropped by leaving the slot.
+  const occupant = getPanelLayout().right
+  if (occupant !== null) { hidePanel(occupant, show); return }
   show()
 }
 
@@ -134,8 +140,21 @@ function closeNow(): void {
   emit({ ...state, open: false, dismissed: true })
 }
 
+/**
+ * TOGGLE READS THE SAME "WHAT IS SHOWN" SELECTOR THE HEADER'S `aria-pressed` DOES (C2), not this
+ * store's own `open` flag in isolation. Found live, after the displacement fix above: `state.open`
+ * stays whatever it last was set to by THIS store alone, and `cli`/`shell` reaching the right slot
+ * through the switcher's own tab (which calls `panelSlots.openPanel` directly, never
+ * `openArtifacts`/`closeArtifacts`) does not touch it. So opening Contents, then picking `cli` from
+ * the switcher, left `state.open === true` while the slot showed the terminal — and the header
+ * button's NEXT press, reading only `state.open`, called `closeArtifacts()` instead of displacing
+ * `cli`: the button visibly did nothing (the terminal stayed, `aria-pressed` stayed `false`, which
+ * was already correct) and it took a THIRD press to actually reach Contents. `rightSlotShowing` is
+ * the one place that already reconciles the slot's own occupant with this store's flag; reading it
+ * here as well is what makes one press behave like Contents is either showing or it is not.
+ */
 export function toggleArtifacts(): void {
-  if (state.open) closeArtifacts(); else openArtifacts()
+  if (rightSlotShowing(getPanelLayout(), state.open) === 'contents') closeArtifacts(); else openArtifacts()
 }
 
 /** For tests: forget everything. */

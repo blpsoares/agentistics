@@ -129,6 +129,40 @@ export function isPanelShown(layout: SlotLayout, panel: PanelId): boolean {
   return layout.right === panel || layout.bottom === panel
 }
 
+/**
+ * WHAT THE RIGHT SLOT IS ACTUALLY SHOWING — the one selector every "is this pressed" reading must
+ * go through, rather than each caller comparing `layout.right` against `artifactsStore`'s own `open`
+ * flag its own way. That duplication is exactly what C2 found: the header's Contents button read
+ * `artifacts.open` on its own, so with `cli`/`shell` holding the slot its `aria-pressed` toggled
+ * while the screen kept showing the terminal, unmoved.
+ *
+ * `contents` carries no field of its own in `SlotLayout` — see this module's header on why — so the
+ * slot's own occupant (`layout.right`) always wins when there is one; `contentsOpen` (the store's
+ * `open` flag) only decides the answer when nothing else occupies the slot.
+ */
+export function rightSlotShowing(layout: SlotLayout, contentsOpen: boolean): PanelId | null {
+  return layout.right ?? (contentsOpen ? 'contents' : null)
+}
+
+/**
+ * MAY THE DOCKED BAND ACTUALLY SHOW THIS `cli`/`shell` TARGET RIGHT NOW, or has the RIGHT slot
+ * already claimed it?
+ *
+ * The docked `ShellBand` keeps its own independent `cli`/`shell` preference (`shellBand.ts`'s own
+ * `target`, picked through its segmented control) — it is never written through `openPanel`, so
+ * nothing enforced this file's own "a panel sits in at most one slot at a time" for it (C3): nothing
+ * stopped the docked band going on streaming — and capturing — the very pane the right slot had just
+ * taken, and moving that pane to the right before it was ever explicitly picked in the docked band
+ * left `layout.bottom` unset, so the move itself silently did nothing.
+ *
+ * Applied on the READ side, exactly like `resolveForGates`/`resolveForViewport` — never written back
+ * to storage or to the docked band's own stored preference, so moving the panel away from the right
+ * later hands the docked band back its target without the reader having to re-pick it.
+ */
+export function dockedShowsTarget(layout: SlotLayout, target: 'cli' | 'shell'): boolean {
+  return layout.right !== target
+}
+
 /** Expand or collapse the bottom band without touching which panel occupies it. */
 export function setBottomOpen(layout: SlotLayout, open: boolean): SlotLayout {
   return layout.bottomOpen === open ? layout : { ...layout, bottomOpen: open }

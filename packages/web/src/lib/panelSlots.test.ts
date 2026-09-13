@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import {
-  DEFAULT_LAST_SLOT, EMPTY_SLOT_LAYOUT, PANEL_IDS, allowed, closePanel, getPanelLayout,
-  hidePanel, isPanelShown, movePanel, openPanel, readLayout, relocatePanel, resetPanelSlots,
-  resolveForGates, resolveForViewport, setBottomOpen, showPanel, subscribePanelLayout,
+  DEFAULT_LAST_SLOT, EMPTY_SLOT_LAYOUT, PANEL_IDS, allowed, closePanel, dockedShowsTarget,
+  getPanelLayout, hidePanel, isPanelShown, movePanel, openPanel, readLayout, relocatePanel,
+  resetPanelSlots, resolveForGates, resolveForViewport, rightSlotShowing, setBottomOpen, showPanel,
+  subscribePanelLayout,
   type PanelGates, type PanelId, type SlotId, type SlotLayout,
 } from './panelSlots'
 import { answerUnsaved, getUnsaved, reportUnsaved, resetUnsaved } from './unsavedBuffers'
@@ -182,6 +183,40 @@ describe('isPanelShown', () => {
 
   test('false when it sits nowhere', () => {
     expect(isPanelShown(EMPTY_SLOT_LAYOUT, 'studio')).toBe(false)
+  })
+})
+
+describe('rightSlotShowing — the one "what is shown" selector (C2)', () => {
+  test('the right slot\'s own occupant always wins, whatever Contents\' own open flag says', () => {
+    expect(rightSlotShowing({ ...EMPTY_SLOT_LAYOUT, right: 'cli' }, false)).toBe('cli')
+    expect(rightSlotShowing({ ...EMPTY_SLOT_LAYOUT, right: 'cli' }, true)).toBe('cli')
+    expect(rightSlotShowing({ ...EMPTY_SLOT_LAYOUT, right: 'shell' }, true)).toBe('shell')
+    expect(rightSlotShowing({ ...EMPTY_SLOT_LAYOUT, right: 'studio' }, true)).toBe('studio')
+  })
+
+  test('Contents only decides the answer once nothing else occupies the slot', () => {
+    expect(rightSlotShowing(EMPTY_SLOT_LAYOUT, true)).toBe('contents')
+    expect(rightSlotShowing(EMPTY_SLOT_LAYOUT, false)).toBeNull()
+  })
+})
+
+describe('dockedShowsTarget — exclusivity between the docked band and the right slot (C3)', () => {
+  test('shown when nothing (or the OTHER target) sits at right', () => {
+    expect(dockedShowsTarget(EMPTY_SLOT_LAYOUT, 'shell')).toBe(true)
+    expect(dockedShowsTarget({ ...EMPTY_SLOT_LAYOUT, right: 'cli' }, 'shell')).toBe(true)
+    expect(dockedShowsTarget({ ...EMPTY_SLOT_LAYOUT, right: 'studio' }, 'cli')).toBe(true)
+  })
+
+  test('excluded once the right slot holds this EXACT target', () => {
+    expect(dockedShowsTarget({ ...EMPTY_SLOT_LAYOUT, right: 'shell' }, 'shell')).toBe(false)
+    expect(dockedShowsTarget({ ...EMPTY_SLOT_LAYOUT, right: 'cli' }, 'cli')).toBe(false)
+  })
+
+  test('moving the panel away from the right hands the docked band back its target, unprompted', () => {
+    const atRight: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'shell' }
+    expect(dockedShowsTarget(atRight, 'shell')).toBe(false)
+    const movedAway = closePanel(atRight, 'shell')
+    expect(dockedShowsTarget(movedAway, 'shell')).toBe(true)
   })
 })
 

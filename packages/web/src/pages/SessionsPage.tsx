@@ -17,15 +17,19 @@
  * a session's state by one poll interval — which is a bug people report as flicker.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+  type CSSProperties, type ReactElement, type ReactNode,
+} from 'react'
 import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import {
   ChevronLeft, FileText, FolderTree, MessagesSquare, PanelBottomOpen, Plus, TerminalSquare,
   X as XIcon,
 } from 'lucide-react'
-import { StudioHost } from '../components/sessions/StudioHost'
+import { StudioHost, type StudioHostProps } from '../components/sessions/StudioHost'
 import {
-  isPanelShown, mountPanel, resolveForGates, resolveForViewport, usePanelSlots, type PanelGates,
+  isPanelShown, mountPanel, resolveForGates, resolveForViewport, rightSlotShowing, usePanelSlots,
+  type PanelGates,
 } from '../lib/panelSlots'
 import { getCentralMachine } from '../lib/centralMachinePick'
 import type { AppContext } from '../lib/app-context'
@@ -70,6 +74,48 @@ import { sessionPlanFactor } from '../lib/costBasis'
 /** The dimensions a live fleet row can be narrowed by — the same set on both layouts. */
 const FLEET_FILTER_DIMS: Array<'harnesses' | 'repos' | 'projects' | 'models'> =
   ['harnesses', 'repos', 'projects', 'models']
+
+/** Everything the Studio's one mount site (below) needs — see `mountStudioHostPanel`. */
+export interface StudioHostMountParams {
+  shown: boolean
+  sessionId: string
+  lang: 'pt' | 'en'
+  autosave: boolean
+  turns: readonly LiveTurn[]
+  onExit: () => void
+  target: HTMLElement | null
+}
+
+/**
+ * THE STUDIO'S ONE MOUNT SITE, pulled out to a MODULE-LEVEL function (I4) — the re-review's own
+ * finding was that `panelSlots.mountPanel.test.ts` proves `mountPanel` itself never reads a `key`
+ * out of its props, but only ever against a `Dummy` stand-in it builds by hand; the reviewer's
+ * planted regression (`key: rightIsStudio ? 'right' : 'bottom',` slipped into the literal props
+ * object at THIS call site) sailed through it untouched, and only `sessionsPage.lint.test.ts`'s
+ * source-text scan caught it. A source scan is not nothing, but the brief for this fix was explicit
+ * that it is not enough on its own.
+ *
+ * Extracting the call is what lets a test reach it: `studioHostMount.test.ts` imports this SAME
+ * function — the one `SessionsPage` itself renders below — and inspects the real
+ * `React.ReactElement` it returns, exactly as `panelSlots.mountPanel.test.ts` already does for
+ * `mountPanel` in isolation. Two changes make the regression class harder to reintroduce, not just
+ * easier to catch:
+ *  - the fields are picked EXPLICITLY rather than spread from `params` — a stray `key` added to the
+ *    params object at the call site below is dropped here before it ever reaches `mountPanel` /
+ *    `createElement`, so that half of the old gap is closed by construction, not merely detected;
+ *  - a `key` added directly to the object literal INSIDE this function (the equivalent regression,
+ *    moved one level in) is exactly what `studioHostMount.test.ts` calls this function to catch.
+ */
+export function mountStudioHostPanel(params: StudioHostMountParams): ReactElement<StudioHostProps> | null {
+  return mountPanel(params.shown, StudioHost, {
+    sessionId: params.sessionId,
+    lang: params.lang,
+    autosave: params.autosave,
+    turns: params.turns,
+    onExit: params.onExit,
+    target: params.target,
+  })
+}
 
 export default function SessionsPage() {
   const ctx = useOutletContext<AppContext>()
@@ -654,7 +700,7 @@ export default function SessionsPage() {
     }}>
       {(
         [
-          { id: 'contents' as const, label: pt ? 'Conteúdo' : 'Contents', icon: <FileText key="c" size={12} />, on: !rightActivePanel, shown: true },
+          { id: 'contents' as const, label: pt ? 'Conteúdo' : 'Contents', icon: <FileText key="c" size={12} />, on: rightSlotShowing(slotLayout, art.open) === 'contents', shown: true },
           { id: 'studio' as const, label: 'Studio', icon: <FolderTree key="s" size={12} />, on: rightIsStudio, shown: editorEnabled === true },
           { id: 'cli' as const, label: targetLabel('cli', selected.harness, pt ? 'pt' : 'en'), icon: <TerminalSquare key="cli" size={12} />, on: rightIsCli, shown: !isMobile && !relayed },
           { id: 'shell' as const, label: targetLabel('shell', selected.harness, pt ? 'pt' : 'en'), icon: <TerminalSquare key="sh" size={12} />, on: rightIsShell, shown: !isMobile && shellEnabled === true && !relayed },
@@ -1596,29 +1642,29 @@ export default function SessionsPage() {
           gate is open — the same two conditions `ArtifactsAside`'s own Studio mount used to read
           before this feature moved the Studio out of it.
 
-          MOUNTED THROUGH `mountPanel` (`lib/panelSlots.ts`), not a hand-written `cond && (<StudioHost
-          .../>)`: a move (right↔bottom) changes `target` below without changing WHETHER this is
-          shown, and `mountPanel` is what makes "no `key=` of its own, exactly one call site" a fact
-          about a function every caller shares rather than a rule this page has to keep re-observing.
-          `sessionsPage.lint.test.ts`'s own I4 block still pins the call SITE (there is no jsdom here
-          to render against), and `panelSlots.mountPanel.test.ts` pins the FUNCTION itself against
-          real `React.ReactElement` objects. */}
-      {selected && mountPanel(
-        editorEnabled === true && isPanelShown(slotLayout, 'studio'),
-        StudioHost,
-        {
-          sessionId: selected.id,
-          lang: pt ? 'pt' : 'en',
-          autosave: editorAutosave === true,
-          turns: artifactTurns,
-          // INTERIM: `Studio.tsx`'s own bar still carries a "‹ Contents" control calling `onExit`
-          // (W1-A's block — removing it is one of the one-line changes named in this session's
-          // report). Until it is gone, `onExit` closes the panel outright, which is the closest
-          // reading of "leave" the new model has — displacing it never asks, closing it does.
-          onExit: () => closeSlotPanel('studio'),
-          target: studioTarget,
-        },
-      )}
+          MOUNTED THROUGH `mountStudioHostPanel` (module-level, above), not a hand-written
+          `cond && (<StudioHost .../>)`: a move (right↔bottom) changes `target` below without
+          changing WHETHER this is shown, and `mountPanel` (`lib/panelSlots.ts`) inside that function
+          is what makes "no `key=` of its own, exactly one call site" a fact about a function every
+          caller shares rather than a rule this page has to keep re-observing. `sessionsPage.lint.
+          test.ts`'s own I4 block still pins this call SITE, `panelSlots.mountPanel.test.ts` pins
+          `mountPanel` itself, and `studioHostMount.test.ts` (I4) calls `mountStudioHostPanel`
+          DIRECTLY — the same function this line calls — and inspects the real `React.ReactElement`
+          it returns, which is the genuine structural coverage of THIS call site the source scan
+          alone could not provide. */}
+      {selected && mountStudioHostPanel({
+        shown: editorEnabled === true && isPanelShown(slotLayout, 'studio'),
+        sessionId: selected.id,
+        lang: pt ? 'pt' : 'en',
+        autosave: editorAutosave === true,
+        turns: artifactTurns,
+        // INTERIM: `Studio.tsx`'s own bar still carries a "‹ Contents" control calling `onExit`
+        // (W1-A's block — removing it is one of the one-line changes named in this session's
+        // report). Until it is gone, `onExit` closes the panel outright, which is the closest
+        // reading of "leave" the new model has — displacing it never asks, closing it does.
+        onExit: () => closeSlotPanel('studio'),
+        target: studioTarget,
+      })}
       {/* Mobile-only chrome, and a slot that is always here so it can never shift the pane. */}
       {isMobile ? filtersSheet : null}
       {/* LAST, and always present, so adding it shifted no slot above. The return that holds the

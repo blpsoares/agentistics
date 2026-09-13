@@ -73,6 +73,7 @@ import { ModeSwitch } from './components/nav/ModeSwitch'
 import { TopBar } from './components/nav/TopBar'
 import { COST_BASIS_W, FULL_BAR_W, MIN_BAR_W, headerFit, stripPadding } from './lib/headerFit'
 import { openArtifacts, toggleArtifacts, useArtifacts } from './lib/artifactsStore'
+import { rightSlotShowing, usePanelSlots } from './lib/panelSlots'
 import { SessionsAside } from './components/nav/SessionsAside'
 import { SessionsRail } from './components/nav/SessionsRail'
 import { getPinnedIds } from './lib/pinnedSessions'
@@ -1883,6 +1884,13 @@ export default function AppLayout() {
   // The compensating padding is not space the bar may draw in, so it is taken off first.
   /** The artifacts panel's open flag and count — see `artifactsStore` for why it is not a prop. */
   const artifacts = useArtifacts()
+  /**
+   * WHAT THE RIGHT SLOT IS ACTUALLY SHOWING — read through `panelSlots.ts`'s own `rightSlotShowing`,
+   * the one selector every "is this pressed" reading in this header goes through. Before this, the
+   * Contents button's `aria-pressed` read `artifacts.open` directly: with `cli`/`shell` holding the
+   * slot, pressing the button flipped the flag while the screen kept showing the terminal — see C2.
+   */
+  const headerRightShowing = rightSlotShowing(usePanelSlots().layout, artifacts.open)
 
   /**
    * Active sessions only — the fleet's own dimension (see `FiltersBar`'s doc comment on
@@ -3237,16 +3245,16 @@ export default function AppLayout() {
       {selectedFleetSession && !isCentral && (
         <button
           onClick={toggleArtifacts}
-          aria-pressed={artifacts.open}
+          aria-pressed={headerRightShowing === 'contents'}
           title={lang === 'pt'
             ? 'Conteúdo desta sessão — atividade, galeria, skills, subagentes e mais'
             : 'This session’s contents — activity, gallery, skills, subagents and more'}
           style={{
             display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
             height: 30, padding: '0 10px', borderRadius: 9, cursor: 'pointer',
-            border: '1px solid ' + (artifacts.open ? 'var(--anthropic-orange)' : 'var(--border-subtle)'),
-            background: artifacts.open ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
-            color: artifacts.open ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+            border: '1px solid ' + (headerRightShowing === 'contents' ? 'var(--anthropic-orange)' : 'var(--border-subtle)'),
+            background: headerRightShowing === 'contents' ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+            color: headerRightShowing === 'contents' ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
             fontFamily: 'inherit', fontSize: 12,
           }}
         >

@@ -46,6 +46,7 @@ import {
 } from 'lucide-react'
 import { useDocumentVisible } from '../../hooks/useDocumentVisible'
 import { keyStripShown } from '../../lib/terminalSurface'
+import { dockedShowsTarget, usePanelSlots } from '../../lib/panelSlots'
 import {
   TERMINAL_TARGETS, readTarget, targetLabel, targetScope, targetStreamId, type TerminalTarget,
 } from '../../lib/terminalTarget'
@@ -84,6 +85,7 @@ interface T {
   fullscreen: string
   endThis: string
   whichTerminal: string
+  openOnRight: string
 }
 
 const TXT: Record<'pt' | 'en', T> = {
@@ -103,6 +105,7 @@ const TXT: Record<'pt' | 'en', T> = {
     fullscreen: 'Open the shell full screen',
     endThis: 'End this terminal',
     whichTerminal: 'Which terminal',
+    openOnRight: 'This is open in the panel on the right. Pick it again to bring it back here.',
   },
   pt: {
     title: 'Shell',
@@ -120,6 +123,7 @@ const TXT: Record<'pt' | 'en', T> = {
     fullscreen: 'Abrir o shell em tela cheia',
     endThis: 'Encerrar este terminal',
     whichTerminal: 'Qual terminal',
+    openOnRight: 'Isto está aberto no painel à direita. Selecione de novo para trazer de volta aqui.',
   },
 }
 
@@ -192,6 +196,18 @@ export function ShellBand({
    */
   const [target, setTarget] = useState<TerminalTarget>(() => readTarget(readBandPrefs().target))
   const scope = targetScope(target)
+  /**
+   * EXCLUSIVITY WITH THE RIGHT SLOT (C3) — only the DOCKED placement needs this. This band's own
+   * `target` (above) is a LOCAL preference, chosen through its own segmented control and never
+   * written through `panelSlots.openPanel` except on an explicit click — so nothing stopped it going
+   * on streaming (and capturing) the very pane the right slot had already taken, and nothing told it
+   * to stop once that happened on its own, before any click. `dockedShowsTarget` is the one pure rule
+   * (`panelSlots.ts`) both this band and the right slot's own render are ultimately judged against;
+   * `dedicated`/`aside` never need it — `aside` IS the right slot's own placement, so there is
+   * nothing else to exclude it FROM, and `dedicated` has no slot to conflict with.
+   */
+  const slotLayout = usePanelSlots().layout
+  const excludedFromDocked = placement === 'docked' && !dockedShowsTarget(slotLayout, target)
   // A DEDICATED shell is open by definition — you navigated to a screen that is nothing else. The
   // stored `open` is the DOCKED band's state and must not decide it, or arriving here with the band
   // collapsed would show an empty screen with no way to fill it.
@@ -237,7 +253,10 @@ export function ShellBand({
   // band spin on "Abrindo…". `attempt` moves only when a PERSON opens or retries.
   // Only the SHELL has to be resolved: the CLI pane IS the session and is already there. Asking
   // for one while the band is showing the other would mint a shell nobody opened.
-  const wanted = shellResolveWanted(band) && target === 'shell'
+  // EXCLUDED (C3): the right slot already resolves/streams this exact target, so the docked band
+  // must not also open or reuse it — that is the second live reader `dockedShowsTarget` exists to
+  // prevent.
+  const wanted = shellResolveWanted(band) && target === 'shell' && !excludedFromDocked
   const wantedRef = useRef(wanted)
   wantedRef.current = wanted
   useEffect(() => {
@@ -315,11 +334,14 @@ export function ShellBand({
     dispatch({ type: 'retry' })
   }, [lang])
 
+  // EXCLUDED (C3): never watch — never capture — a pane the right slot already shows. Without this
+  // a move to the right left the docked band's own stream running: two live readers of one pane,
+  // confirmed live as a second `GET /api/shell/stream?id=…` for the exact same shell.
   const watching = shellWatching({
     bandOpen,
     sessionSelected: Boolean(sessionId),
     documentVisible,
-  })
+  }) && !excludedFromDocked
   /** The pane this band is watching: the session itself, or the shell it opened. `null` while a
    *  shell has not been resolved yet, which is what keeps the stream from asking for a blank. */
   const streamId = targetStreamId(target, { sessionId, shellId: shell?.id ?? null })
@@ -539,8 +561,13 @@ export function ShellBand({
     </div>
   )
 
-  /** The one sentence the band always has: a refusal, a delivery failure, or what is on screen. */
-  const line = band.message ?? (write.reason ? write.reason : band.phase === 'opening' ? t.opening : status.detail)
+  /** The one sentence the band always has: a refusal, a delivery failure, or what is on screen.
+   *  EXCLUDED (C3) overrides all of it — the pane is not connecting or idle, it is simply showing
+   *  somewhere else, and `status.detail` (built from an `idle`, un-watched stream) would otherwise
+   *  say "No session"/"No shell" about a pane that is very much open, just not here. */
+  const line = excludedFromDocked
+    ? t.openOnRight
+    : band.message ?? (write.reason ? write.reason : band.phase === 'opening' ? t.opening : status.detail)
   const lineIsBad = Boolean(band.message || write.reason)
   const busy = band.phase === 'opening'
 
@@ -745,7 +772,9 @@ export function ShellBand({
         }}>
           {/* RIGHT, like every other placement's. */}
           <div style={{ display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>{targetSwitch}</div>
-          {streamId ? screen : <div style={{ flex: 1 }} />}
+          {/* EXCLUDED (C3): never render the screen for a target the right slot already shows —
+              see `excludedFromDocked` above. */}
+          {streamId && !excludedFromDocked ? screen : <div style={{ flex: 1 }} />}
           {notice}
           {ceilingList}
           {strip}
@@ -869,7 +898,9 @@ export function ShellBand({
           height: Math.max(BAND_MIN_PX, prefs.height),
           display: 'flex', flexDirection: 'column', gap: 6, padding: '0 12px 10px',
         }}>
-          {streamId ? screen : <div style={{ flex: 1 }} />}
+          {/* EXCLUDED (C3): the right slot already shows this exact target — see
+              `excludedFromDocked` above. Never render the screen for it here too. */}
+          {streamId && !excludedFromDocked ? screen : <div style={{ flex: 1 }} />}
           {notice}
           {ceilingList}
         </div>

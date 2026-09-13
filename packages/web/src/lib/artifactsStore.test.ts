@@ -180,3 +180,59 @@ test('a tab/ref request survives the displacement — the note chip’s own repr
   expect(getPanelLayout().right).toBeNull()
   expect(getArtifacts().tabRequest).toMatchObject({ tab: 'live', ref: 'step-1' })
 })
+
+/**
+ * C2 — THE SAME DEFECT I2 FIXED FOR THE STUDIO REOPENED THE MOMENT `cli`/`shell` COULD REACH THE
+ * RIGHT SLOT. `openArtifacts()`'s displacement check named `'studio'` literally, so with `cli` or
+ * `shell` sitting at `right`, every caller that can reach Contents — the header button, the right
+ * switcher's own "Conteúdo" tab, a note chip, `openArtifacts('metrics')` — lit `open: true` while the
+ * slot kept showing the terminal, unmoved. Unlike the Studio, displacing `cli`/`shell` asks NOTHING
+ * — there is no buffer of theirs to lose by leaving the slot, only `panelSlots.hidePanel`'s own
+ * studio-only hold applies.
+ */
+test('opening Contents displaces a right-slot `cli` pane outright, asking nothing', () => {
+  showPanel('cli', 'right')
+  openArtifacts()
+  expect(getPanelLayout().right).toBeNull()
+  expect(getArtifacts().open).toBe(true)
+  expect(getUnsaved().question).toBeNull()
+})
+
+test('opening Contents displaces a right-slot `shell` pane outright, asking nothing', () => {
+  showPanel('shell', 'right')
+  openArtifacts()
+  expect(getPanelLayout().right).toBeNull()
+  expect(getArtifacts().open).toBe(true)
+  expect(getUnsaved().question).toBeNull()
+})
+
+test('a `cli`/`shell` pane parked at the BOTTOM is untouched by opening Contents — they do not share that slot', () => {
+  showPanel('cli', 'bottom')
+  openArtifacts()
+  expect(getPanelLayout().bottom).toBe('cli')
+  expect(getArtifacts().open).toBe(true)
+})
+
+/**
+ * C2, THE SECOND HALF — live-found while verifying the fix above: `toggleArtifacts` used to read
+ * only THIS store's own `open` flag, which the right switcher's own "Claude Code"/"Shell" tabs never
+ * touch (they call `panelSlots.openPanel` directly). So opening Contents, then picking `cli` from
+ * the switcher — leaving `open === true` behind while the slot showed `cli` — made the header
+ * button's NEXT press call `closeArtifacts()` (it read `open` as still true) instead of displacing
+ * `cli`: visibly nothing happened, and a second press was needed to actually reach Contents.
+ */
+test('the header button toggles off what is ACTUALLY shown, not this store\'s own stale flag', () => {
+  openArtifacts() // Contents opens; `state.open` becomes true.
+  showPanel('cli', 'right') // the switcher's own tab — bypasses this store entirely.
+  expect(getPanelLayout().right).toBe('cli')
+  toggleArtifacts() // the header button, pressed once more.
+  // Contents is not what is shown (cli is) — must DISPLACE it, never merely flip `open` to false.
+  expect(getPanelLayout().right).toBeNull()
+  expect(getArtifacts().open).toBe(true)
+})
+
+test('the header button closes Contents in one press when Contents really is what is shown', () => {
+  openArtifacts()
+  toggleArtifacts()
+  expect(getArtifacts()).toMatchObject({ open: false, dismissed: true })
+})

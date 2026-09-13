@@ -295,7 +295,17 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
           studioEnabled={editorEnabled === true}
           onSelectStudio={() => openSlotPanel('studio', 'bottom')}
           onSelectTerminal={id => openSlotPanel(id, 'bottom')}
-          onMoveToRight={id => moveSlotPanel(id, 'right')}
+          /*
+           * `openSlotPanel`, deliberately NOT `moveSlotPanel` (C3's second half). The docked band's
+           * own `cli`/`shell` preference (`shellBand.ts`'s `target`) is never written through
+           * `panelSlots` except on an explicit tab click, so on a fresh session (or before the first
+           * click) `slotLayout.bottom` had never recorded what this band was already showing —
+           * `movePanel` refuses when its panel is not shown in EITHER slot, so "move to the right"
+           * was a silent no-op the very first time. `openPanel` places it regardless of whether
+           * `panelSlots` had ever heard of it there, which is exactly right: what the band is
+           * showing right now IS what the person means to move.
+           */
+          onMoveToRight={id => openSlotPanel(id, 'right')}
         />
       )}
     </div>
