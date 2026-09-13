@@ -40,3 +40,7 @@ export * from './taskProgress'
 export * from './sharedTask'
 export * from './projectKind'
 export * from './session-profile'
+// The attachment-path rule lives here rather than in the web bundle because the SERVER needs it
+// too: what a message carried is recorded from the text being typed into the pane, and the browser
+// reads the same lines back out of the transcript. One implementation, or the two disagree.
+export * from './attachments'

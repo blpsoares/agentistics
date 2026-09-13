@@ -14,7 +14,8 @@ import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MIN_UI_CONTRAST, contrastRatio } from '../../lib/monacoTheme'
 import {
-  FILE_ICON_IDS, FileIcon, ICON_GROUNDS, ICON_HUES, fileIconId, type FileIconId,
+  FILE_ICON_IDS, FileIcon, ICON_GROUNDS, ICON_GROUNDS_ELEVATED, ICON_HUES, fileIconHueOnActiveTab,
+  fileIconId, type FileIconId,
 } from './fileIcon'
 
 describe('fileIconId', () => {
@@ -38,6 +39,38 @@ describe('fileIconId', () => {
     expect(fileIconId('compose.yaml', 'file')).toBe('docker')
     // The point of the compound rule: the extension alone says config.
     expect(fileIconId('ci.yml', 'file')).toBe('config')
+  })
+
+  test('the niche-file audit: Containerfile, compose*.yml, HCL, Makefile fragments, and friends', () => {
+    // The OCI-neutral Dockerfile spelling, and the extension form of the same file.
+    expect(fileIconId('Containerfile', 'file')).toBe('docker')
+    expect(fileIconId('app.dockerfile', 'file')).toBe('docker')
+    // `compose*.yml` widened beyond the `docker-` prefix — and `composer.yml` must NOT take it.
+    expect(fileIconId('compose.yml', 'file')).toBe('docker')
+    expect(fileIconId('compose.override.yml', 'file')).toBe('docker')
+    expect(fileIconId('composer.yml', 'file')).toBe('config')
+    // Terraform/HCL.
+    expect(fileIconId('main.tf', 'file')).toBe('config')
+    expect(fileIconId('vars.tfvars', 'file')).toBe('config')
+    expect(fileIconId('network.hcl', 'file')).toBe('config')
+    // A Makefile fragment, a Justfile, a Procfile.
+    expect(fileIconId('common.mk', 'file')).toBe('shell')
+    expect(fileIconId('Justfile', 'file')).toBe('shell')
+    expect(fileIconId('Procfile', 'file')).toBe('config')
+    // *.toml and *.ini already worked; pinned here so the audit does not silently narrow them.
+    expect(fileIconId('bunfig.toml', 'file')).toBe('config')
+    expect(fileIconId('setup.ini', 'file')).toBe('config')
+  })
+
+  // M4: nginx.conf already lands on 'config' through the ordinary `.conf` extension rule (no rule
+  // of its own needed); Caddyfile has no extension to key on and drew the neutral glyph until now.
+  // `.mmd`/`.mermaid` have no dedicated diagram glyph in this set, so they join plain text rather
+  // than the generic file icon.
+  test('the niche-file audit: config files with no extension, and mermaid sources (M4)', () => {
+    expect(fileIconId('nginx.conf', 'file')).toBe('config')
+    expect(fileIconId('Caddyfile', 'file')).toBe('config')
+    expect(fileIconId('diagram.mmd', 'file')).toBe('text')
+    expect(fileIconId('flow.mermaid', 'file')).toBe('text')
   })
 
   test('.env and its variants, and NOT .envrc', () => {
@@ -221,5 +254,34 @@ describe('every id draws something', () => {
           .toBeGreaterThanOrEqual(MIN_UI_CONTRAST)
       }
     }
+  })
+
+  /**
+   * **`TabStrip`'s ACTIVE tab sits on `--bg-elevated`, and `ICON_HUES` was never proven readable
+   * there.** Planting the defect this guards — reverting `fileIconHueOnActiveTab('react')` to
+   * `ICON_HUES.react` (`#2699b3`) — drops the light-elevated ratio to 2.96:1 and fails this test;
+   * restoring the lifted `#2492ab` passes it again.
+   */
+  test('the active-tab hue clears the shape floor on every ground, base and elevated alike', () => {
+    for (const id of FILE_ICON_IDS) {
+      const hue = fileIconHueOnActiveTab(id)
+      if (hue === undefined) continue // the two folder states and the fallback draw in currentColor
+      for (const ground of [...ICON_GROUNDS, ...ICON_GROUNDS_ELEVATED]) {
+        expect(contrastRatio(hue, ground), `${id} ${hue} on ${ground}`)
+          .toBeGreaterThanOrEqual(MIN_UI_CONTRAST)
+      }
+    }
+  })
+
+  test('a tab icon can be drawn in the active-tab hue without disturbing the tree default', () => {
+    const active = renderToStaticMarkup(
+      <FileIcon name=".env" kind="file" size={14} hue={fileIconHueOnActiveTab('env')} />,
+    )
+    expect(active).toContain('#a77f21')
+    // The tree (and an inactive tab) still gets the ORIGINAL hue when no override is passed —
+    // this refactor threading `hue` through every drawn glyph must not change a single default.
+    const inactive = renderToStaticMarkup(<FileIcon name=".env" kind="file" size={14} />)
+    expect(inactive).toContain(ICON_HUES.env!)
+    expect(inactive).not.toContain('#a77f21')
   })
 })

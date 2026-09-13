@@ -22,8 +22,10 @@
  */
 
 import { useState } from 'react'
-import { MessagesSquare, TerminalSquare } from 'lucide-react'
+import { ChevronDown, ChevronUp, FolderTree, MessagesSquare, PanelRightOpen, TerminalSquare, X } from 'lucide-react'
 import { getCentralMachine } from '../../lib/centralMachinePick'
+import { useIsMobile } from '../../hooks/useIsMobile'
+import { resolveForViewport, usePanelSlots } from '../../lib/panelSlots'
 import { RelayedScreen } from './RelayedScreen'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import type { FleetActionId, FleetRow } from '../../lib/fleet'
@@ -31,6 +33,7 @@ import { TerminalRegion } from '../RecentSessions'
 import { SessionChat, type SessionChatProps } from './SessionChat'
 import { SessionActions } from './SessionActions'
 import { ShellBand } from './ShellBand'
+import { targetLabel } from '../../lib/terminalTarget'
 
 export type SessionView = 'chat' | 'terminal'
 
@@ -81,9 +84,22 @@ export interface SessionPanelProps {
    * answer, and the switch may only ever narrow it further.
    */
   shellEnabled?: boolean
+  /**
+   * May this machine serve the repository explorer at all — the same already-resolved
+   * `editorEnabled` `ArtifactsAside` used to read. Gates whether the BOTTOM band may ever show the
+   * Studio: absent reads as OFF, exactly as `shellEnabled` does.
+   */
+  editorEnabled?: boolean
+  /**
+   * The DOM box the Studio's persistent host should physically move into while it occupies the
+   * BOTTOM slot and the band is expanded — see `StudioHost.tsx`, mounted by the caller (this
+   * component owns no Monaco of its own). `null` while the band is collapsed or the Studio sits
+   * elsewhere, which is also what the caller reads as "park it".
+   */
+  onStudioBandRef?: (el: HTMLDivElement | null) => void
 }
 
-export function SessionPanel({ session, row, lang, theme, act, authorName, onGone, onOpened, view: viewProp, onViewChange, onArtifacts, shellEnabled, onOpenTerminal, onOpenShellFullscreen }: SessionPanelProps) {
+export function SessionPanel({ session, row, lang, theme, act, authorName, onGone, onOpened, view: viewProp, onViewChange, onArtifacts, shellEnabled, editorEnabled, onOpenTerminal, onOpenShellFullscreen, onStudioBandRef }: SessionPanelProps) {
   /**
    * Is this a session of ANOTHER machine, reached through the relay?
    *
@@ -117,6 +133,21 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
   const view = controlled ? (viewProp ?? 'chat') : localView
   const setView = controlled ? onViewChange! : setLocalView
   const active: SessionView = chattable ? view : 'terminal'
+
+  /**
+   * WHERE THE STUDIO SITS — `lib/panelSlots.ts`, design §1. Read through `resolveForViewport` with
+   * this component's OWN `isMobile`, or a phone here and the desktop `SessionsPage` that mounts
+   * `StudioHost` could disagree about whether the bottom slot exists at all — a phone has no docked
+   * band (`dockedAllowed` in `terminalSurface.ts`), so a stored `bottom: 'studio'` must read as
+   * absent here exactly as it reads as the right sheet there.
+   */
+  const isMobile = useIsMobile()
+  const {
+    layout: rawSlotLayout, openPanel: openSlotPanel, closePanel: closeSlotPanel,
+    movePanel: moveSlotPanel, setBottomOpen,
+  } = usePanelSlots()
+  const slotLayout = resolveForViewport(rawSlotLayout, isMobile)
+  const bottomIsStudio = !isMobile && editorEnabled === true && slotLayout.bottom === 'studio'
 
   return (
     // `flex: 1` + `minHeight: 0`, NOT `height: 100%`. In a column flex container a percentage
@@ -227,8 +258,32 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
 
           Absent on a RELAYED session for the same reason the live stream is: those routes are the
           machine's own and a central refuses them outright, so a band there could only ever draw a
-          refusal. Absent when the machine does not serve shells at all — see `shellEnabled`. */}
-      {shellEnabled && !relayed && (
+          refusal. Absent when the machine does not serve shells at all — see `shellEnabled`.
+
+          THE STUDIO CAN OCCUPY THIS SAME BAND (`lib/panelSlots.ts`'s `bottom` slot), and when it
+          does this renders a SEPARATE small band rather than teaching `ShellBand` a third target:
+          `ShellBand` bundles the session's own pane and the shell because both are terminal STREAMS
+          answering the one consent/geometry machinery in `lib/terminalSurface.ts` — the Studio is
+          neither, and its own persistent host (`StudioHost`, mounted once by `SessionsPage`) is what
+          must never be torn down by an ordinary collapse. `key={session.id}` still resets the band's
+          own open/collapsed feel per session; the Studio's own mount lives one level up. */}
+      {bottomIsStudio ? (
+        <StudioBand
+          key={session.id}
+          lang={lang}
+          open={slotLayout.bottomOpen}
+          onToggleOpen={() => setBottomOpen(!slotLayout.bottomOpen)}
+          onMoveToRight={() => moveSlotPanel('studio', 'right')}
+          onClose={() => closeSlotPanel('studio')}
+          // Claude Code and Shell join the same segment (design §1.3) — picking either DISPLACES
+          // the Studio through `panelSlots.openPanel`, asking first only when it is dirty
+          // (`showPanel`'s own `studioDisplaced` check), never a second, redundant question.
+          {...(!relayed ? { onSelectCli: () => openSlotPanel('cli', 'bottom') } : {})}
+          {...(shellEnabled && !relayed ? { onSelectShell: () => openSlotPanel('shell', 'bottom') } : {})}
+          harness={session.harness}
+          {...(onStudioBandRef ? { contentRef: onStudioBandRef } : {})}
+        />
+      ) : shellEnabled && !relayed && (
         <ShellBand
           key={session.id}
           sessionId={session.id}
@@ -237,10 +292,132 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
           {...(session.harness ? { harness: session.harness } : {})}
           lang={lang}
           theme={theme}
+          studioEnabled={editorEnabled === true}
+          onSelectStudio={() => openSlotPanel('studio', 'bottom')}
+          onSelectTerminal={id => openSlotPanel(id, 'bottom')}
+          /*
+           * `openSlotPanel`, deliberately NOT `moveSlotPanel` (C3's second half). The docked band's
+           * own `cli`/`shell` preference (`shellBand.ts`'s `target`) is never written through
+           * `panelSlots` except on an explicit tab click, so on a fresh session (or before the first
+           * click) `slotLayout.bottom` had never recorded what this band was already showing —
+           * `movePanel` refuses when its panel is not shown in EITHER slot, so "move to the right"
+           * was a silent no-op the very first time. `openPanel` places it regardless of whether
+           * `panelSlots` had ever heard of it there, which is exactly right: what the band is
+           * showing right now IS what the person means to move.
+           */
+          onMoveToRight={id => openSlotPanel(id, 'right')}
         />
       )}
     </div>
   )
+}
+
+/**
+ * StudioBand — the bottom band's OWN small bar while it holds the Studio, mirroring `ShellBand`'s
+ * desktop bar (the whole strip toggles, the collapse chevron sits on the right) without any of its
+ * terminal-target machinery. Collapsing NEVER drops the Studio: `contentRef`'s box is rendered only
+ * while `open`, and the caller (`SessionsPage`) reads that same fact as "park it" rather than
+ * "unmount it" — see `StudioHost.tsx`.
+ */
+function StudioBand({
+  lang, open, onToggleOpen, onMoveToRight, onClose, onSelectCli, onSelectShell, harness, contentRef,
+}: {
+  lang: 'pt' | 'en'
+  open: boolean
+  onToggleOpen: () => void
+  onMoveToRight: () => void
+  onClose: () => void
+  /** Present only when the target may be reached — absent, never disabled, per §1.5's gates. Picking
+   *  either DISPLACES the Studio (`openPanel('cli'|'shell', 'bottom')`), asking first only if it is
+   *  dirty — the same segment `ShellBand`'s own docked bar shows for cli/shell, now offering Studio
+   *  back the other way. */
+  onSelectCli?: () => void
+  onSelectShell?: () => void
+  harness?: string
+  contentRef?: (el: HTMLDivElement | null) => void
+}) {
+  const pt = lang === 'pt'
+  return (
+    <div style={{
+      flexShrink: 0, display: 'flex', flexDirection: 'column',
+      borderTop: '1px solid var(--border)', background: 'var(--bg-surface)',
+    }}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        aria-label={pt ? 'Abrir ou recolher o Studio' : 'Open or collapse the Studio'}
+        onClick={onToggleOpen}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggleOpen() } }}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', minHeight: 32,
+          cursor: 'pointer', userSelect: 'none',
+        }}
+      >
+        <span style={{ color: 'var(--anthropic-orange)', display: 'inline-flex' }}><FolderTree size={14} /></span>
+        <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-secondary)' }}>
+          STUDIO
+        </span>
+        {(onSelectCli || onSelectShell) && (
+          <div role="tablist" aria-label={pt ? 'Qual terminal' : 'Which terminal'} onClick={e => e.stopPropagation()}
+            style={{
+              display: 'flex', gap: 3, padding: 3, borderRadius: 8, flexShrink: 0,
+              background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+            }}
+          >
+            {([
+              ...(onSelectCli ? [['cli', targetLabel('cli', harness, lang), onSelectCli] as const] : []),
+              ...(onSelectShell ? [['shell', targetLabel('shell', harness, lang), onSelectShell] as const] : []),
+            ]).map(([id, label, onSelect]) => (
+              <button
+                key={id}
+                role="tab"
+                aria-selected={false}
+                onClick={onSelect}
+                style={{
+                  minHeight: 22, padding: '0 9px',
+                  borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+                  fontSize: 11, fontWeight: 650, border: 'none', whiteSpace: 'nowrap',
+                  background: 'transparent', color: 'var(--text-tertiary)',
+                }}
+              >{label}</button>
+            ))}
+          </div>
+        )}
+        <span style={{ flex: 1 }} />
+        <button className="ag-tap-icon"
+          onClick={e => { e.stopPropagation(); onMoveToRight() }}
+          title={pt ? 'Mover o Studio para a direita' : 'Move the Studio to the right'}
+          aria-label={pt ? 'Mover o Studio para a direita' : 'Move the Studio to the right'}
+          style={studioBandIconBtn}
+        ><PanelRightOpen size={13} /></button>
+        <button className="ag-tap-icon"
+          onClick={e => { e.stopPropagation(); onClose() }}
+          title={pt ? 'Fechar o Studio' : 'Close the Studio'}
+          aria-label={pt ? 'Fechar o Studio' : 'Close the Studio'}
+          style={studioBandIconBtn}
+        ><X size={13} /></button>
+        <button className="ag-tap-icon"
+          onClick={e => { e.stopPropagation(); onToggleOpen() }}
+          title={open ? (pt ? 'Recolher o Studio' : 'Collapse the Studio') : (pt ? 'Expandir o Studio' : 'Expand the Studio')}
+          aria-label={open ? (pt ? 'Recolher o Studio' : 'Collapse the Studio') : (pt ? 'Expandir o Studio' : 'Expand the Studio')}
+          style={studioBandIconBtn}
+        >{open ? <ChevronDown size={13} /> : <ChevronUp size={13} />}</button>
+      </div>
+      {open && (
+        <div style={{ height: 320, display: 'flex', flexDirection: 'column', padding: '0 12px 10px' }}>
+          <div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+const studioBandIconBtn: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  width: 26, height: 22, flexShrink: 0, borderRadius: 6, padding: 0,
+  border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+  color: 'var(--text-secondary)', cursor: 'pointer',
 }
 
 /** Exported: the shared App.tsx header draws the SAME segmented control for the lifted-up

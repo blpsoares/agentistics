@@ -479,18 +479,66 @@ export interface WorkflowRun {
 }
 
 /**
- * One attachment agentop typed into a session's pane, and when.
+ * One attachment agentop STORED for a session, and when.
  *
  * The record exists so a `[Image #4]` marker can find its file again: a harness that is mid-turn
  * queues an arriving message and substitutes markers for its images, so the PATH that normally
- * survives into the transcript is gone. The file is still on disk — this says which session it went
- * to. See `sessions/attachment-log.ts` (the record) and `lib/attachmentPreview.ts` (the rule).
+ * survives into the transcript is gone. The file is still on disk — this says which session it was
+ * attached to. See `sessions/attachment-web.ts` (the record) and `lib/attachmentPreview.ts` (the
+ * rule).
+ *
+ * IT IS AN UPLOAD, NOT A MESSAGE, and that distinction is the whole of `AttachmentMessage` below:
+ * `atMs` is when the file was WRITTEN, which is when the person attached it and not when they
+ * pressed enter. It stays for the records already on disk that predate the message log.
  */
 export interface AttachmentSend {
   sessionId: string
-  /** When agentop wrote the file, which is within a second of typing its path. */
+  /** When agentop wrote the file — the moment it was attached, which can be minutes before it was
+   *  sent, and a file removed from the composer before sending was written all the same. */
   atMs: number
   path: string
+}
+
+/**
+ * The stored attachments ONE message carried, recorded at the moment it was delivered.
+ *
+ * THIS IS THE MEASUREMENT `AttachmentSend` COULD ONLY INFER. Pairing markers by upload time asks
+ * "which files were written near this turn", which is not the question: the composer holds what you
+ * attached until you press enter, an attachment can be removed before that, and a second message in
+ * the same hour is another batch entirely. Measured on real data here — a message with FOUR markers
+ * sitting in a window holding SEVEN uploads (three of them a previous message's, forty minutes
+ * earlier), and another with five markers against seven uploads. Both counted as a disagreement and
+ * both drew chips, which is honest and useless.
+ *
+ * So what a message carried is read off the very text agentop types into the pane, at the moment it
+ * goes. No window arithmetic decides membership any more; the window only decides which messages a
+ * turn could have been merged from.
+ */
+export interface AttachmentMessage {
+  /**
+   * The CONVERSATION this went to, never the managed session id.
+   *
+   * A reopen mints a new managed row for the same conversation while the harness's own image
+   * numbering runs on, so a record keyed per spawn is split at exactly the moment the numbering is
+   * not — the same identity rule the rest of this product draws.
+   */
+  conversationId: string
+  /**
+   * When the message was handed over — captured BEFORE it is typed, so the record can never be
+   * stamped later than the turn the harness wrote for it.
+   */
+  atMs: number
+  /** The stored attachments it carried, in the order the message names them. */
+  paths: string[]
+  /**
+   * How many image paths the message carried in TOTAL.
+   *
+   * Equal to `paths.length` unless one of them was not a file this machine stored and can serve
+   * back — a hand-typed path, say. A message that cannot be accounted for EXACTLY resolves nothing
+   * rather than pairing the markers it can name against the wrong file, which is the same
+   * all-or-nothing rule one level up.
+   */
+  images: number
 }
 
 export interface PriceEntry {

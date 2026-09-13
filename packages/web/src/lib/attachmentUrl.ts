@@ -1,3 +1,5 @@
+import { ATTACHMENT_DIR_MARK } from './messageAttachments'
+
 /** The URL that reads an attachment back — see `GET /api/fleet/attachment` and its
  *  `resolveAttachmentRead` guard on the server. One place, so a caller never hand-builds it. */
 export function attachmentUrl(path: string): string {
@@ -51,10 +53,21 @@ export function repoMediaUrl(sessionId: string, path: string): string {
 
 /** The URL for one gallery row, whichever side it came from. ONE place, so no caller guesses. */
 export function galleryFileUrl(
-  file: { path: string; name: string; origin?: 'sent' | 'produced' },
+  file: { path: string; name: string; origin?: 'sent' | 'produced' | 'viewed' },
   sessionId: string,
 ): string {
-  return file.origin === 'produced'
-    ? sessionMediaUrl(sessionId, file.path)
-    : attachmentNameUrl(file.name)
+  if (file.origin === 'produced') return sessionMediaUrl(sessionId, file.path)
+  if (file.origin === 'viewed') {
+    // A VIEWED file was never sent and never (necessarily) written, so neither existing route's
+    // rule can be assumed — each is simply TRIED under its own, unwidened rule, and whichever
+    // actually applies is what serves it: a re-read attachment resolves by the same containment
+    // check a sent one does, one the session also wrote resolves through the write-allowlist a
+    // produced one does, and anything else 404s into the gallery's ordinary broken-image fallback.
+    // See `viewedGroups`'s own header for why this may never be widened to "anything the session
+    // read".
+    return file.path.includes(ATTACHMENT_DIR_MARK)
+      ? attachmentUrl(file.path)
+      : sessionMediaUrl(sessionId, file.path)
+  }
+  return attachmentNameUrl(file.name)
 }

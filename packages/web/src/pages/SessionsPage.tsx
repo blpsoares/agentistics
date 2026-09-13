@@ -17,9 +17,23 @@
  * a session's state by one poll interval — which is a bug people report as flicker.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+  type CSSProperties, type ReactElement, type ReactNode,
+} from 'react'
 import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
-import { ChevronLeft, FileText, FolderTree, MessagesSquare, Plus, TerminalSquare } from 'lucide-react'
+import {
+  ChevronLeft, FileText, FolderTree, MessagesSquare, PanelBottomOpen, Plus, TerminalSquare,
+  X as XIcon,
+} from 'lucide-react'
+import { StudioHost, type StudioHostProps } from '../components/sessions/StudioHost'
+import {
+  isPanelShown, mountPanel, resolveForGates, resolveForViewport, rightSlotShowing, usePanelSlots,
+  type PanelGates,
+} from '../lib/panelSlots'
+import { MENTION_ADDED_TOAST } from '../lib/mentionInsert'
+import type { HarnessId } from '@agentistics/core'
+import { getCentralMachine } from '../lib/centralMachinePick'
 import type { AppContext } from '../lib/app-context'
 import { useFleet, useFleetIndex, type FleetActionId } from '../lib/fleet'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -40,7 +54,11 @@ import {
   ASIDE_ANIM_MS, ASIDE_EASE, edgeHint, panelWidth, resolveArtifactLayout,
   type ArtifactLayout,
 } from '../lib/artifactLayout'
-import { closeArtifacts, openArtifacts, setArtifactCount, useArtifacts } from '../lib/artifactsStore'
+import {
+  closeArtifacts, openArtifacts, setArtifactCount, useArtifacts,
+} from '../lib/artifactsStore'
+import { studioMenuRow } from '../lib/studioMenuRow'
+import { restingLeftEdge, setRightAsideEdge } from '../lib/rightAsideEdge'
 import type { SessionDrilldownProps } from '../components/SessionDrilldown'
 import type { Artifact } from '../lib/sessionArtifacts'
 import { liveEvents, type LiveTurn } from '../lib/artifactTabs'
@@ -62,6 +80,81 @@ import { sessionPlanFactor } from '../lib/costBasis'
 /** The dimensions a live fleet row can be narrowed by — the same set on both layouts. */
 const FLEET_FILTER_DIMS: Array<'harnesses' | 'repos' | 'projects' | 'models'> =
   ['harnesses', 'repos', 'projects', 'models']
+
+/** Everything the Studio's one mount site (below) needs — see `mountStudioHostPanel`. */
+export interface StudioHostMountParams {
+  shown: boolean
+  sessionId: string
+  lang: 'pt' | 'en'
+  autosave: boolean
+  turns: readonly LiveTurn[]
+  onExit: () => void
+  target: HTMLElement | null
+  /** The session's own harness — picks the mention format for §6's "Mencionar seleção"/"Mencionar
+   *  na conversa" via `mentionSpec.ts`. */
+  harness?: HarnessId
+  /** Whether the composer is on screen right now — the centre's `chat`/`terminal` choice. */
+  composerMounted: boolean
+  /** Fired after either mention gesture queues a reference — see `Studio.tsx`'s own `onMention`. */
+  onMention: (result: { text: string; needsSwitch: boolean }) => void
+  /**
+   * NEVER A REAL FIELD (I4, fix wave 3) — declared `never` so a stray `key` on this params object is
+   * a TYPE ERROR at every route a value can reach `mountStudioHostPanel` through, not only a literal
+   * written directly at the call site. Before this field existed, `tsc`'s excess-property check only
+   * ever caught a `key` on a FRESH object literal passed straight into the call or a directly-typed
+   * variable declaration; a value routed through an intermediate `const params: StudioHostMountParams
+   * = {...}` first, or merged in later via `{ ...base, ...{ key } }`, is no longer "fresh" by the time
+   * it reaches the parameter, and excess-property checking does not follow it there. Naming `key` in
+   * this interface closes that: it turns the check from "is this property excess" (freshness-gated)
+   * into "is this property's type compatible" (`never`, so anything but absence fails), which TS
+   * enforces on every structural comparison regardless of literal freshness. See
+   * `studioHostMountParams.types.test.ts` for the three shapes this closes, each pinned with
+   * `// @ts-expect-error`.
+   */
+  key?: never
+}
+
+/**
+ * THE STUDIO'S ONE MOUNT SITE, pulled out to a MODULE-LEVEL function (I4) — the re-review's own
+ * finding was that `panelSlots.mountPanel.test.ts` proves `mountPanel` itself never reads a `key`
+ * out of its props, but only ever against a `Dummy` stand-in it builds by hand; the reviewer's
+ * planted regression (`key: rightIsStudio ? 'right' : 'bottom',` slipped into the literal props
+ * object at THIS call site) sailed through it untouched, and only `sessionsPage.lint.test.ts`'s
+ * source-text scan caught it. A source scan is not nothing, but the brief for this fix was explicit
+ * that it is not enough on its own.
+ *
+ * Extracting the call is what lets a test reach it: `studioHostMount.test.ts` imports this SAME
+ * function — the one `SessionsPage` itself renders below — and inspects the real
+ * `React.ReactElement` it returns, exactly as `panelSlots.mountPanel.test.ts` already does for
+ * `mountPanel` in isolation. Two changes make the regression class harder to reintroduce, not just
+ * easier to catch:
+ *  - the fields are picked EXPLICITLY rather than spread from `params` — a stray `key` added to the
+ *    params object at the call site below is dropped here before it ever reaches `mountPanel` /
+ *    `createElement`, so that half of the old gap is closed by construction, not merely detected;
+ *  - a `key` added directly to the object literal INSIDE this function (the equivalent regression,
+ *    moved one level in) is exactly what `studioHostMount.test.ts` calls this function to catch.
+ *
+ * **Neither of those made a stray `key` on the object literal AT THE CALL SITE below fail anything
+ * by itself** (fix wave 3's re-review finding) — this function's explicit field-picking absorbs it
+ * silently at runtime, so the only things that could ever notice were the source scan below
+ * (`sessionsPage.lint.test.ts`, and only for a `key` inside the LITERAL, not one routed through a
+ * variable) and a human reading the diff. `StudioHostMountParams.key: never` (its own doc comment,
+ * above) is what makes the call site itself fail to type-check for every shape measured, including
+ * the two a source scan structurally cannot see.
+ */
+export function mountStudioHostPanel(params: StudioHostMountParams): ReactElement<StudioHostProps> | null {
+  return mountPanel(params.shown, StudioHost, {
+    sessionId: params.sessionId,
+    lang: params.lang,
+    autosave: params.autosave,
+    turns: params.turns,
+    onExit: params.onExit,
+    target: params.target,
+    harness: params.harness,
+    composerMounted: params.composerMounted,
+    onMention: params.onMention,
+  })
+}
 
 export default function SessionsPage() {
   const ctx = useOutletContext<AppContext>()
@@ -150,6 +243,14 @@ export default function SessionsPage() {
    */
   const editorEnabled = ctx.editorEnabled === true
   const editorAutosave = ctx.editorAutosave
+  /**
+   * Is THIS session reached through a central's relay? The same fact `SessionPanel` reads for the
+   * same reason: a relayed session's `cli`/`shell` panes have no stream here at all (`/api/fleet` is
+   * refused whole on a central), so those two switcher entries — and a `bottom`/`right` slot that
+   * still names one from before the connection changed — must read as absent, never as present and
+   * refusing. See `lib/panelSlots.ts`'s `resolveForGates`.
+   */
+  const relayed = getCentralMachine() !== null
 
   /**
    * WHERE A REOPEN LANDS — one place, for all three controls on this page that can perform one.
@@ -256,6 +357,33 @@ export default function SessionsPage() {
     else next.set('view', v)
     return next
   }, { replace: true })
+
+  /**
+   * "Adicionado à mensagem" (§6, `mentionInsert.ts`'s `MENTION_ADDED_TOAST`) — a LOCAL, ephemeral
+   * acknowledgement, not the server-side notification bell (`lib/notifications.ts`'s
+   * `pushNotification`, which persists a row and is for account-wide events, not a one-off UI
+   * confirmation). Shown only when a mention gesture fired `needsSwitch` — the composer was not on
+   * screen, so the reader has nothing else telling them the reference landed. `useState` + a plain
+   * `setTimeout`, the same shape `RepoFileEditor.tsx`'s own `SAVED_NOTICE_MS` already uses.
+   */
+  const [mentionNotice, setMentionNotice] = useState(false)
+  useEffect(() => {
+    if (!mentionNotice) return
+    const t = setTimeout(() => setMentionNotice(false), 3000)
+    return () => clearTimeout(t)
+  }, [mentionNotice])
+  /**
+   * The ONE handler both Studio mention gestures fire through (the tree's "Mencionar na conversa"
+   * and, via `EditorStack`, Monaco's "Mencionar seleção") — see `Studio.tsx`'s own `onMention` prop.
+   * The reference is queued into the draft store either way (`composerStore.ts` survives the
+   * composer not being mounted yet); this only switches the centre and raises the toast when the
+   * composer was NOT on screen to show the reader anything happened.
+   */
+  const onStudioMention = (result: { text: string; needsSwitch: boolean }) => {
+    if (!result.needsSwitch) return
+    setSessionView('chat')
+    setMentionNotice(true)
+  }
 
   /** The fleet as the aside is showing it — one narrowing, read by both. */
   const overviewRows = useMemo(
@@ -375,6 +503,33 @@ export default function SessionsPage() {
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
   }, [artWidth])
   const art = useArtifacts()
+  /**
+   * WHERE THE STUDIO, CLI AND SHELL SIT — `lib/panelSlots.ts`, design §1. `resolveForViewport` is
+   * the phone reading: a stored `bottom: 'studio'` becomes the fullscreen right sheet without
+   * rewriting what a desktop would see. `rightSlotEl` / `bottomStudioEl` are the physical DOM boxes
+   * `StudioHost` moves its persistent carrier into — see that component's own header for why a MOVE
+   * must never be a remount.
+   *
+   * `resolveForGates` is applied on TOP of that, for the same reason and the same way: a layout
+   * stored while `editorEnabled` (or `shellEnabled`, or a local session) was true must not render an
+   * empty, unclosable pane the moment the gate closes — turning the switch off in Settings, opening
+   * a different, relayed session, reloading on a machine where the preference has changed. Neither
+   * resolution rewrites storage; turning the gate back on restores the layout exactly as it was left.
+   */
+  const { layout: rawSlotLayout, openPanel: openSlotPanel, closePanel: closeSlotPanel, movePanel: moveSlotPanel } = usePanelSlots()
+  const panelGates: PanelGates = { editorEnabled, shellEnabled, relayed }
+  const slotLayout = resolveForGates(resolveForViewport(rawSlotLayout, isMobile), panelGates)
+  const rightIsStudio = slotLayout.right === 'studio'
+  const rightIsCli = slotLayout.right === 'cli'
+  const rightIsShell = slotLayout.right === 'shell'
+  const bottomIsStudio = slotLayout.bottom === 'studio'
+  const [rightSlotEl, setRightSlotEl] = useState<HTMLDivElement | null>(null)
+  const [bottomStudioEl, setBottomStudioEl] = useState<HTMLDivElement | null>(null)
+  /** `null` PARKS the Studio — mounted, hidden, taking no space — which is also what a COLLAPSED
+   *  bottom band holding it means: collapsing must not be a way to lose a buffer. */
+  const studioTarget: HTMLElement | null = rightIsStudio
+    ? rightSlotEl
+    : bottomIsStudio && slotLayout.bottomOpen ? bottomStudioEl : null
   const onArtifacts = useCallback((a: { artifacts: Artifact[]; loading: boolean; unavailable?: string; older?: string; unlisted: boolean; turns: readonly LiveTurn[] }) => {
     setArtifacts(a.artifacts)
     setArtifactTurns(a.turns)
@@ -403,7 +558,12 @@ export default function SessionsPage() {
    */
 
   const artLayout = resolveArtifactLayout({
-    open: art.open && selected !== undefined,
+    // The RIGHT SLOT is open whenever Contents wants it OR panelSlots has put the Studio, Claude
+    // Code or the Shell there — opening any of the three from a switcher must show the box even
+    // though none of them touch `art.open`; see `StudioHost.tsx` and `lib/panelSlots.ts`. Missing
+    // `rightIsCli`/`rightIsShell` here is exactly the shape of bug this comment already warns
+    // about for the Studio: the switcher can pick the panel and the box never opens to show it.
+    open: (art.open || rightIsStudio || rightIsCli || rightIsShell) && selected !== undefined,
     width: typeof window === 'undefined' ? 1440 : window.innerWidth,
     isMobile,
     // Phase B ships without the reversal control; the split-rail default is what the plan measured.
@@ -559,10 +719,6 @@ export default function SessionsPage() {
       unlistedWrites={artifactsUnlisted}
       {...(outsideNote ? { outsideNote } : {})}
       turns={artifactTurns}
-      // The repository explorer's gate and its autosave switch. The gate decides whether the tab
-      // exists at all — see `ArtifactsAsideProps`.
-      editorEnabled={editorEnabled}
-      editorAutosave={editorAutosave}
       tabRequest={art.tabRequest}
       // The session itself, for the TASKS tab: what it is filed under, and the composer that files
       // it somewhere new without leaving the session you are sitting in.
@@ -583,15 +739,142 @@ export default function SessionsPage() {
   )
 
   /**
-   * THE QUESTION BEFORE THE PANE IS DROPPED — asked at THIS level because this is the level that
-   * drops it. `artShell === 'none'` unmounts `ArtifactsAside`, the Studio's `Layer` and every Monaco
-   * model with it; the Studio keeps its buffers through everything INSIDE the panel and asks before
-   * closing one dirty tab, and none of that could see the panel itself being closed or the page
-   * navigating away. Autosave is off by default, so that was three typed lines gone 260 ms after a
-   * press on the panel's close, with nothing asked.
+   * THE RIGHT SLOT'S OWN SWITCHER (design §1.3) — `Conteúdo · Studio · Claude Code · Shell`, an
+   * entry ABSENT (never greyed) wherever its gate is closed. `Contents` keeps going through the OLD
+   * `artifactsStore`, deliberately: `contents` is `panelSlots.ts`'s own `PanelId` too, but this
+   * routes only `studio`/`cli`/`shell` through it, so a request for Contents never touches this
+   * store — see `panelSlots.showPanel`'s own doc comment. `cli`/`shell` are desktop-only here: on a
+   * phone they open as today's dedicated fullscreen pane instead (design §1.6), so the entries are
+   * absent under `isMobile` rather than opening an inline pane `resolveForViewport` never reads.
+   */
+  const rightActivePanel: 'studio' | 'cli' | 'shell' | null = rightIsStudio
+    ? 'studio' : rightIsCli ? 'cli' : rightIsShell ? 'shell' : null
+  // The 44px mobile touch target is PROJECTED by the `.ag-tap-icon` class already on both buttons
+  // below (`index.css`'s invisible-hitbox rule), never painted here — a literal `width/height:
+  // isMobile ? 44` on an icon button is the exact shape `touchTarget.lint.test.ts` refuses: the
+  // painted box would be three times the icon inside it.
+  const rightSlotIconBtn: CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: 24, height: 22, flexShrink: 0, borderRadius: 6, padding: 0,
+    border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+    color: 'var(--text-secondary)', cursor: 'pointer',
+  }
+  const rightSwitcher = selected ? (
+    <div role="tablist" aria-label={pt ? 'O que mostrar' : 'What to show'} style={{
+      display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, flexWrap: 'wrap',
+      padding: '4px 6px', borderBottom: '1px solid var(--border)',
+    }}>
+      {(
+        [
+          { id: 'contents' as const, label: pt ? 'Conteúdo' : 'Contents', icon: <FileText key="c" size={12} />, on: rightSlotShowing(slotLayout, art.open) === 'contents', shown: true },
+          { id: 'studio' as const, label: 'Studio', icon: <FolderTree key="s" size={12} />, on: rightIsStudio, shown: editorEnabled === true },
+          { id: 'cli' as const, label: targetLabel('cli', selected.harness, pt ? 'pt' : 'en'), icon: <TerminalSquare key="cli" size={12} />, on: rightIsCli, shown: !isMobile && !relayed },
+          { id: 'shell' as const, label: targetLabel('shell', selected.harness, pt ? 'pt' : 'en'), icon: <TerminalSquare key="sh" size={12} />, on: rightIsShell, shown: !isMobile && shellEnabled === true && !relayed },
+        ]
+      ).filter(entry => entry.shown).map(({ id, label, icon, on }) => (
+        <button
+          key={id}
+          role="tab"
+          aria-selected={on}
+          onClick={() => {
+            // `openArtifacts()` itself displaces a right-slot panel, asking first when it is the
+            // Studio and dirty (`lib/artifactsStore.ts`) — a separate `closeSlotPanel` here would
+            // ask a second, redundant question and could open Contents before the first is answered.
+            if (id === 'contents') openArtifacts()
+            else openSlotPanel(id, 'right')
+          }}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 5,
+            minHeight: isMobile ? 44 : 22, padding: isMobile ? '0 14px' : '4px 9px',
+            borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+            fontSize: 11.5, fontWeight: on ? 700 : 500,
+            background: on ? 'var(--bg-elevated)' : 'transparent',
+            color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
+          }}
+        >{icon}{label}</button>
+      ))}
+      <span style={{ flex: 1 }} />
+      {/* "MOVE TO BOTTOM" is ABSENT on mobile — a phone has no bottom slot at all (`dockedAllowed`
+          in `lib/terminalSurface.ts`), so it would move a panel somewhere `resolveForViewport`
+          immediately reads back as the right sheet it already is. */}
+      {rightActivePanel && !isMobile && (
+        <button className="ag-tap-icon"
+          onClick={() => moveSlotPanel(rightActivePanel, 'bottom')}
+          title={pt ? 'Mover para baixo' : 'Move to the bottom'}
+          aria-label={pt ? 'Mover para baixo' : 'Move to the bottom'}
+          style={rightSlotIconBtn}
+        ><PanelBottomOpen size={13} /></button>
+      )}
+      {/* CLOSE — the review's C1/I3 finding: the right slot had a way IN for the Studio (and now
+          cli/shell) but no way OUT beside displacing it with another panel. Closing the Studio asks
+          first when dirty, through the very `hidePanel` `closeSlotPanel` already calls. */}
+      {rightActivePanel && (
+        <button className="ag-tap-icon"
+          onClick={() => closeSlotPanel(rightActivePanel)}
+          title={pt ? 'Fechar' : 'Close'}
+          aria-label={pt ? 'Fechar' : 'Close'}
+          style={rightSlotIconBtn}
+        ><XIcon size={13} /></button>
+      )}
+    </div>
+  ) : null
+
+  /** What the right box actually shows: the Studio's own target (StudioHost re-parents its carrier
+   *  into it) while `panelSlots` says so; `cli`/`shell` render their own `TerminalRegion`/`ShellBand`
+   *  with `placement="aside"` (design §1.5) — ordinary mounts, no persistent carrier needed since
+   *  neither holds a buffer that must survive the move; `ArtifactsAside` otherwise. */
+  const rightSlotContent = rightIsStudio ? (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
+      {rightSwitcher}
+      <div ref={setRightSlotEl} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }} />
+    </div>
+  ) : rightIsCli && selected ? (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
+      {rightSwitcher}
+      <div style={{ flex: 1, minHeight: 0, padding: 10, display: 'flex', flexDirection: 'column' }}>
+        <TerminalRegion
+          placement="aside"
+          id={selected.id}
+          theme={theme === 'light' ? 'light' : 'dark'}
+          lang={pt ? 'pt' : 'en'}
+          fill
+          {...(rowIndex.get(selected.id) ? { row: rowIndex.get(selected.id)! } : {})}
+          act={act}
+        />
+      </div>
+    </div>
+  ) : rightIsShell && selected ? (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
+      {rightSwitcher}
+      <div style={{ flex: 1, minHeight: 0, padding: 10, display: 'flex', flexDirection: 'column' }}>
+        <ShellBand
+          key={`aside-${selected.id}`}
+          placement="aside"
+          sessionId={selected.id}
+          {...(selected.cwd ? { cwd: selected.cwd } : {})}
+          {...(selected.harness ? { harness: selected.harness } : {})}
+          lang={pt ? 'pt' : 'en'}
+          theme={theme === 'light' ? 'light' : 'dark'}
+        />
+      </div>
+    </div>
+  ) : (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
+      {rightSwitcher}
+      {artifactsPane}
+    </div>
+  )
+
+  /**
+   * THE QUESTION BEFORE A NAVIGATION DROPS THE STUDIO — asked at THIS level because this is where
+   * the page can still hold it. `artShell === 'none'` unmounts `ArtifactsAside`, which owns no Monaco
+   * buffers of its own any more: the Studio is its own panel now (`lib/panelSlots.ts`), and closing
+   * or displacing IT asks first through `showPanel` / `hidePanel` at the point it is closed or
+   * displaced — the very same `unsavedBuffers.ts` this guard also watches. What this guard is for is
+   * the drop NEITHER of those functions can see: the page navigating away while the Studio, wherever
+   * it currently sits, still holds unsaved buffers.
    *
-   * The guard holds every drop that has a moment to be held: the close (`closeArtifacts` asks through
-   * `unsavedBuffers.ts`), every router navigation that leaves this session's page — another session,
+   * It holds every such drop: every router navigation that leaves this session's page — another session,
    * the dedicated terminal, `SideNav`, and on a phone the arrival of a new session, which is a
    * navigation first — the browser's own Back/Forward (a `popstate` listener
    * registered in `main.tsx` BEFORE the first render, because in Chromium window listeners run in
@@ -628,6 +911,10 @@ export default function SessionsPage() {
       onArtifacts={onArtifacts}
       // The capability AND the user's switch, as the server reports them. Absent reads as OFF.
       shellEnabled={shellEnabled}
+      // Gates whether the BOTTOM band may ever show the Studio, and hands it the DOM box
+      // `StudioHost` (mounted once, here in `SessionsPage`) moves its persistent carrier into.
+      editorEnabled={editorEnabled}
+      onStudioBandRef={setBottomStudioEl}
       // The terminal's own screen. A route, so it survives a reload and can be sent to somebody.
       onOpenTerminal={() => navigate(dedicatedTerminalPath(selected.id))}
       onOpenShellFullscreen={() => navigate(dedicatedTerminalPath(selected.id, 'shell'))}
@@ -997,6 +1284,64 @@ export default function SessionsPage() {
     : { display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }
 
   /**
+   * THE ASIDE'S OWN LEFT EDGE, MEASURED — reported through `rightAsideEdge.ts` so `App.tsx`'s
+   * Filtros panel (a different file, no ancestor of this one) can stop short of it. See that
+   * module's own doc comment for why this is not folded into `artifactsStore`.
+   *
+   * Re-measured on every cause the edge can move: the aside's OWN box changing size (the drag
+   * handle above, or the `split` shell's own width transition — `ResizeObserver` on `artOuter`
+   * itself) and the ROOM around it changing without the aside's own box changing size at all (a
+   * sidebar drag or a window resize shrinks `splitRef`, which shifts an `overlay` aside's `right: 0`
+   * position with no size change of its own — `ResizeObserver` would miss that, `splitRoom` catches
+   * it, because it is already recomputed for exactly that set of causes; see `panelWidth`, above).
+   *
+   * **The `overlay` shell (below `SPLIT_MIN_WIDTH`) opens on `transform` alone — `width` never
+   * changes — so `ResizeObserver` never fires for it at all**, reported by review as a Critical: the
+   * one synchronous `report()` this effect used to make was also the LAST one, taken while the aside
+   * still sat translated off-screen (its mount-time `translateX(100%)`), and nothing corrected it
+   * until an unrelated cause re-ran the effect — the Filtros panel then measured "plenty of room"
+   * against a box that had since visually slid into view, reproducing the original occlusion on an
+   * ordinary first open. Two changes close it: `report()` reads `restingLeftEdge`, which discounts
+   * the box's own `translateX` and so answers with the SETTLED position regardless of where the
+   * slide currently sits (correct even at that very first off-screen frame); and the effect also
+   * re-measures on the box's own `transitionend`/`transitioncancel` (filtered to the `transform`
+   * property, so an unrelated child transition cannot trigger it) and whenever `asideIn` itself
+   * flips, as a second line of defense for whatever `restingLeftEdge` cannot see.
+   *
+   * `getBoundingClientRect()`, not the observer's own `contentRect` — that rect is relative to the
+   * element's OWN padding box, not the viewport, so it cannot answer "where is this on screen."
+   */
+  const rightAsideRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const el = rightAsideRef.current
+    if (isMobile || artShell === 'none' || artShell === 'fullscreen' || !el) {
+      setRightAsideEdge(null)
+      return
+    }
+    const report = () => {
+      const rect = el.getBoundingClientRect()
+      setRightAsideEdge(restingLeftEdge(rect.left, getComputedStyle(el).transform))
+    }
+    report()
+    const onTransformSettled = (e: TransitionEvent) => {
+      if (e.propertyName === 'transform') report()
+    }
+    el.addEventListener('transitionend', onTransformSettled)
+    el.addEventListener('transitioncancel', onTransformSettled)
+    let ro: ResizeObserver | undefined
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(report)
+      ro.observe(el)
+    }
+    return () => {
+      ro?.disconnect()
+      el.removeEventListener('transitionend', onTransformSettled)
+      el.removeEventListener('transitioncancel', onTransformSettled)
+    }
+  }, [isMobile, artShell, splitRoom, asideIn])
+  useEffect(() => () => setRightAsideEdge(null), [])
+
+  /**
    * What the pane sits beside or under. A VALUE, never a `return`: the moment one of these is
    * returned on its own, the pane it was meant to share a parent with is at a different index.
    */
@@ -1191,16 +1536,19 @@ export default function SessionsPage() {
                  aside reads, the server's own already-resolved answer with a CENTRAL already
                  subtracted where the app publishes it (`lib/editorGate.ts`): the `/api/fleet`
                  prefix is refused on a central, and this row used to be the one entry that
-                 offered the Studio there. The `new` badge is the
-                 pair to the desktop button's two marks, as far as one row of a 240px menu can
-                 carry: the beta caveat is on the Studio's own top bar, one tap away. */
-              ...(editorEnabled ? [{
-                id: 'studio',
-                label: 'Studio',
-                icon: <FolderTree size={15} />,
-                badge: pt ? 'novo' : 'new',
-                onSelect: () => openArtifacts('studio'),
-              }] : []),
+                 offered the Studio there.
+                 NO `badge` ANY MORE (see §2 of the slots/references design): the desktop button
+                 dropped its `NewTag` for a dot that clears after the first open, and a row with
+                 no icon corner to put a dot on just drops the mark rather than keeping a word the
+                 other nav lost. The beta caveat stays on the Studio's own top bar, one tap away.
+                 `on: isPanelShown(slotLayout, 'studio')` mirrors the desktop button's pressed
+                 state — the same `panelSlots.ts` layout, so a reader who opened the Studio from
+                 THIS row and then came back to the menu finds it marked current. Built by
+                 `studioMenuRow` (above `SessionsPage`) rather than as a literal here, so its `on`
+                 wiring is asserted directly — see `SessionsPage.test.tsx`. */
+              ...(editorEnabled
+                ? [studioMenuRow(isPanelShown(slotLayout, 'studio'), <FolderTree size={15} />, () => openArtifacts('studio'))]
+                : []),
             ]}
           />
         )}
@@ -1410,12 +1758,66 @@ export default function SessionsPage() {
         /> : null}
       {/* THE ONE PANE. See the block comment at the top of this section. */}
       {artShell === 'none' ? null : (
-        <div style={artOuter}>
-          <div style={artInner}>{artifactsPane}</div>
+        <div style={artOuter} ref={rightAsideRef}>
+          <div style={artInner}>{rightSlotContent}</div>
         </div>
       )}
+      {/* THE STUDIO'S OWN PERSISTENT HOST — a SIBLING of the pane above, never nested inside its
+          `artShell === 'none'` branch: the Studio can be shown in the BOTTOM band while the right
+          pane is fully closed, and nesting it there would unmount it the moment that pane closed.
+          Mounted only once the reader has actually opened it (`isPanelShown`), and only while the
+          gate is open — the same two conditions `ArtifactsAside`'s own Studio mount used to read
+          before this feature moved the Studio out of it.
+
+          MOUNTED THROUGH `mountStudioHostPanel` (module-level, above), not a hand-written
+          `cond && (<StudioHost .../>)`: a move (right↔bottom) changes `target` below without
+          changing WHETHER this is shown, and `mountPanel` (`lib/panelSlots.ts`) inside that function
+          is what makes "no `key=` of its own, exactly one call site" a fact about a function every
+          caller shares rather than a rule this page has to keep re-observing. `sessionsPage.lint.
+          test.ts`'s own I4 block pins this call SITE's literal (a `key` at ANY field position fails
+          it — fix wave 3 restored the whole-literal scan a prior fix wave had narrowed to an
+          occurrence count), `panelSlots.mountPanel.test.ts` pins `mountPanel` itself, and
+          `studioHostMount.test.ts` (I4) calls `mountStudioHostPanel` DIRECTLY and inspects the real
+          `React.ReactElement` it returns. **None of those three is what makes a stray `key` on the
+          object literal below impossible to compile** — a source scan and a call through the real
+          function both stay green for a `key` reached only via an intermediate typed variable, which
+          neither one ever executes or reads. `StudioHostMountParams.key: never` (its own doc comment)
+          is the one guarantee that closes that: it fails `tsc` for the literal below AND for that
+          routed shape, pinned in `studioHostMountParams.types.test.ts`. */}
+      {selected && mountStudioHostPanel({
+        shown: editorEnabled === true && isPanelShown(slotLayout, 'studio'),
+        sessionId: selected.id,
+        lang: pt ? 'pt' : 'en',
+        autosave: editorAutosave === true,
+        turns: artifactTurns,
+        // `Studio.tsx`'s own bar is a bare close control now (W1-A): `onExit` closes the panel
+        // outright, the closest reading of "leave" the slots model has — displacing it never asks,
+        // closing it does.
+        onExit: () => closeSlotPanel('studio'),
+        target: studioTarget,
+        harness: selected.harness as HarnessId,
+        composerMounted: sessionView === 'chat',
+        onMention: onStudioMention,
+      })}
       {/* Mobile-only chrome, and a slot that is always here so it can never shift the pane. */}
       {isMobile ? filtersSheet : null}
+      {/* §6's "Adicionado à mensagem" — see `onStudioMention` above. `position: fixed` rather than
+          relying on an ancestor's own positioning, since this page's several return branches do not
+          all share one — the same reason `role="status"` is used everywhere else a sentence appears
+          and disappears on its own (`Studio.tsx`'s `StudioToast`). */}
+      {mentionNotice && (
+        <div
+          role="status"
+          style={{
+            position: 'fixed', left: '50%', bottom: isMobile ? 78 : 14, transform: 'translateX(-50%)',
+            zIndex: 60, padding: '7px 14px', borderRadius: 10,
+            background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+            boxShadow: 'var(--ag-shadow-pop)', fontSize: 12.5, color: 'var(--text-primary)',
+          }}
+        >
+          {MENTION_ADDED_TOAST[pt ? 'pt' : 'en']}
+        </div>
+      )}
       {/* LAST, and always present, so adding it shifted no slot above. The return that holds the
           pane holds the question asked before the pane is dropped — see `leaveGuard`. */}
       {leaveGuard}

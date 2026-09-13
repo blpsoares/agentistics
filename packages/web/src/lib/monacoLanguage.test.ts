@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
-import { languageForPath, languageIdsInUse } from './monacoLanguage'
+import { JSON_DIAGNOSTICS_OVERRIDE, languageForPath, languageIdsInUse } from './monacoLanguage'
 
 describe('languageForPath', () => {
   test('maps common extensions to Monaco language ids', () => {
@@ -63,6 +63,35 @@ describe('languageForPath', () => {
     expect(languageForPath('script.fsx')).toBe('fsharp')
   })
 
+  // --- the niche-file audit (Docker variants, HCL, config files with no grammar here) -------------
+  test('Containerfile and the *.dockerfile extension get the same grammar as Dockerfile', () => {
+    expect(languageForPath('Containerfile')).toBe('dockerfile')
+    expect(languageForPath('build/Containerfile')).toBe('dockerfile')
+    expect(languageForPath('app.dockerfile')).toBe('dockerfile')
+  })
+  test('Terraform/HCL, a grammar this bundle already ships and the table did not claim', () => {
+    expect(languageForPath('main.tf')).toBe('hcl')
+    expect(languageForPath('terraform.tfvars')).toBe('hcl')
+    expect(languageForPath('network.hcl')).toBe('hcl')
+  })
+  test('docker-compose*.yml and compose*.yml already resolve through the plain YAML rule', () => {
+    expect(languageForPath('docker-compose.yml')).toBe('yaml')
+    expect(languageForPath('compose.override.yaml')).toBe('yaml')
+  })
+  test('files with no grammar in this bundle at all are PLAINTEXT, said explicitly', () => {
+    expect(languageForPath('common.mk')).toBe('plaintext')
+    expect(languageForPath('Justfile')).toBe('plaintext')
+    expect(languageForPath('Procfile')).toBe('plaintext')
+    expect(languageForPath('.gitignore')).toBe('plaintext')
+    expect(languageForPath('.gitattributes')).toBe('plaintext')
+    expect(languageForPath('.dockerignore')).toBe('plaintext')
+    // `nginx.conf`/`Caddyfile`: no grammar exists either, and neither carries a NAME_LANGUAGE or
+    // EXT_LANGUAGE entry of its own — this is the unmapped fallback, exercised explicitly so the
+    // audit is not merely inferred from the rule three lines above `languageForPath`'s `return`.
+    expect(languageForPath('nginx.conf')).toBe('plaintext')
+    expect(languageForPath('Caddyfile')).toBe('plaintext')
+  })
+
   // --- `.env` ------------------------------------------------------------------------------------
   describe('.env files highlight, including the variants people actually have', () => {
     test('the bare name, which has no extension to key on', () => {
@@ -87,6 +116,31 @@ describe('languageForPath', () => {
       expect(languageForPath('setup.ini')).toBe('ini')
       expect(languageForPath('app.properties')).toBe('ini')
     })
+  })
+
+  // --- I3: tsconfig*.json / *.jsonc, and the shell extensions the audit found untested -------------
+  test('shell scripts, the extensions the niche-file audit found with no dedicated test', () => {
+    for (const p of ['deploy.sh', 'setup.bash', 'profile.zsh']) {
+      expect(languageForPath(p), p).toBe('shell')
+    }
+  })
+  test('tsconfig*.json and *.jsonc stay the ordinary `json` language id', () => {
+    // There is no separate `'jsonc'` id — see `JSON_DIAGNOSTICS_OVERRIDE`'s own header for why the
+    // comment/trailing-comma leniency these files need is a GLOBAL diagnostics change instead, applied
+    // by `RepoFileEditor.tsx` once `jsonDefaults` loads. This only pins that the mapping itself never
+    // changed underneath that decision.
+    for (const p of ['tsconfig.json', 'tsconfig.base.json', 'packages/web/tsconfig.json', 'a.jsonc']) {
+      expect(languageForPath(p), p).toBe('json')
+    }
+  })
+})
+
+describe('JSON_DIAGNOSTICS_OVERRIDE', () => {
+  test('relaxes exactly the two diagnostics the review caught firing on tsconfig.json/*.jsonc', () => {
+    // "Comments are not permitted in JSON.(521)" and the matching trailing-comma diagnostic — see the
+    // review's I3 repro. `allowComments`/`schemas`/etc. are deliberately left at Monaco's own
+    // defaults; only these two severities move.
+    expect(JSON_DIAGNOSTICS_OVERRIDE).toEqual({ comments: 'ignore', trailingCommas: 'ignore' })
   })
 })
 
@@ -130,8 +184,17 @@ describe('languageIdsAreRegistered', () => {
    *
    * The commented form still cannot reach the `id:` scan below now: a line whose first non-space
    * characters are `//` (or ` *`) does not start with `import`.
+   *
+   * **NOR CAN A DECLARATION THAT MERELY NAMES ONE.** Anchoring at line start closed the leading-`//`
+   * shape, but `export const OK = true // import '.../register'` and `export const DROPPED = ['.../
+   * register']` both START with `export` and still carry the quoted path — so a genuinely deleted
+   * import survived as a trailing comment or a plain array literal and this scan went on reporting
+   * the grammar present. `(?!\s+(?:type|const|let|var|function|class|interface|enum|namespace)\b)`
+   * excludes every declaration shape a real specifier clause is never written as; a bare side-effect
+   * `import '...'` (what `monacoEntry.ts` writes for every grammar) is unaffected.
    */
-  const SPECIFIER = /^\s*(?:import|export)\b[^\n]*?['"]([^'"\n]+)['"]/gm
+  const SPECIFIER =
+    /^\s*(?:import|export)\b(?!\s+(?:type|const|let|var|function|class|interface|enum|namespace)\b)[^\n]*?['"]([^'"\n]+)['"]/gm
   /** …of which these are the ones that register a language. */
   const LANG_SUBPATH = /^monaco-editor\/(languages\/(?:definitions|features)\/[^/]+)\/register$/
 
@@ -184,5 +247,22 @@ describe('languageIdsAreRegistered', () => {
     expect(languageForPath('bunfig.toml')).toBe('ini')
     expect(languageForPath('App.vue')).toBe('html')
     expect(languageForPath('Makefile')).toBe('plaintext')
+  })
+
+  /**
+   * `SPECIFIER` was anchored at line start (Shape A, closed above), which stops a leading `//` from
+   * reaching it — but a line that genuinely STARTS with `export`/`import` and only later carries a
+   * `//` or a plain array literal still slips through, because nothing about "starts with import or
+   * export" tells a real specifier clause apart from a declaration that merely NAMES one as a
+   * string. Both shapes below would let a dropped grammar keep reading as "still imported".
+   */
+  test('the specifier scan is not fooled by a declaration that only NAMES a register path', () => {
+    const trailingComment = "export const OK = true // import 'monaco-editor/languages/definitions/lua/register'"
+    const arrayLiteral = "export const DROPPED_GRAMMARS = ['monaco-editor/languages/definitions/lua/register']"
+    expect([...trailingComment.matchAll(SPECIFIER)]).toEqual([])
+    expect([...arrayLiteral.matchAll(SPECIFIER)]).toEqual([])
+    // The scan must still see the real thing: a bare side-effect import, exactly what monacoEntry.ts
+    // writes for every grammar.
+    expect([...("import 'monaco-editor/languages/definitions/lua/register'").matchAll(SPECIFIER)].length).toBe(1)
   })
 })

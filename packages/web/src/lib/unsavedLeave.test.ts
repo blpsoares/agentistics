@@ -271,6 +271,52 @@ describe('createPopGuard', () => {
     b.back()
     expect(b.routerSaw[0]).toBe(0)
   })
+
+  test('a genuinely new pop that arrives before the undo\'s own popstate is not swallowed as if it were the undo', () => {
+    // Two moves close together: the browser's own undo (from our first `history.go`) has not yet
+    // fired its popstate when a second, unrelated navigation pops. A guard that treats "the next pop"
+    // as its own undo — rather than checking it actually landed on the index it expects — would
+    // consume this second, real navigation silently: nothing asked, nothing undone, the reader's own
+    // Back simply does nothing.
+    let listener: ((e: PopEventLike) => void) | null = null
+    const goCalls: number[] = []
+    const win: PoppableWindow = {
+      addEventListener: (_t, l) => { listener = l },
+      removeEventListener: () => { listener = null },
+      history: { go: delta => { goCalls.push(delta) } },
+      location: { pathname: '/sessions/s1' },
+    }
+    const guard = createPopGuard(win)
+    guard.listen()
+    let holdCalls = 0
+    guard.arm({ lastIndex: () => 5, hold: () => { holdCalls++; return true }, onHold: run => holdIfUnsaved('leave', run) })
+    reportUnsaved('studio', ['a.ts'])
+
+    // The reader's Back: the browser has already moved to idx 4. The guard holds it and undoes it —
+    // `history.go(1)` puts the URL back on 5 — expecting ITS OWN undo to land there.
+    let stopped1 = false
+    listener!({ state: { idx: 4 }, stopImmediatePropagation: () => { stopped1 = true } })
+    expect(stopped1).toBe(true)
+    expect(holdCalls).toBe(1)
+    expect(goCalls).toEqual([1])
+
+    // Before that undo's own popstate reaches this listener, a SECOND, unrelated pop arrives — the
+    // browser moving to idx 6, nothing to do with the pending undo. It must be evaluated as its own
+    // navigation, not consumed as the swallowed undo of the first.
+    let stopped2 = false
+    listener!({ state: { idx: 6 }, stopImmediatePropagation: () => { stopped2 = true } })
+    expect(holdCalls).toBe(2)
+    expect(stopped2).toBe(true)
+    expect(goCalls).toEqual([1, -1])
+
+    // The real undo for the FIRST pop finally arrives, landing on 5 exactly as expected — swallowed
+    // silently, no re-ask, no extra `history.go` call.
+    let stopped3 = false
+    listener!({ state: { idx: 5 }, stopImmediatePropagation: () => { stopped3 = true } })
+    expect(stopped3).toBe(true)
+    expect(holdCalls).toBe(2)
+    expect(goCalls).toEqual([1, -1])
+  })
 })
 
 describe('unsavedLeaveText', () => {

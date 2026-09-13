@@ -89,22 +89,38 @@ import {
 } from 'react'
 import { AlertTriangle, Check, Eye, File, Loader, RotateCcw, Save } from 'lucide-react'
 import type * as Monaco from 'monaco-editor'
-import { languageForPath } from '../../lib/monacoLanguage'
-import { codeThemeName, defineAgentisticsThemes } from '../../lib/monacoTheme'
+import { languageForPath, JSON_DIAGNOSTICS_OVERRIDE } from '../../lib/monacoLanguage'
+import { codeThemeName, defineAgentisticsThemes, type CodeThemeVariant } from '../../lib/monacoTheme'
 import {
   isWriteConflict, readRepoFile, writeRepoFile,
   type ReadFileResult, type RepoLang, type RepoMediaKind, type WriteFileResult,
 } from '../../lib/repoApi'
 import { repoMediaUrl } from '../../lib/attachmentUrl'
 import { editorSaveText } from '../../lib/editorSaveText'
+import { MarkdownPreview } from './MarkdownPreview'
+import { MermaidDiagram } from './MermaidDiagram'
 import { repoFailureText } from '../../lib/repoErrorText'
 import { formatBytes } from '../../lib/gallery'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { RepoNote } from './repoNote'
+import { insertMention, mentionTargetForSelection } from '../../lib/mentionInsert'
+import type { HarnessId } from '@agentistics/core'
 
 // What `loadMonaco()` RESOLVES — `monacoEntry`, not the barrel. The barrel's type promised
 // `typescript` and `lsp`, which that module does not have; see `monacoSetup.ts`'s `Monaco`.
 type MonacoModule = typeof import('../../lib/monacoEntry')
+
+// I3: applied exactly once, idempotently — see `JSON_DIAGNOSTICS_OVERRIDE`'s own header
+// (`monacoLanguage.ts`) for why this is a GLOBAL relaxation rather than a second language id.
+let jsonDiagnosticsConfigured = false
+function configureJsonDiagnostics(monaco: MonacoModule): void {
+  if (jsonDiagnosticsConfigured) return
+  jsonDiagnosticsConfigured = true
+  monaco.json.jsonDefaults.setDiagnosticsOptions({
+    ...monaco.json.jsonDefaults.diagnosticsOptions,
+    ...JSON_DIAGNOSTICS_OVERRIDE,
+  })
+}
 
 export interface RepoFileEditorProps {
   sessionId: string
@@ -121,6 +137,31 @@ export interface RepoFileEditorProps {
    * see the host's `nextGoTo`, which is the only place this is produced.
    */
   gotoSeq?: number
+  /**
+   * The session's own harness — picks the mention FORMAT for "Mencionar seleção" (`mentionSpec.ts`).
+   * Omitted (or unverified) falls back to the plain, harness-agnostic form — never a guessed `@`.
+   */
+  harness?: HarnessId
+  /**
+   * Whether the message composer is on screen for this session RIGHT NOW. This component has no
+   * visibility into which slot shows what — see `insertMention`'s `needsSwitch` — so the caller
+   * passes it in; omitted defaults to `true` (no forced switch) rather than surprising a caller
+   * that has not wired this yet.
+   */
+  composerMounted?: boolean
+  /**
+   * Fired after "Mencionar seleção" queues a reference into the draft store. The reference is
+   * queued either way (`composerStore.ts` survives the composer not being mounted yet); this is
+   * only for `needsSwitch` — see `mentionInsert.ts` — which tells the caller when to switch the
+   * centre to the conversation and show the "Adicionado à mensagem" toast (`MENTION_ADDED_TOAST`).
+   */
+  onMention?: (result: { text: string; needsSwitch: boolean }) => void
+  /**
+   * Opens another repository file in the Studio, for a relative link the markdown preview renders.
+   * Absent leaves such a link clickable but INERT (see `MarkdownPreview`'s own header) — wired by
+   * `Studio.tsx`'s `EditorStack` to the same `openFile` a tree click already calls.
+   */
+  onOpenPath?: (path: string) => void
 }
 
 // --- loading one file ----------------------------------------------------------------------------
@@ -161,6 +202,39 @@ export function loadStateFor(res: ReadFileResult, lang: RepoLang): LoadState {
       : { kind: 'binary', name: res.name, size: res.size }
   }
   return { kind: 'ready', content: res.content, mtimeMs: res.mtimeMs }
+}
+
+/**
+ * Is this render mid-RETARGET — a rename/move of an ALREADY-open file, as opposed to an ordinary
+ * "open a different file"? True only when the path actually moved AND a live editor exists to
+ * preserve. The second half is the guard the component's own header names: a retarget racing a file
+ * whose first read has not resolved yet has nothing to keep, so it is treated as an ordinary read.
+ */
+export function isMidRetarget(retargetFrom: string | undefined, hasEditor: boolean): boolean {
+  return retargetFrom !== undefined && hasEditor
+}
+
+/**
+ * What a render should show while `read.key` has not yet caught up with `path` — the ONE line
+ * responsible for C1 (2026-09-12, `session-w1c-tree-ops-review.md`). The naive
+ * `read.key === fileKey ? read.state : {kind:'loading'}` drops to `loading` for exactly the render
+ * between a retarget being DETECTED and the read effect PATCHING `read.key` to the new path, and the
+ * mount effect's cleanup — keyed on `load.kind` alone — disposes the live Monaco editor and model on
+ * that flip, before the effect gets a chance to say the buffer should survive. By the time the effect
+ * runs and repairs `read.key`, the editor is already gone, and the next mount recreates one from
+ * `contentRef.current` — the file's ORIGINAL disk text, not the dirty buffer.
+ *
+ * Mid-retarget, the mismatched key is expected and is never a reason to show `loading`: the state
+ * already on hand (`read.state`) is exactly the buffer this render must keep showing.
+ */
+export function loadStateForRender(
+  read: { key: string; state: LoadState },
+  fileKey: string,
+  retargetFrom: string | undefined,
+  hasEditor: boolean,
+): LoadState {
+  if (read.key === fileKey) return read.state
+  return isMidRetarget(retargetFrom, hasEditor) ? read.state : { kind: 'loading' }
 }
 
 /**
@@ -654,8 +728,121 @@ function readThemeAttr(): string | null {
   return typeof document === 'undefined' ? null : document.documentElement.getAttribute('data-theme')
 }
 
+// --- Código | Visualizar --------------------------------------------------------------------------
+//
+// The toggle lives on THIS component's own bar (`RepoSaveStrip` below) because that is the strip the
+// design names — "the editor bar" — and because the preference the toggle remembers is scoped to
+// this same file: whether the buffer under it renders as markdown/mermaid or as code.
+
+/** The two renderable previews the Studio can show. `null` (not part of this union) means neither —
+ * the toggle itself is then absent rather than offered and doing nothing. */
+export type DocKind = 'markdown' | 'mermaid'
+
+const MARKDOWN_EXTENSIONS = new Set(['md', 'mdx', 'markdown'])
+// `CLAUDE.md`/`AGENTS.md`/`SKILL.md` already carry the `.md` extension above; only the two common
+// EXTENSIONLESS names need a rule of their own.
+const MARKDOWN_BASENAMES = new Set(['readme', 'changelog'])
+const MERMAID_EXTENSIONS = new Set(['mmd', 'mermaid'])
+
+/** Which preview a file can show — from its name alone, never its content. */
+export function renderableDocKind(path: string): DocKind | null {
+  const base = (path.split('/').pop() ?? path).toLowerCase()
+  if (MARKDOWN_BASENAMES.has(base)) return 'markdown'
+  const dot = base.lastIndexOf('.')
+  if (dot <= 0) return null
+  const ext = base.slice(dot + 1)
+  if (MARKDOWN_EXTENSIONS.has(ext)) return 'markdown'
+  if (MERMAID_EXTENSIONS.has(ext)) return 'mermaid'
+  return null
+}
+
+export type PreviewMode = 'code' | 'preview'
+
+const PREVIEW_PREF_KEY = 'agentistics.editor.previewMode'
+
+/**
+ * Remembered PER DOC KIND, guarded exactly like `readBandPrefs`/`writeBandPrefs`
+ * (`lib/shellBand.ts`): a browser that blocks site data, or a value nothing wrote, costs the memory
+ * and never the toggle — it still works, just starting from `'code'` again.
+ */
+function readPreviewPrefs(storage?: Storage): Partial<Record<DocKind, PreviewMode>> {
+  try {
+    const raw = (storage ?? globalThis.localStorage)?.getItem(PREVIEW_PREF_KEY)
+    if (!raw) return {}
+    const v = JSON.parse(raw) as unknown
+    if (typeof v !== 'object' || v === null) return {}
+    const r = v as Record<string, unknown>
+    const out: Partial<Record<DocKind, PreviewMode>> = {}
+    for (const kind of ['markdown', 'mermaid'] as const) {
+      if (r[kind] === 'code' || r[kind] === 'preview') out[kind] = r[kind]
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+export function readPreviewMode(kind: DocKind, storage?: Storage): PreviewMode {
+  return readPreviewPrefs(storage)[kind] ?? 'code'
+}
+
+export function writePreviewMode(kind: DocKind, mode: PreviewMode, storage?: Storage): void {
+  try {
+    const s = storage ?? globalThis.localStorage
+    s?.setItem(PREVIEW_PREF_KEY, JSON.stringify({ ...readPreviewPrefs(s), [kind]: mode }))
+  } catch { /* the memory is a convenience; the toggle works without it */ }
+}
+
+/** `Código | Visualizar` — a real `role="tablist"`, per the design's keyboard rule (§1.3). */
+export function ViewModeToggle({ mode, isMobile, lang, onChange }: {
+  mode: PreviewMode
+  isMobile: boolean
+  lang: 'pt' | 'en'
+  onChange: (mode: PreviewMode) => void
+}) {
+  const pt = lang === 'pt'
+  const items: { key: PreviewMode; label: string }[] = [
+    { key: 'code', label: pt ? 'Código' : 'Code' },
+    { key: 'preview', label: pt ? 'Visualizar' : 'Preview' },
+  ]
+  return (
+    <div
+      role="tablist"
+      aria-label={pt ? 'Modo de exibição' : 'View mode'}
+      style={{
+        display: 'flex', flexShrink: 0, borderRadius: 6, overflow: 'hidden',
+        border: '1px solid var(--border-subtle)',
+      }}
+    >
+      {items.map(item => {
+        const active = item.key === mode
+        return (
+          <button
+            key={item.key}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(item.key)}
+            style={{
+              minHeight: isMobile ? 44 : undefined,
+              padding: isMobile ? '0 10px' : '2px 8px',
+              border: 'none', fontFamily: 'inherit', cursor: 'pointer',
+              fontSize: isMobile ? 12.5 : 11, fontWeight: active ? 700 : 500,
+              background: active ? 'var(--bg-elevated)' : 'transparent',
+              color: active ? 'var(--text-primary)' : 'var(--text-tertiary)',
+            }}
+          >
+            {item.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 export function RepoFileEditor({
   sessionId, path, autosave, onDirtyChange, lang, gotoLine, gotoSeq,
+  harness, composerMounted = true, onMention, onOpenPath,
 }: RepoFileEditorProps) {
   const isMobile = useIsMobile()
   const pt = lang === 'pt'
@@ -667,12 +854,14 @@ export function RepoFileEditor({
    * the new read replaces it. Deriving `load` from the pair makes that unobservable rather than
    * merely brief — and the host is expected to key this component by path anyway (see the header),
    * which is exactly the kind of unstated dependency this removes.
+   *
+   * `load` ITSELF is computed further down, once `editorRef`/`priorPathRef`/`retargetFrom` exist —
+   * see `loadStateForRender`'s own header for why a bare `read.key === fileKey` test is the bug.
    */
   const fileKey = fileKeyOf(sessionId, path)
   const [read, setRead] = useState<{ key: string; state: LoadState }>(
     { key: fileKey, state: { kind: 'loading' } },
   )
-  const load: LoadState = read.key === fileKey ? read.state : { kind: 'loading' }
   const [save, dispatch] = useReducer(nextSaveState, initialSaveState(0))
   /**
    * The theme is read off `<html data-theme>`, the one place `App.tsx` writes it, and followed with
@@ -684,6 +873,12 @@ export function RepoFileEditor({
   const [mounted, setMounted] = useState(0)
 
   const hostRef = useRef<HTMLDivElement | null>(null)
+  // M6: Monaco's own Ctrl+S command only fires while MONACO is focused, and Monaco is `inert` (never
+  // focusable) throughout preview mode — so a reader sitting in "Visualizar" and pressing Ctrl+S had
+  // focus living NOWHERE, and the keystroke went nowhere with it. This is the preview's own focus
+  // target, given the same command directly (`onKeyDown` below) and focused whenever the toggle
+  // switches TO preview.
+  const previewHostRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null)
   const contentRef = useRef('')
   /**
@@ -703,19 +898,117 @@ export function RepoFileEditor({
   saveRef.current = save
   const argsRef = useRef({ sessionId, path, lang: lang as RepoLang })
   argsRef.current = { sessionId, path, lang }
+  /**
+   * **A RENAME, DETECTED FROM INSIDE — no prop from the host is needed for this.** The host keys
+   * this component by a STABLE identity (`OpenTab.id`, never `path` — see `EditorStack`'s own
+   * header in `Studio.tsx`), so the ONE way `path` can change while this exact component instance
+   * survives is a rename or a move retargeting the tab it belongs to; an ordinary "open a different
+   * file" always arrives as a brand new instance under a different key. `retargetFrom` is read
+   * DURING RENDER, before anything writes to the ref, so it always names the path as of the LAST
+   * commit.
+   *
+   * **`priorPathRef` is written in EXACTLY ONE place: inside the read effect below**, never in a
+   * free-running `useEffect` with no dependencies. That used to be two effects agreeing on one ref,
+   * and they did not agree on WHEN: the free-running one fired on every render — including the one
+   * the read effect's own `setRead` call schedules — so by the time that follow-up render ran,
+   * `priorPathRef` had already caught up to `path` and `retargetFrom` had silently gone back to
+   * `undefined`, one render after the retarget was correctly detected. That flip is itself a
+   * dependency change on the read effect's array, so the effect fired AGAIN, this time down the
+   * ordinary branch — reset, re-read from disk — discarding exactly the buffer the retarget skip a
+   * moment earlier existed to keep (C1, `session-w1c-tree-ops-review.md`). Confining the write to the
+   * read effect means it only ever moves once per REAL path change, in step with the branch decision
+   * that read it, which is what keeps `retargetFrom` from moving out from under its own effect.
+   */
+  const priorPathRef = useRef(path)
+  const retargetFrom = path !== priorPathRef.current ? priorPathRef.current : undefined
+  /**
+   * What this render shows. `read.key` has not caught up with `path` yet on the very render a
+   * retarget is detected (`setRead` in the effect below has not run), and that mismatch must not be
+   * read as "loading" — see `loadStateForRender`'s own header for the failure this line prevents.
+   */
+  const load: LoadState = loadStateForRender(read, fileKey, retargetFrom, editorRef.current !== null)
   const dirtyRef = useRef(false)
   const requestSaveRef = useRef<(trigger: SaveTrigger) => void>(() => {})
   const options = monacoOptions({ isMobile, theme: monacoThemeFor(themeAttr) })
+  /** The preview's own palette follows the same `<html data-theme>` read, never re-derived. */
+  const codeVariant: CodeThemeVariant = themeAttr === 'light' ? 'light' : 'dark'
   const optionsRef = useRef(options)
   optionsRef.current = options
   const mobileRef = useRef(isMobile)
   mobileRef.current = isMobile
+  /**
+   * "Mencionar seleção"'s own inputs, kept fresh through a ref for the same reason `argsRef` is:
+   * the Monaco mount effect below only re-runs on `[load.kind, path]`, so an action registered
+   * once inside it would otherwise close over the harness/session/language this file happened to
+   * mount with.
+   */
+  const mentionCtxRef = useRef({ sessionId, harness, composerMounted, onMention, pt })
+  mentionCtxRef.current = { sessionId, harness, composerMounted, onMention, pt }
+  /**
+   * MOBILE's OWN TRIGGER for "Mencionar seleção" — the desktop chip and keybinding have no
+   * equivalent on a phone (no hover, no reliable modifier chord), so the editor bar carries a
+   * button instead. Two pieces, because the button lives in REACT-rendered chrome (`RepoSaveStrip`)
+   * while `mentionSelection` is a closure created once inside the Monaco mount effect:
+   *  - `hasSelection` is state a bar button can read, updated from the same
+   *    `onDidChangeCursorSelection` listener that already drives the desktop chip's reposition;
+   *  - `mentionSelectionRef` exposes the effect-scoped closure to the rest of the component, the
+   *    same pattern `requestSaveRef` already uses in this file for the identical reason.
+   */
+  const [hasSelection, setHasSelection] = useState(false)
+  const mentionSelectionRef = useRef<() => void>(() => {})
+
+  /**
+   * `docKind` is a property of the PATH alone, so it is computed fresh every render rather than
+   * memoized — cheap, and it never needs to survive past the instance's own lifetime anyway: this
+   * component is keyed by path (see the header), so a file whose kind would change is a remount, not
+   * a re-render.
+   */
+  const docKind = renderableDocKind(path)
+  const [viewMode, setViewMode] = useState<PreviewMode>(
+    () => (docKind === null ? 'code' : readPreviewMode(docKind)),
+  )
+  /**
+   * The live buffer, for the preview alone — `contentRef` already holds it for OTHER reasons
+   * (the initial Monaco model, the value a save reads), but reading a `ref` cannot re-render the
+   * preview when it changes. Seeded on mount and refreshed by the debounced listener below; toggling
+   * TO preview also refreshes it immediately, so flipping the tab does not wait out a stale window.
+   */
+  const [previewText, setPreviewText] = useState('')
+  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (docKind !== null) writePreviewMode(docKind, viewMode)
+  }, [docKind, viewMode])
 
   // --- read the file ---------------------------------------------------------
   // `lang` is NOT a dependency on purpose. It changes only the wording of a refusal, while
   // re-running this effect would re-read the file and tear the editor down — so toggling the
   // dashboard's language would silently discard an unsaved buffer.
   useEffect(() => {
+    // **A RETARGET OF AN ALREADY-OPEN FILE RE-READS NOTHING.** The bytes on screen are exactly the
+    // bytes that were open a moment ago, saved or not, and the file at its OLD path no longer
+    // exists to read back — the rename already happened server-side before this prop changed. Only
+    // the KEY this state is filed under moves, so the NEXT ordinary path change (a real file swap,
+    // which always arrives as a fresh component instance — see `retargetFrom`'s own note) is not
+    // mistaken for "still loading" — `loadStateForRender` already covers the one render this effect
+    // has not run for yet. Guarded on an editor actually EXISTING: a retarget racing a file that has
+    // not finished its first read yet (rare, but possible — a drag dropped on a tab before its
+    // initial fetch resolved) has nothing to preserve, so it falls through to the ordinary read below
+    // instead of leaving the tab stuck in `loading` forever under a key its own in-flight fetch was
+    // cancelled out from under.
+    //
+    // `priorPathRef` is advanced HERE, on both branches, and nowhere else — see its own header for
+    // why a second, free-running effect writing the same ref is exactly what broke this the first
+    // time. `retargetFrom` is deliberately absent from this effect's dependency array: it is read
+    // once, from the closure captured when `sessionId`/`path` last actually changed, so a later
+    // render where `retargetFrom` alone recomputes to `undefined` (because this very effect just
+    // advanced `priorPathRef`) cannot re-trigger it down the wrong branch.
+    if (isMidRetarget(retargetFrom, editorRef.current !== null)) {
+      priorPathRef.current = path
+      setRead(prev => ({ key: fileKeyOf(sessionId, path), state: prev.state }))
+      return
+    }
+    priorPathRef.current = path
     let cancelled = false
     // The reset goes out BEFORE the read, and regardless of how the read turns out. Only `ready`
     // dispatches `loaded`, so without it a failed or BINARY read left the previous file's edit count
@@ -731,6 +1024,7 @@ export function RepoFileEditor({
       setRead({ key: fileKeyOf(sessionId, path), state: next })
     })
     return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, path])
 
   // --- follow the app's theme -----------------------------------------------
@@ -745,6 +1039,17 @@ export function RepoFileEditor({
   // --- mount Monaco ----------------------------------------------------------
   // Only once there is text to show AND a host div to show it in: "do we have the file" and "is an
   // editor attached" are two questions, and letting them race is how a pane ends up blank.
+  //
+  // **`path` IS DELIBERATELY ABSENT FROM THIS EFFECT'S DEPENDENCIES — the one change in this file
+  // that actually lets a rename keep its model.** Every OTHER file swap already arrives as a whole
+  // new component instance (the host keys by a stable id, not by `path` — see `retargetFrom`'s own
+  // note above), so this effect was never asked to re-point a LIVE editor at different content; the
+  // only thing `path` changing without a remount can mean is a retarget. Listing it anyway would
+  // tear the effect down and rebuild a fresh model and a fresh editor the moment a rename committed
+  // — disposing the very instance `retargetFrom`'s skipped re-read above was written to protect,
+  // and losing the unsaved text, the undo stack and the cursor to a rename that changed none of
+  // them. `argsRef.current.path` reads the CURRENT path from inside the callback instead of the
+  // closed-over one, the same pattern `writeNow` already uses for the identical reason.
   useEffect(() => {
     if (load.kind !== 'ready') return
     const host = hostRef.current
@@ -760,18 +1065,124 @@ export function RepoFileEditor({
         // BEFORE `create`, always: a theme name monaco does not know yet resolves to plain `vs` and
         // says nothing about it. Idempotent, so paying for it on every mount costs nothing.
         defineAgentisticsThemes(monaco)
-        model = monaco.editor.createModel(contentRef.current, languageForPath(path))
+        configureJsonDiagnostics(monaco)
+        model = monaco.editor.createModel(contentRef.current, languageForPath(argsRef.current.path))
         editor = monaco.editor.create(host, { ...optionsRef.current, model })
         editorRef.current = editor
+        // Seeded immediately rather than waiting out the debounce below — a file opened straight
+        // into "Visualizar" (the toggle remembers the last choice PER KIND) must not show blank.
+        setPreviewText(contentRef.current)
 
         editor.onDidChangeModelContent(() => {
           if (applyingDiskRef.current) return
           dispatch({ kind: 'edited' })
+          // The preview re-renders from the live buffer, debounced — a keystroke that restarts a
+          // 250ms timer on every character is what keeps "unsaved edits show" from re-running
+          // `react-markdown`/mermaid on every letter typed.
+          if (previewTimerRef.current !== null) clearTimeout(previewTimerRef.current)
+          previewTimerRef.current = setTimeout(() => {
+            const current = editorRef.current
+            if (current !== null) setPreviewText(editorSaveText(current))
+          }, 250)
         })
         editor.addCommand(
           monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
           () => requestSaveRef.current('explicit'),
         )
+
+        /**
+         * "Mencionar seleção" (§6.1, gesture 3) — a Monaco ACTION (context menu + keybinding) so
+         * `run` always reads the CURRENT selection off the editor rather than one captured at
+         * registration time. The mention itself never carries the selected code: the file is on
+         * disk and a pasted copy goes stale — only the path and the line range travel.
+         */
+        const mentionSelection = (): void => {
+          const sel = editor?.getSelection()
+          if (!sel) return
+          const target = mentionTargetForSelection(
+            argsRef.current.path, sel.startLineNumber, sel.endLineNumber, sel.isEmpty(),
+          )
+          if (target === null) return
+          const ctx = mentionCtxRef.current
+          const result = insertMention(ctx.sessionId, ctx.harness, target, ctx.composerMounted)
+          ctx.onMention?.(result)
+        }
+        mentionSelectionRef.current = mentionSelection
+        editor.addAction({
+          id: 'agentistics.mentionSelection',
+          label: mentionCtxRef.current.pt ? 'Mencionar seleção' : 'Mention selection',
+          keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyM],
+          contextMenuGroupId: 'agentistics',
+          contextMenuOrder: 1,
+          run: mentionSelection,
+        })
+
+        // MOBILE'S OWN TRIGGER (`RepoSaveStrip`'s "Mencionar" button) needs to know whether there is
+        // a selection to act on — there is no hover and no reliable modifier chord on a phone, so it
+        // cannot rely on the desktop chip/keybinding below. Registered unconditionally (both mobile
+        // and desktop) rather than folded into the desktop-only listener further down: the two serve
+        // different consumers (React state for a bar button vs. repositioning a Monaco content
+        // widget) and gating this one on `!mobileRef.current` would leave `hasSelection` permanently
+        // `false` on the one platform the bar button exists for.
+        editor.onDidChangeCursorSelection(() => {
+          setHasSelection(!editor?.getSelection()?.isEmpty())
+        })
+
+        /**
+         * The floating chip at the end of a non-empty selection (desktop only — a phone reaches the
+         * same action through `RepoSaveStrip`'s "Mencionar" button instead, driven by `hasSelection`
+         * and `mentionSelectionRef` above). A CONTENT WIDGET rather than a plain absolutely-positioned
+         * `<div>`: Monaco owns the scroll/zoom transform for anything anchored to buffer coordinates,
+         * and re-deriving that by hand is exactly the kind of thing that drifts one line off after a
+         * resize.
+         *
+         * `getPosition` returning `null` for an empty selection is how it HIDES — Monaco simply
+         * does not render a widget with nowhere to go, so there is no separate show/hide state to
+         * keep in sync with the selection.
+         */
+        let mentionChipDom: HTMLButtonElement | null = null
+        let mentionWidget: Monaco.editor.IContentWidget | null = null
+        if (!mobileRef.current) {
+          const chip = document.createElement('button')
+          chip.type = 'button'
+          chip.textContent = mentionCtxRef.current.pt ? 'Mencionar' : 'Mention'
+          chip.title = mentionCtxRef.current.pt
+            ? 'Mencionar a seleção na conversa (Ctrl/Cmd+Alt+M)'
+            : 'Mention the selection in the conversation (Ctrl/Cmd+Alt+M)'
+          Object.assign(chip.style, {
+            font: '11px/1.4 inherit',
+            padding: '2px 8px',
+            borderRadius: '999px',
+            border: '1px solid var(--anthropic-orange)',
+            background: 'rgba(232,105,11,0.10)',
+            color: 'var(--anthropic-orange)',
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+            zIndex: '10',
+          } satisfies Partial<CSSStyleDeclaration>)
+          chip.addEventListener('mousedown', e => e.preventDefault()) // never steals the selection
+          chip.addEventListener('click', mentionSelection)
+          mentionChipDom = chip
+
+          mentionWidget = {
+            getId: () => 'agentistics.mentionSelectionChip',
+            getDomNode: () => chip,
+            getPosition: () => {
+              const sel = editor?.getSelection()
+              if (!sel || sel.isEmpty()) return null
+              return {
+                position: { lineNumber: sel.endLineNumber, column: sel.endColumn },
+                preference: [monaco.editor.ContentWidgetPositionPreference.EXACT],
+              }
+            },
+            suppressMouseDown: true,
+          }
+          editor.addContentWidget(mentionWidget)
+          editor.onDidChangeCursorSelection(() => {
+            if (mentionWidget) editor?.layoutContentWidget(mentionWidget)
+          })
+        }
+
         // Opening a file is a request to edit it — but not on a phone, where stealing focus opens
         // the soft keyboard over the file you have just asked to look at.
         if (!mobileRef.current) editor.focus()
@@ -781,10 +1192,35 @@ export function RepoFileEditor({
     return () => {
       disposed = true
       editorRef.current = null
+      mentionSelectionRef.current = () => {}
+      setHasSelection(false)
+      if (previewTimerRef.current !== null) {
+        clearTimeout(previewTimerRef.current)
+        previewTimerRef.current = null
+      }
       editor?.dispose()
       model?.dispose()
     }
-  }, [load.kind, path])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load.kind])
+
+  // --- a retarget can change the EXTENSION, and the model's language with it -----------------------
+  // A plain rename within the same folder is the common case and usually keeps it (`a.ts` -> `b.ts`),
+  // but nothing stops a reader renaming `notes.txt` to `notes.md` mid-edit. The model itself survives
+  // untouched (see the mount effect's own note); only its declared language needs to catch up, and
+  // `setModelLanguage` does that without disturbing the buffer, the undo stack or the cursor at all.
+  useEffect(() => {
+    if (retargetFrom === undefined) return
+    const editor = editorRef.current
+    const model = editor?.getModel()
+    if (editor === undefined || editor === null || model === null || model === undefined) return
+    void import('../../lib/monacoSetup').then(mod => mod.loadMonaco()).then((monaco: MonacoModule) => {
+      // The reader may have switched to yet another tab while this import resolved — a language
+      // set on a model that is no longer this editor's would silently relabel someone else's file.
+      if (editorRef.current !== editor || editor.getModel() !== model) return
+      monaco.editor.setModelLanguage(model, languageForPath(path))
+    })
+  }, [path, retargetFrom])
 
   // --- keep the live editor's options current -------------------------------
   // A drag across the mobile breakpoint, or a theme toggle, must not remount the editor: that would
@@ -885,7 +1321,18 @@ export function RepoFileEditor({
     void writeNow(disk.diskMtimeMs, { kind: 'keep-mine' })
   }
 
-  /** "Discard and reload" — their edit goes, the disk version takes its place. */
+  /**
+   * "Discard and reload" — their edit goes, the disk version takes its place.
+   *
+   * **M2 — the preview used to keep showing the DISCARDED buffer.** `onDidChangeModelContent`'s own
+   * preview debounce is deliberately skipped here (`if (applyingDiskRef.current) return`, above) —
+   * this is a PROGRAMMATIC `setValue`, not a keystroke, and the debounce exists to coalesce typing,
+   * not to also cover a conflict resolution. Nothing else refreshed `previewText` for this path, so
+   * a reader sitting in "Visualizar" watched their own (soon-to-be-gone) edit for as long as it took
+   * a further keystroke or a toggle to notice the disk version had replaced it. Same immediate
+   * refresh `handleViewModeChange` already does for the OTHER moment the buffer changes out from
+   * under the debounce — switching INTO preview right after typing.
+   */
   const discardAndReload = () => {
     const disk = diskVersionOf(saveRef.current.phase)
     const editor = editorRef.current
@@ -893,7 +1340,23 @@ export function RepoFileEditor({
     applyingDiskRef.current = true
     try { editor.setValue(disk.diskContent) } finally { applyingDiskRef.current = false }
     contentRef.current = disk.diskContent
+    setPreviewText(disk.diskContent)
     dispatch({ kind: 'take-disk' })
+  }
+
+  /**
+   * Switching TO preview refreshes the buffer immediately rather than waiting out the 250ms debounce
+   * — a reader pressing "Visualizar" right after typing must not see the text from a moment ago.
+   */
+  const handleViewModeChange = (mode: PreviewMode) => {
+    setViewMode(mode)
+    if (mode === 'preview' && editorRef.current !== null) {
+      setPreviewText(editorSaveText(editorRef.current))
+      // M6: give focus somewhere to live — see `previewHostRef`'s own comment. Deferred a tick so it
+      // runs after the preview region's `inert`/`pointerEvents` flip (driven by the `viewMode` state
+      // update above) actually lands; focusing an inert element is a no-op.
+      setTimeout(() => previewHostRef.current?.focus(), 0)
+    }
   }
 
   if (load.kind === 'loading') {
@@ -961,6 +1424,11 @@ export function RepoFileEditor({
         isMobile={isMobile}
         autosave={autosave}
         onSave={() => requestSave('explicit')}
+        hasSelection={hasSelection}
+        onMentionSelection={() => mentionSelectionRef.current()}
+        toggle={docKind === null ? undefined : (
+          <ViewModeToggle mode={viewMode} isMobile={isMobile} lang={lang} onChange={handleViewModeChange} />
+        )}
       />
 
       {save.phase.kind === 'stale' && (
@@ -973,19 +1441,67 @@ export function RepoFileEditor({
         />
       )}
 
-      {/* Monaco does not scroll natively — it intercepts the wheel and moves its own content — so
-          there is no scroll chain to break out of here. `contain` is set anyway, because this is the
-          panel's new scrolling region as far as the rest of the layout is concerned, and the rule
-          this workspace keeps is about the region, not about who implements its scrolling. */}
-      {/* `inert` while the question is open is the other half of the prompt's `aria-modal`: Monaco is
-          a keyboard-reachable region sitting behind it, and a dialog that claims to be modal while
-          Tab walks into the editor underneath is claiming something untrue. The prompt contains Tab
-          among its own controls; this is what makes "nothing behind it" a fact. */}
-      <div
-        ref={hostRef}
-        inert={save.phase.kind === 'conflict'}
-        style={{ flex: 1, minHeight: 0, minWidth: 0, overscrollBehavior: 'contain' }}
-      />
+      {/* BOTH regions stay MOUNTED regardless of which is showing — never a conditional unmount of
+          the Monaco host, which would orphan the editor instance created above. Hidden with opacity +
+          `inert` + no pointer events, matching the rule this codebase already keeps for a component
+          that must survive being hidden (`Layer`'s own header, §1.4 of the design): `display: none`
+          would collapse the host to 0×0, and Monaco's `automaticLayout` measuring a 0×0 box on the
+          way back is exactly the kind of layout race this sidesteps entirely by never doing it. */}
+      <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0 }}>
+        {/* Monaco does not scroll natively — it intercepts the wheel and moves its own content — so
+            there is no scroll chain to break out of here. `contain` is set anyway, because this is
+            the panel's new scrolling region as far as the rest of the layout is concerned, and the
+            rule this workspace keeps is about the region, not about who implements its scrolling. */}
+        {/* `inert` while the question is open is the other half of the prompt's `aria-modal`: Monaco
+            is a keyboard-reachable region sitting behind it, and a dialog that claims to be modal
+            while Tab walks into the editor underneath is claiming something untrue. The prompt
+            contains Tab among its own controls; this is what makes "nothing behind it" a fact. */}
+        <div
+          ref={hostRef}
+          inert={save.phase.kind === 'conflict' || viewMode === 'preview'}
+          style={{
+            position: 'absolute', inset: 0, overscrollBehavior: 'contain',
+            opacity: viewMode === 'preview' ? 0 : 1,
+            pointerEvents: viewMode === 'preview' ? 'none' : 'auto',
+          }}
+        />
+        {docKind !== null && viewMode === 'preview' && (
+          // M6: `inert` while the conflict prompt is open — the preview was the ONE region left out
+          // of the `aria-modal` guarantee the Monaco host already keeps (see that div's own comment):
+          // its links and its scroll stayed keyboard-reachable behind a dialog claiming nothing was.
+          // `tabIndex={-1}` + `onKeyDown` are M6's other half: this is what Ctrl+S has to focus in
+          // preview mode, since Monaco itself is `inert` throughout it — see `previewHostRef`.
+          <div
+            ref={previewHostRef}
+            tabIndex={-1}
+            inert={save.phase.kind === 'conflict'}
+            onKeyDown={ev => {
+              if (!(ev.ctrlKey || ev.metaKey) || ev.key.toLowerCase() !== 's') return
+              ev.preventDefault()
+              requestSaveRef.current('explicit')
+            }}
+            style={{
+              position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden',
+              overscrollBehavior: 'contain', boxSizing: 'border-box',
+              padding: isMobile ? '10px 12px' : '10px 14px',
+              background: 'var(--bg-card)', outline: 'none',
+            }}
+          >
+            {docKind === 'markdown' ? (
+              <MarkdownPreview
+                text={previewText}
+                sessionId={sessionId}
+                docPath={path}
+                lang={lang}
+                theme={codeVariant}
+                onOpenPath={onOpenPath}
+              />
+            ) : (
+              <MermaidDiagram source={previewText} theme={codeVariant} lang={lang} />
+            )}
+          </div>
+        )}
+      </div>
 
       {save.phase.kind === 'conflict' && (
         <RepoConflictPrompt
@@ -1163,18 +1679,36 @@ const TONE_COLOR: Record<SaveTone, string> = {
   bad: 'var(--accent-red)',
 }
 
-export function RepoSaveStrip({ state, lang, isMobile, autosave, onSave }: {
+export function RepoSaveStrip({
+  state, lang, isMobile, autosave, onSave, hasSelection, onMentionSelection, toggle,
+}: {
   state: SaveState
   lang: 'pt' | 'en'
   isMobile: boolean
   /** Only so a stopped autosave can be SAID; the strip decides nothing about saving. */
   autosave: boolean
   onSave: () => void
+  /**
+   * §6.1 gesture 3, "Mencionar seleção" — MOBILE'S OWN TRIGGER. The desktop floating chip and
+   * `Ctrl/Cmd+Alt+M` have no phone equivalent (no hover, no reliable modifier chord), so the bar
+   * carries a button instead — present only when the caller passes a trigger, per this file's own
+   * "an optional handler's absence removes the control" convention (`TreeContextMenu.tsx`).
+   */
+  hasSelection?: boolean
+  onMentionSelection?: () => void
+  /**
+   * The `Código | Visualizar` switcher, for a file that has one — `undefined` for every other file,
+   * which is what keeps the strip's own markup (and every existing test against it) unchanged for a
+   * plain code file. Passed as an already-built element rather than a `docKind` prop: the STRIP does
+   * not need to know what renders a preview, only that this component has a control to show.
+   */
+  toggle?: ReactNode
 }) {
   const pt = lang === 'pt'
   const status = saveStatus(state, lang, autosave)
   const button = saveButtonState(state, lang, isMobile)
   const dirty = isDirty(state)
+  const showMention = isMobile && onMentionSelection !== undefined
 
   return (
     <div style={{
@@ -1202,6 +1736,30 @@ export function RepoSaveStrip({ state, lang, isMobile, autosave, onSave }: {
       >
         {status.text}
       </span>
+      {toggle}
+      {showMention && (
+        <button
+          type="button"
+          onClick={onMentionSelection}
+          disabled={!hasSelection}
+          aria-label={pt ? 'Mencionar a seleção na conversa' : 'Mention the selection in the conversation'}
+          style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+            flexShrink: 0, boxSizing: 'border-box',
+            // Same 44px-of-HEIGHT convention as the Save button beside it — a labelled control, so
+            // no `minWidth` is needed on top of it.
+            minHeight: 44,
+            padding: '0 10px',
+            borderRadius: 6, border: '1px solid var(--border-subtle)',
+            background: 'transparent', fontFamily: 'inherit', fontSize: 13,
+            color: hasSelection === true ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+            cursor: hasSelection === true ? 'pointer' : 'not-allowed',
+            opacity: hasSelection === true ? 1 : 0.55,
+          }}
+        >
+          {pt ? 'Mencionar' : 'Mention'}
+        </button>
+      )}
       <button
         type="button"
         onClick={onSave}

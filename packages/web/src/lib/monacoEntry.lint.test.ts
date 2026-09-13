@@ -64,8 +64,18 @@ function monacoVsDir(): string {
   )
 }
 
-/** Every module specifier an `import`/`export … from` statement names, in source order. */
-const SPECIFIER = /^\s*(?:import|export)\b[^\n]*?['"]([^'"\n]+)['"]/gm
+/**
+ * Every module specifier an `import`/`export … from` statement names, in source order.
+ *
+ * **A DECLARATION THAT MERELY NAMES A SPECIFIER IS NOT ONE.** Anchoring at line start (already done)
+ * stops a leading `//` from reaching this; it does nothing about `export const OK = true // import
+ * '.../register'` or `export const DROPPED = ['.../register']`, both of which START with `export`
+ * and still carry the quoted path — so DELETING a real import and leaving either shape behind kept
+ * this scan reporting the grammar as still present. The identical regex lives in
+ * `monacoLanguage.test.ts`'s `SPECIFIER`; the residual was shared, not introduced by either file.
+ */
+const SPECIFIER =
+  /^\s*(?:import|export)\b(?!\s+(?:type|const|let|var|function|class|interface|enum|namespace)\b)[^\n]*?['"]([^'"\n]+)['"]/gm
 function specifiersOf(src: string): string[] {
   return [...src.matchAll(SPECIFIER)].flatMap(m => (m[1] === undefined ? [] : [m[1]]))
 }
@@ -201,6 +211,16 @@ describe('monacoEntry composes Monaco from subpaths', () => {
     expect(imported).toEqual(onDisk)
   })
 
+  it('the specifier scan is not fooled by a declaration that only NAMES a register path', () => {
+    const trailingComment = "export const OK = true // import 'monaco-editor/languages/features/typescript/register'"
+    const arrayLiteral = "export const DROPPED = ['monaco-editor/languages/features/typescript/register']"
+    expect(specifiersOf(trailingComment)).toEqual([])
+    expect(specifiersOf(arrayLiteral)).toEqual([])
+    // Still sees the real thing — the exact shape monacoEntry.ts writes for every grammar.
+    expect(specifiersOf("import 'monaco-editor/languages/features/json/register'"))
+      .toEqual(['monaco-editor/languages/features/json/register'])
+  })
+
   it('never imports the TypeScript language service, in either file', () => {
     // The 6.9 MB. A comment may name it; an import may not.
     for (const [name, src] of [['monacoEntry.ts', entry], ['monacoSetup.ts', setup]] as const) {
@@ -211,11 +231,36 @@ describe('monacoEntry composes Monaco from subpaths', () => {
     }
   })
 
-  it('never imports the monaco-editor barrel for a VALUE', () => {
-    // A real import would put the whole barrel — ts.worker included — back. Both files now take
-    // their TYPES from `monacoEntry` itself, so neither should name the barrel at all.
-    expect(specifiersOf(code(setup))).not.toContain('monaco-editor')
-    expect(specifiersOf(code(entry))).not.toContain('monaco-editor')
+  /**
+   * A real (non-type) import would put the whole barrel — ts.worker included — back. This used to
+   * check only `setup` and `entry`, so `RepoFileEditor.tsx` (which reaches for the same `Monaco`
+   * type) was free to drop the word `type` from its own `import type * as Monaco from
+   * 'monaco-editor'` with a green build and a green suite — restoring the 6.9 MB silently, the
+   * exact class of rot this file exists to close. Every file under `packages/web/src` is walked now,
+   * not only the two the composition itself lives in.
+   */
+  const VALUE_BARREL_IMPORT = /^\s*(?:import|export)\b(?!\s+type\b)[^\n]*?['"]monaco-editor['"]/m
+
+  it('never imports the monaco-editor barrel for a VALUE, anywhere under packages/web/src', () => {
+    for (const file of walk(SRC)) {
+      const src = code(readFileSync(file, 'utf8'))
+      expect(
+        VALUE_BARREL_IMPORT.test(src),
+        `${relative(SRC, file)} imports the monaco-editor barrel as a VALUE`,
+      ).toBe(false)
+    }
+  })
+
+  it('the barrel-VALUE scan still tells a type-only import from a real one', () => {
+    const hit = (s: string) => VALUE_BARREL_IMPORT.test(code(s))
+    expect(hit("import type * as Monaco from 'monaco-editor'")).toBe(false)
+    expect(hit("import type Monaco from 'monaco-editor'")).toBe(false)
+    expect(hit("import * as Monaco from 'monaco-editor'")).toBe(true)
+    expect(hit("import Monaco from 'monaco-editor'")).toBe(true)
+    expect(hit("import 'monaco-editor'")).toBe(true)
+    expect(hit("// import * as Monaco from 'monaco-editor'")).toBe(false)
+    // A subpath is not the barrel itself.
+    expect(hit("import EditorWorker from 'monaco-editor/editor/editor.worker?worker'")).toBe(false)
   })
 
   /**

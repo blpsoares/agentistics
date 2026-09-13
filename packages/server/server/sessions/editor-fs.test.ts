@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -146,6 +146,53 @@ describe('listChildren', () => {
     symlinkSync(outside, join(plainDir, 'escape-link'))
     const r = await listChildren(plainDir, 'escape-link')
     expect(r).toEqual({ ok: false, reason: 'escaped' })
+  })
+})
+
+describe('listChildren — a raw fs mutation of a git-TRACKED path never leaves a phantom row', () => {
+  // The Studio's rename/delete act with `fs.rename`/`rm`, not `git mv`/`git rm` — so the INDEX
+  // still names the old path after the disk no longer does. A fresh repo, isolated from the
+  // `gitRepo` fixture above (whose own tests rely on its exact tracked/untracked/ignored shape).
+  let repo = ''
+
+  beforeAll(() => {
+    repo = join(root, 'phantom-repo')
+    mkdirSync(repo)
+    git(repo, 'init', '-q', '-b', 'main')
+    git(repo, 'config', 'user.email', 't@t')
+    git(repo, 'config', 'user.name', 't')
+    mkdirSync(join(repo, 'folder'))
+    writeFileSync(join(repo, 'folder', 'renamed-from.txt'), 'r\n')
+    writeFileSync(join(repo, 'deleted-file.txt'), 'd\n')
+    mkdirSync(join(repo, 'deleted-folder'))
+    writeFileSync(join(repo, 'deleted-folder', 'a.txt'), 'a\n')
+    writeFileSync(join(repo, 'deleted-folder', 'b.txt'), 'b\n')
+    writeFileSync(join(repo, 'kept.txt'), 'k\n')
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-q', '-m', 'init')
+  })
+
+  test('a tracked file renamed via raw fs.rename drops the old name and shows the new one', async () => {
+    renameSync(join(repo, 'folder', 'renamed-from.txt'), join(repo, 'folder', 'renamed-to.txt'))
+    const r = await listChildren(repo, 'folder')
+    expect(r).toEqual({ ok: true, children: [{ name: 'renamed-to.txt', kind: 'file' }] })
+  })
+
+  test('a tracked file deleted via raw fs.rm (not git rm) no longer appears', async () => {
+    rmSync(join(repo, 'deleted-file.txt'))
+    const r = await listChildren(repo, '')
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.children.some(c => c.name === 'deleted-file.txt')).toBe(false)
+      expect(r.children.some(c => c.name === 'kept.txt')).toBe(true)
+    }
+  })
+
+  test('a tracked FOLDER deleted via raw recursive fs.rm leaves no phantom directory row', async () => {
+    rmSync(join(repo, 'deleted-folder'), { recursive: true, force: true })
+    const r = await listChildren(repo, '')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.children.some(c => c.name === 'deleted-folder')).toBe(false)
   })
 })
 
@@ -402,6 +449,38 @@ describe('renameTreeEntry', () => {
     writeFileSync(join(plainDir, 'src-c.txt'), 'c')
     expect(await renameTreeEntry(plainDir, 'src-c.txt', '../out.txt')).toEqual({ ok: false, reason: 'escaped' })
     expect(await renameTreeEntry(plainDir, '../out.txt', 'src-c.txt')).toEqual({ ok: false, reason: 'escaped' })
+  })
+
+  describe('into-itself — a drop a plain rename() would surface as an unhandled EINVAL', () => {
+    test('a folder dropped onto itself (the drag computes `into/<own name>`) is refused lexically', async () => {
+      mkdirSync(join(plainDir, 'into-self'))
+      const out = await renameTreeEntry(plainDir, 'into-self', 'into-self/into-self')
+      expect(out).toEqual({ ok: false, reason: 'into-itself' })
+      // Lexical — nothing was touched on disk.
+      expect(existsSync(join(plainDir, 'into-self'))).toBe(true)
+    })
+
+    test('a folder moved into its own descendant is refused the same way', async () => {
+      mkdirSync(join(plainDir, 'into-desc'))
+      mkdirSync(join(plainDir, 'into-desc', 'child'))
+      const out = await renameTreeEntry(plainDir, 'into-desc', 'into-desc/child/into-desc')
+      expect(out).toEqual({ ok: false, reason: 'into-itself' })
+    })
+
+    test('a SIBLING whose name merely starts the same is not caught by the descendant check', async () => {
+      mkdirSync(join(plainDir, 'twin'))
+      mkdirSync(join(plainDir, 'twin2'))
+      // twin2 is not inside twin, so renaming twin into twin2 is an ordinary, legal move.
+      const out = await renameTreeEntry(plainDir, 'twin', 'twin2/twin')
+      expect(out).toEqual({ ok: true })
+      expect(existsSync(join(plainDir, 'twin2', 'twin'))).toBe(true)
+    })
+
+    test('renaming a path onto ITSELF (the current-parent no-op) still answers already-exists, not into-itself', async () => {
+      writeFileSync(join(plainDir, 'same-path.txt'), 'x')
+      const out = await renameTreeEntry(plainDir, 'same-path.txt', 'same-path.txt')
+      expect(out).toEqual({ ok: false, reason: 'already-exists' })
+    })
   })
 })
 

@@ -53,6 +53,15 @@ const EXT_LANGUAGE: Record<string, string> = {
   // `.env` files. `ini` is the grammar — see `DOTENV_LANGUAGE` for why, and for the whole-name rule
   // that catches `.env` itself, which has no extension to key on.
   ini: 'ini', properties: 'ini',
+  // `*.dockerfile` (a file NAMED with the extension rather than named `Dockerfile` outright) — the
+  // `dockerfile` grammar `NAME_LANGUAGE` already reaches for `Dockerfile` itself.
+  dockerfile: 'dockerfile',
+  // Terraform/HCL. `monacoEntry.ts` already imports this grammar (it exists for nothing else), so
+  // leaving these three extensions unclaimed cost the highlighting for free.
+  tf: 'hcl', tfvars: 'hcl', hcl: 'hcl',
+  // A Makefile FRAGMENT included by a top-level one. Same grammar answer as `makefile` above, and
+  // for the same reason — stated so a reviewer does not have to re-derive it from the fallback.
+  mk: 'plaintext',
 }
 
 /**
@@ -84,6 +93,8 @@ const DOTENV_LANGUAGE = 'ini'
  */
 const NAME_LANGUAGE: Record<string, string> = {
   dockerfile: 'dockerfile',
+  // The OCI-neutral spelling some projects use instead of `Dockerfile` — same grammar, same syntax.
+  containerfile: 'dockerfile',
   // **`makefile` IS NOT A LANGUAGE IN THIS BUNDLE EITHER**, and unlike `toml` and `vue` it has no
   // near-neighbour: `shell` was considered and REFUSED, because a Makefile's top-level lines are not
   // shell (only its recipes are), and one unbalanced quote in an `echo` would then paint the rest of
@@ -92,6 +103,19 @@ const NAME_LANGUAGE: Record<string, string> = {
   '.env': DOTENV_LANGUAGE,
   '.gitconfig': 'ini',
   '.editorconfig': 'ini',
+  // `.gitignore`/`.gitattributes` and `.dockerignore` are pattern lists monaco has no grammar for —
+  // stated explicitly rather than left to fall through the extension branch below (both basenames
+  // have no `.` after their leading one, so `dot <= 0` would answer `plaintext` anyway; this says WHY
+  // instead of leaving it to be inferred from a `<= 0` check three lines away).
+  '.gitignore': 'plaintext',
+  '.gitattributes': 'plaintext',
+  '.dockerignore': 'plaintext',
+  // A Justfile is `just`'s own recipe format — Makefile-shaped, shell-bodied, no grammar here either.
+  justfile: 'plaintext',
+  // Procfile (Heroku/foreman): `name: command` lines. No grammar; `ini` was considered and refused —
+  // a shell command on the right of the colon routinely contains its OWN `key=value` pairs, which
+  // `ini` would then paint as this file's top-level fields.
+  procfile: 'plaintext',
 }
 
 /**
@@ -121,6 +145,40 @@ function isDotenvVariant(base: string): boolean {
 function isDockerfileVariant(base: string): boolean {
   return base.startsWith('dockerfile.')
 }
+
+/**
+ * **THE TWO JSON DIAGNOSTICS THIS APP RELAXES, AND WHY THEY STAY DATA RATHER THAN A FUNCTION HERE.**
+ *
+ * Monaco's built-in JSON language service treats a `//` comment or a trailing comma as an ERROR by
+ * default (`monaco-editor/languages/features/json/register.js`'s own `diagnosticDefault`:
+ * `comments: 'error'`, `trailingCommas: 'error'`) — right for `package.json`, wrong for
+ * `tsconfig*.json` and `*.jsonc`, both of which legitimately carry both (`tsconfig.json` was the
+ * probe: a `// a comment` and a trailing comma each drew a `.squiggly-error` reading "Comments are
+ * not permitted in JSON.(521)").
+ *
+ * **There is no PER-FILE knob for this.** Every `.json`/`.jsonc` model on the page shares ONE
+ * `jsonDefaults` object (Monaco's `schemas[].fileMatch` targets SCHEMA validation only — a different
+ * setting entirely); the only way to tell `tsconfig.json` and `package.json` apart would be a
+ * SECOND language id with its own worker-backed diagnostics config, which means reaching into
+ * `jsonMode.js`'s un-typed, unexported `setupMode()` (there is no public API for a second JSON
+ * language) — undocumented internals `monacoEntry.lint.test.ts`'s barrel-equality check would also
+ * have to grow an exception for. This viewer makes no other claim of JSON strictness anywhere else
+ * in the product, so the two diagnostics are relaxed for every `.json` file rather than only
+ * `tsconfig*.json`/`*.jsonc`: the alternative is a `package.json` with a genuine trailing comma
+ * going unflagged, which is the smaller and disclosed cost next to a `tsconfig.json` permanently
+ * squiggly for syntax it is written in on purpose. `languageForPath` below does NOT map these to a
+ * separate id — `tsconfig.json`/`*.jsonc` stay `'json'`, exactly like every other `.json` file; only
+ * the shared diagnostics options move.
+ *
+ * This stays DATA, not a function that calls into `monaco.languages.json.jsonDefaults` itself,
+ * because this module is deliberately MONACO-FREE (see the file header) — the caller
+ * (`RepoFileEditor.tsx`, which already holds the loaded `monaco` module) merges this object into
+ * `jsonDefaults`'s current options once, before the first editor mounts.
+ */
+export const JSON_DIAGNOSTICS_OVERRIDE = {
+  comments: 'ignore',
+  trailingCommas: 'ignore',
+} as const
 
 /**
  * Every language id this module can answer with.
