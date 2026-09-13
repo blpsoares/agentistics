@@ -159,18 +159,38 @@ export function setStudioShown(shown: boolean): void {
   for (const l of studioShownListeners) l()
 }
 
+/**
+ * `ArtifactsAside`'s own publish, pulled out of its effect body so a wiring defect there (calling
+ * this with a hardcoded constant instead of its own `inStudio`) is caught by a test that calls it
+ * directly — `useEffect` never runs under `renderToStaticMarkup` (no jsdom in this repo), and
+ * mounting the whole Studio-capable aside is not practical in a unit test. An alias rather than new
+ * behaviour: `ArtifactsAside.tsx` calls this with its own `inStudio` on every change and with `false`
+ * on unmount, exactly as it called `setStudioShown` before.
+ */
+export function publishStudioShown(inStudio: boolean): void {
+  setStudioShown(inStudio)
+}
+
 /** The current value. Exists for tests and for callers that read once rather than subscribe. */
 export function getStudioShown(): boolean {
   return studioShown
 }
 
+/**
+ * Registers a listener directly, bypassing React — pulled out of `useStudioShown` below so a test
+ * can prove `setStudioShown` actually NOTIFIES rather than only updating the value `getStudioShown`
+ * reads back. `useSyncExternalStore` cannot be driven from a plain `bun test` (no jsdom, no
+ * `@testing-library/react`), and a get/set-only test cannot tell a real subscription from a dropped
+ * one — see `artifactsStore.test.ts`.
+ */
+export function subscribeStudioShown(cb: () => void): () => void {
+  studioShownListeners.add(cb)
+  return () => studioShownListeners.delete(cb)
+}
+
 /** Whether the Studio is the thing on screen right now, in ANY session's panel. */
 export function useStudioShown(): boolean {
-  return useSyncExternalStore(
-    cb => { studioShownListeners.add(cb); return () => { studioShownListeners.delete(cb) } },
-    () => studioShown,
-    () => false,
-  )
+  return useSyncExternalStore(subscribeStudioShown, () => studioShown, () => false)
 }
 
 /** For tests: forget the flag too. */

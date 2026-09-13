@@ -42,7 +42,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { setStudioShown } from '../../lib/artifactsStore'
+import { publishStudioShown, setStudioShown } from '../../lib/artifactsStore'
 import { asideCache, asideKey } from '../../lib/asideCache'
 import { focusMissNotice, isFocusedRow, rowsCarry, ROW_FLASH } from '../../lib/noteFocus'
 import { Activity, BarChart3, Bot, Brain, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, ExternalLink, Eye, FileEdit, FileText, FolderTree, GitBranch, GitPullRequest, Image, LayoutGrid, Loader, PanelRightClose, Pencil, Plug, Plus, Send, Sparkles, Terminal, Trash2, Workflow, X } from 'lucide-react'
@@ -464,8 +464,12 @@ export function ArtifactsAside({
    * unmount-only cleanup is what stops it reading "on" forever once this panel (and the Studio inside
    * it) is gone — closing the aside, or navigating away, unmounts this component without `inStudio`
    * ever having a chance to become `false` on its own.
+   *
+   * `publishStudioShown` (`artifactsStore.ts`) is `setStudioShown` pulled behind one indirection so
+   * a fix-wave review's planted defect here — hardcoding the published value instead of passing
+   * `inStudio` through — is caught by a test that calls it directly.
    */
-  useEffect(() => { setStudioShown(inStudio) }, [inStudio])
+  useEffect(() => { publishStudioShown(inStudio) }, [inStudio])
   useEffect(() => () => setStudioShown(false), [])
 
   /**

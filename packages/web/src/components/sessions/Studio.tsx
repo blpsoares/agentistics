@@ -756,7 +756,13 @@ export function StudioBar({ isMobile, lang, onExit, tree }: {
       display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, minWidth: 0,
       // 44px is the MOBILE figure and only the mobile figure — applied on desktop it would make
       // this thin bar as tall as the tab strip under it.
-      minHeight: isMobile ? 44 : 30, padding: '0 8px 0 2px',
+      minHeight: isMobile ? 44 : 30,
+      // The STATUS BAR is not padding this bar may spend on mobile — the Studio is a true
+      // full-screen `Layer` there (`mobileOverlay.ts`'s own concern), and this bar is its first
+      // child, flush with the viewport's own top edge. Same rule as `overlayPadding`, applied to a
+      // bar with its own left/right/bottom values rather than the common `0 0` shape that helper
+      // returns.
+      padding: isMobile ? 'var(--safe-top) 8px 0 2px' : '0 8px 0 2px',
       borderBottom: '1px solid var(--border)',
     }}>
       <button
@@ -764,8 +770,19 @@ export function StudioBar({ isMobile, lang, onExit, tree }: {
         aria-label={pt ? 'Fechar Studio' : 'Close Studio'}
         title={pt ? 'Fechar Studio' : 'Close Studio'}
         style={{
-          display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0,
-          minHeight: isMobile ? 44 : 26, padding: isMobile ? '0 10px 0 4px' : '0 7px 0 3px',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          // `studioLayout` answers `layers` for every mobile render, so `tree` (the only other
+          // control this bar can hold) is never passed on a phone — this is the SOLE control on
+          // this side of a bar that is already 44px tall there. `.ag-tap-icon`'s projected box
+          // (22px painted + the default 7px grow) tops out at 36px, short of 44 on ITS OWN doc's
+          // claim (see `TabStrip`'s own back-arrow, measured 34x35) — so with nothing beside it to
+          // steal from, this one pays its mobile target in paint rather than in a box that would
+          // still fall short.
+          // @touch-intentional icon-only, alone on this side of the bar — see above.
+          minHeight: isMobile ? 44 : 26, width: isMobile ? 44 : undefined,
+          // @overlay-intentional the status bar inset is reserved on the BAR's own padding above —
+          // this button's zero is its icon centring, not a full-screen dialog's top edge.
+          padding: isMobile ? 0 : '0 7px 0 3px', // @overlay-intentional see comment above
           border: 'none', borderRadius: 8, background: 'transparent',
           color: 'var(--text-secondary)', cursor: 'pointer',
           fontFamily: 'inherit', fontSize: isMobile ? 13 : 11.5,

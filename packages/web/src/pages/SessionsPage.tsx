@@ -43,6 +43,7 @@ import {
 import {
   closeArtifacts, openArtifacts, setArtifactCount, useArtifacts, useStudioShown,
 } from '../lib/artifactsStore'
+import { studioMenuRow } from '../lib/studioMenuRow'
 import type { SessionDrilldownProps } from '../components/SessionDrilldown'
 import type { Artifact } from '../lib/sessionArtifacts'
 import { liveEvents, type LiveTurn } from '../lib/artifactTabs'
@@ -1202,14 +1203,12 @@ export default function SessionsPage() {
                  other nav lost. The beta caveat stays on the Studio's own top bar, one tap away.
                  `on: studioOpen` mirrors the desktop button's pressed state — the same
                  `useStudioShown` flag, so a reader who opened the Studio from THIS row and then
-                 came back to the menu finds it marked current. */
-              ...(editorEnabled ? [{
-                id: 'studio',
-                label: 'Studio',
-                icon: <FolderTree size={15} />,
-                on: studioOpen,
-                onSelect: () => openArtifacts('studio'),
-              }] : []),
+                 came back to the menu finds it marked current. Built by `studioMenuRow`
+                 (above `SessionsPage`) rather than as a literal here, so its `on` wiring is
+                 asserted directly — see `SessionsPage.test.tsx`. */
+              ...(editorEnabled
+                ? [studioMenuRow(studioOpen, <FolderTree size={15} />, () => openArtifacts('studio'))]
+                : []),
             ]}
           />
         )}

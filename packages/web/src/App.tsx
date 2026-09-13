@@ -1356,6 +1356,85 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
   )
 }
 
+// --- the Studio button's own pure parts (§2 of the slots/references design) -----------------------
+//
+// Pulled out of `AppLayout` — a thousand-line component with no test file of its own — so each piece
+// can be asserted directly rather than only by clicking through the whole page in a browser.
+
+/** `localStorage`'s own shape, narrowed to what these two need, so a test can hand in one that throws. */
+type StorageLike = { getItem(key: string): string | null; setItem(key: string, value: string): void }
+
+export const STUDIO_SEEN_KEY = 'agentistics.studio.seen'
+
+/**
+ * Whether the dot has already fired. Tolerates a storage whose `getItem` throws (a private window,
+ * a wiped store) by answering "not seen yet" — the safer of the two wrong answers, since it shows a
+ * dot rather than hiding a real one.
+ */
+export function readStudioSeen(storage: Pick<StorageLike, 'getItem'>): boolean {
+  try { return storage.getItem(STUDIO_SEEN_KEY) === '1' } catch { return false }
+}
+
+/** Marks the dot seen for good. Never throws even when the storage does (private mode). */
+export function writeStudioSeen(storage: Pick<StorageLike, 'setItem'>): void {
+  try { storage.setItem(STUDIO_SEEN_KEY, '1') } catch { /* private mode */ }
+}
+
+/** The button's border/background/colour, as a pure function of its own pressed state. */
+export function studioButtonTokens(studioOn: boolean): { border: string; background: string; color: string } {
+  return {
+    border: '1px solid ' + (studioOn ? 'var(--anthropic-orange)' : 'var(--border-subtle)'),
+    background: studioOn ? 'rgba(232,146,90,0.08)' : 'var(--bg-elevated)',
+    color: studioOn ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+  }
+}
+
+/**
+ * The header's own Studio entry. Exported and taking every bit of its state as a PROP — the same
+ * reason `RepoSearchResults` is (see `Studio.tsx`'s own doc on it) — so `renderToStaticMarkup` can
+ * assert its `aria-pressed` and its dot without mounting `AppLayout` around it.
+ */
+export function StudioHeaderButton({ studioOn, studioSeen, lang, onOpen }: {
+  studioOn: boolean
+  studioSeen: boolean
+  lang: string
+  onOpen: () => void
+}) {
+  const tokens = studioButtonTokens(studioOn)
+  return (
+    <button
+      onClick={onOpen}
+      aria-pressed={studioOn}
+      title={lang === 'pt'
+        ? 'Agentistics Studio (beta) — os arquivos desta sessão em árvore, com busca e editor'
+        : 'Agentistics Studio (beta) — this session’s files as a tree, with search and an editor'}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+        height: 30, padding: '0 9px', borderRadius: 9, cursor: 'pointer',
+        ...tokens,
+        fontFamily: 'inherit', fontSize: 12,
+      }}
+    >
+      {/* `FolderTree`, the glyph the strip entry already wears — one feature, one icon. The dot
+          sits on ITS corner rather than the button's, so it reads as "this is new" and not as an
+          unrelated notification badge on the label beside it. */}
+      <span style={{ position: 'relative', display: 'flex' }}>
+        <FolderTree size={14} />
+        {!studioSeen && (
+          <span
+            aria-hidden="true"
+            style={{
+              position: 'absolute', top: -2, right: -2, width: 6, height: 6,
+              borderRadius: '50%', background: 'var(--anthropic-orange)',
+            }}
+          />
+        )}
+      </span>
+      <span>Studio</span>
+    </button>
+  )
+}
+
 export default function AppLayout() {
   const location = useLocation()
   const navigate = useNavigate()
@@ -1890,18 +1969,23 @@ export default function AppLayout() {
    *
    * `studioSeen` replaces the button's old `NewTag`: a corner DOT rather than a word, so the button
    * is the same width whether or not it has been pressed yet, cleared for good the first time it
-   * opens. Guarded like every other `localStorage` flag in this file — a private window or a wiped
-   * store just shows the dot every time, which is the safer of the two wrong answers.
+   * opens. Guarded like every other `localStorage` flag in this file (`readStudioSeen`/
+   * `writeStudioSeen`, pulled out as pure functions below `AppLayout` so a test can hand in a
+   * storage whose accessors throw) — a private window or a wiped store just shows the dot every
+   * time, which is the safer of the two wrong answers.
+   *
+   * CLEARED FROM ONE PLACE — an effect on `studioOn` turning true, not this button's own `onClick`
+   * — so every route into the Studio marks the dot seen the same way: this button, the mobile
+   * menu's row (`SessionsPage.tsx`) and the aside's own strip entry all flip `studioOn`, and only
+   * one of those used to clear the dot.
    */
   const studioOn = useStudioShown()
-  const [studioSeen, setStudioSeen] = useState(() => {
-    try { return localStorage.getItem('agentistics.studio.seen') === '1' } catch { return false }
-  })
-  const markStudioSeen = () => {
-    if (studioSeen) return
+  const [studioSeen, setStudioSeen] = useState(() => readStudioSeen(localStorage))
+  useEffect(() => {
+    if (!studioOn || studioSeen) return
     setStudioSeen(true)
-    try { localStorage.setItem('agentistics.studio.seen', '1') } catch { /* private mode */ }
-  }
+    writeStudioSeen(localStorage)
+  }, [studioOn, studioSeen])
 
   /**
    * Active sessions only — the fleet's own dimension (see `FiltersBar`'s doc comment on
@@ -3306,43 +3390,18 @@ export default function AppLayout() {
 
           PRESSED means the Studio is ON SCREEN, in whichever slot is showing it — not merely that
           this button was the one that opened it. `studioOn` (`useStudioShown`) is what makes that
-          true even when the aside's own back control put the Studio away again; see
-          `artifactsStore.ts` for why that flag exists at all before W2-A's slots land. The orange
-          treatment on `true` is the "Reabrir N sessões que caíram" button's own tokens
-          (`SessionsAside.tsx`), reused rather than re-invented. */}
+          true even when it was some OTHER control — the aside's own strip entry, or the mobile
+          menu row — that opened it, and false again the moment the aside's own back control puts
+          the Studio away; see `artifactsStore.ts` for why that flag exists at all before W2-A's
+          slots land. The orange treatment on `true` is the "Reabrir N sessões que caíram" button's
+          own tokens (`SessionsAside.tsx`), reused rather than re-invented. */}
       {selectedFleetSession && appCtx.editorEnabled && (
-        <button
-          onClick={() => { openArtifacts('studio'); markStudioSeen() }}
-          aria-pressed={studioOn}
-          title={lang === 'pt'
-            ? 'Agentistics Studio (beta) — os arquivos desta sessão em árvore, com busca e editor'
-            : 'Agentistics Studio (beta) — this session’s files as a tree, with search and an editor'}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-            height: 30, padding: '0 9px', borderRadius: 9, cursor: 'pointer',
-            border: '1px solid ' + (studioOn ? 'var(--anthropic-orange)' : 'var(--border-subtle)'),
-            background: studioOn ? 'rgba(232,146,90,0.08)' : 'var(--bg-elevated)',
-            color: studioOn ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-            fontFamily: 'inherit', fontSize: 12,
-          }}
-        >
-          {/* `FolderTree`, the glyph the strip entry already wears — one feature, one icon. The dot
-              sits on ITS corner rather than the button's, so it reads as "this is new" and not as an
-              unrelated notification badge on the label beside it. */}
-          <span style={{ position: 'relative', display: 'flex' }}>
-            <FolderTree size={14} />
-            {!studioSeen && (
-              <span
-                aria-hidden="true"
-                style={{
-                  position: 'absolute', top: -2, right: -2, width: 6, height: 6,
-                  borderRadius: '50%', background: 'var(--anthropic-orange)',
-                }}
-              />
-            )}
-          </span>
-          <span>Studio</span>
-        </button>
+        <StudioHeaderButton
+          studioOn={studioOn}
+          studioSeen={studioSeen}
+          lang={lang}
+          onOpen={() => openArtifacts('studio')}
+        />
       )}
 
       {selectedSessionRow && (

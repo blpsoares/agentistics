@@ -1,7 +1,7 @@
 import { test, expect, beforeEach } from 'bun:test'
 import {
-  closeArtifacts, getArtifacts, getStudioShown, openArtifacts, resetArtifacts, resetStudioShown,
-  setArtifactCount, setStudioShown, toggleArtifacts,
+  closeArtifacts, getArtifacts, getStudioShown, openArtifacts, publishStudioShown, resetArtifacts,
+  resetStudioShown, setArtifactCount, setStudioShown, subscribeStudioShown, toggleArtifacts,
 } from './artifactsStore'
 import { answerUnsaved, getUnsaved, reportUnsaved, resetUnsaved } from './unsavedBuffers'
 
@@ -154,5 +154,49 @@ test('the aside publishes it on, and off again once the Studio is no longer show
 test('resetting is what a fresh test (and an unmounted aside) both need', () => {
   setStudioShown(true)
   resetStudioShown()
+  expect(getStudioShown()).toBe(false)
+})
+
+/**
+ * `useStudioShown` is `useSyncExternalStore(subscribeStudioShown, …)`, and `getStudioShown()` alone
+ * cannot tell a real subscription from a dropped one — a `setStudioShown` that stopped NOTIFYING
+ * would still leave `getStudioShown()` correct, and the header button would simply stop re-rendering.
+ * `subscribeStudioShown` is the same function React's hook registers through, called directly here
+ * because this repo has no jsdom to drive the hook itself.
+ */
+test('a subscriber is actually notified when the flag changes, not only readable afterwards', () => {
+  const seen: boolean[] = []
+  const unsubscribe = subscribeStudioShown(() => seen.push(getStudioShown()))
+  setStudioShown(true)
+  setStudioShown(false)
+  expect(seen).toEqual([true, false])
+  unsubscribe()
+})
+
+test('setting it to what it already is notifies nobody', () => {
+  let calls = 0
+  const unsubscribe = subscribeStudioShown(() => { calls++ })
+  setStudioShown(false) // already false
+  expect(calls).toBe(0)
+  unsubscribe()
+})
+
+test('unsubscribing actually stops delivery', () => {
+  let calls = 0
+  const unsubscribe = subscribeStudioShown(() => { calls++ })
+  unsubscribe()
+  setStudioShown(true)
+  expect(calls).toBe(0)
+})
+
+/**
+ * `publishStudioShown` is `ArtifactsAside`'s own effect body, pulled out so its wiring — passing
+ * `inStudio` through rather than a constant — is provable without mounting the aside (`useEffect`
+ * never runs under `renderToStaticMarkup`, and this repo has no jsdom to drive a real mount).
+ */
+test('publishStudioShown passes its argument through, not a hardcoded constant', () => {
+  publishStudioShown(true)
+  expect(getStudioShown()).toBe(true)
+  publishStudioShown(false)
   expect(getStudioShown()).toBe(false)
 })

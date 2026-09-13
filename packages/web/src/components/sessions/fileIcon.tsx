@@ -194,7 +194,7 @@ export function fileIconId(name: string, kind: 'file' | 'dir', expanded = false)
  */
 const HUE = {
   ts: '#3178c6',
-  react: '#2492ab',
+  react: '#2699b3',
   js: '#ad8500',
   json: '#b78411',
   markdown: '#4a8ed6',
@@ -223,8 +223,15 @@ const HUE = {
   text: '#8b8b94',
 } as const satisfies Record<string, string>
 
-/** The two `--bg-base` values a mark is drawn on. The test's grounds, kept beside the palette. */
-export const ICON_GROUNDS = ['#0a0a0f', '#f4f4f7'] as const
+/**
+ * The two `--bg-surface` values a mark is ACTUALLY drawn on — the tree's rows and an inactive tab
+ * are both transparent over that backdrop, never `--bg-elevated` (that is the active tab's ground,
+ * `ICON_GROUNDS_ELEVATED` below) and never `--bg-base` either. This constant named `--bg-base`
+ * (`#0a0a0f`/`#f4f4f7`) until a live measurement of the computed ancestor chain found the real
+ * ground one step lighter; the "DEEPENED" table above still records its original figures against
+ * `--bg-base`; nothing here failed the floor once re-checked against the correct ground.
+ */
+export const ICON_GROUNDS = ['#111118', '#fafafc'] as const
 
 /** Every hue a mark can be drawn in, for the test that holds each of them to the floor. */
 export const ICON_HUES: Readonly<Record<string, string>> = HUE
