@@ -117,10 +117,46 @@ export function removeMermaidScratchElement(host: ScratchElementHost, renderId: 
 }
 
 /**
- * The root `<svg>`'s viewBox width, PIXELS — mermaid's own "how wide is this diagram, really" —
- * or `null` when the markup carries no `viewBox` to read (never guessed at).
+ * A bare number inside a `viewBox`: optionally negative, optionally decimal. Mermaid's own
+ * diagrams almost always carry a `4 4` origin (its internal padding), never `0 0` — a prior
+ * version of this file anchored on a literal `"0 0 "` prefix and silently never matched a single
+ * real diagram (I4).
  */
-const VIEWBOX_WIDTH = /<svg\b[^>]*\bviewBox="0 0 ([\d.]+) [\d.]+"/
+const VB_NUM = String.raw`-?\d+(?:\.\d+)?`
+
+/** The raw `viewBox="…"` attribute value, lifted whole out of the opening `<svg …>` tag. */
+const VIEWBOX_ATTR = /<svg\b[^>]*\bviewBox="([^"]*)"/
+
+/**
+ * `viewBox` is `minX minY width height`, separated by any mix of commas and whitespace (the SVG
+ * spec allows either) — never assumed to be exactly `"a b c d"` with single spaces. Captures all
+ * four so the THIRD (the width) can be read regardless of what the first two look like.
+ */
+const VIEWBOX_VALUES = new RegExp(
+  `^\\s*(${VB_NUM})[\\s,]+(${VB_NUM})[\\s,]+(${VB_NUM})[\\s,]+(${VB_NUM})\\s*$`,
+)
+
+/** A `width="…"` on the root `<svg>` that is an actual number, e.g. `"760.5"` — never `"100%"`. */
+const WIDTH_ATTR = new RegExp(`<svg\\b[^>]*\\bwidth="(${VB_NUM})(?:px)?"`)
+
+/**
+ * The root `<svg>`'s natural width, PIXELS — read from its `viewBox`'s third number (the spec's
+ * own "width" field) when the `viewBox` is present and well-formed, falling back to the `<svg>`'s
+ * own `width` attribute when it is not (missing entirely, or carrying something this parser
+ * cannot read as four numbers). Mermaid's `width="100%"` is exactly the case that fallback exists
+ * to reject — a percentage is not a natural width, so with no numeric `viewBox` either, `null`.
+ * "Refuse, never guess": nothing here is invented from a number that was never actually on the SVG.
+ */
+function naturalSvgWidth(svg: string): string | null {
+  const viewBoxAttr = VIEWBOX_ATTR.exec(svg)
+  if (viewBoxAttr !== null) {
+    const values = VIEWBOX_VALUES.exec(viewBoxAttr[1]!)
+    if (values !== null) return values[3]!
+  }
+  const widthAttr = WIDTH_ATTR.exec(svg)
+  if (widthAttr !== null) return widthAttr[1]!
+  return null
+}
 
 /**
  * Mermaid emits its root `<svg>` at `width="100%"` with `style="max-width:<viewBox width>px"` —
@@ -132,14 +168,13 @@ const VIEWBOX_WIDTH = /<svg\b[^>]*\bviewBox="0 0 ([\d.]+) [\d.]+"/
  *
  * Both substitutions are scoped to the OPENING `<svg …>` tag alone (`[^>]*` cannot cross the `>`
  * that ends it), so a `width="…"` or a `max-width:` appearing later, inside the diagram's own
- * nodes, is never touched. A markup with no `viewBox` (should never happen — mermaid always emits
- * one — but "refuse, never guess" applies here too) is returned untouched rather than rewritten
- * from an invented number.
+ * nodes, is never touched. Markup this parser cannot read a natural width from at all — no
+ * `viewBox`, one it cannot parse, and no numeric `width` either — is returned untouched rather
+ * than rewritten from an invented number.
  */
 export function widenSvgToNaturalSize(svg: string): string {
-  const vb = VIEWBOX_WIDTH.exec(svg)
-  if (vb === null) return svg
-  const width = vb[1]!
+  const width = naturalSvgWidth(svg)
+  if (width === null) return svg
   return svg
     .replace(/(<svg\b[^>]*\bwidth=")[^"]*(")/, `$1${width}$2`)
     .replace(/(<svg\b[^>]*\bstyle="[^"]*max-width:)[^;"]*(;?[^"]*")/, `$1 none$2`)

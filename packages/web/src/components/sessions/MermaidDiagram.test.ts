@@ -92,8 +92,35 @@ describe('removeMermaidScratchElement', () => {
 // its root <svg> at `width="100%"` with `style="max-width:<viewBox width>px"` — meant to shrink a
 // diagram to fit a reading column, the opposite of what this component's own `overflowX: auto` box
 // wants (draw at natural size, let the BOX scroll).
+//
+// A first fix wave anchored its regex on a literal `viewBox="0 0 …"` prefix. Real mermaid 12.0.0
+// never emits that — every flowchart carries its own `4 4` padding as the origin — so the fix never
+// matched a single live diagram and the bug reproduced exactly as before (I4 in the review). The
+// fixtures below with `viewBox="4 4 …"` are the ACTUAL opening `<svg …>` tags captured from a real
+// mermaid flowchart rendered in a browser, not hand-built `"0 0 …"` shapes.
 describe('widenSvgToNaturalSize', () => {
-  test('rewrites width to the viewBox width and drops the max-width clamp', () => {
+  test('real mermaid output: a 40-node flowchart with "4 4 …" origin is widened (I4 regression)', () => {
+    // Captured live from wide-diagram.md's rendered SVG (review's I4 repro).
+    const svg = '<svg aria-roledescription="flowchart-v2" role="graphics-document document" viewBox="4 4 7656 60" '
+      + 'style="max-width: 7656px;" class="flowchart" xmlns="http://www.w3.org/2000/svg" width="100%" '
+      + 'id="ag-mermaid-1" height="60">'
+    const out = widenSvgToNaturalSize(svg)
+    expect(out).toContain('width="7656"')
+    expect(out).not.toContain('max-width: 7656px')
+    expect(out).toContain('max-width: none')
+  })
+
+  test('real mermaid output: a small flowchart with decimal "4 4 …" origin is widened', () => {
+    // Captured live from mermaid-labels.md's rendered SVG.
+    const svg = '<svg aria-roledescription="flowchart-v2" role="graphics-document document" '
+      + 'viewBox="4 4 360 112.796875" style="max-width: 360px;" class="flowchart" width="100%" height="112.796875">'
+    const out = widenSvgToNaturalSize(svg)
+    expect(out).toContain('width="360"')
+    expect(out).not.toContain('max-width: 360px')
+    expect(out).toContain('max-width: none')
+  })
+
+  test('rewrites width to the viewBox width and drops the max-width clamp (0 0 origin)', () => {
     const svg = '<svg viewBox="0 0 842.5 213" width="100%" style="max-width: 842.5px;" role="graphics-document">'
     const out = widenSvgToNaturalSize(svg)
     expect(out).toContain('width="842.5"')
@@ -101,17 +128,56 @@ describe('widenSvgToNaturalSize', () => {
     expect(out).toContain('max-width: none')
   })
 
+  test('a negative origin (minX/minY below zero) still reads the width as the third number', () => {
+    const svg = '<svg viewBox="-10.5 -3 500.25 120" width="100%" style="max-width:500.25px;">'
+    const out = widenSvgToNaturalSize(svg)
+    expect(out).toContain('width="500.25"')
+    expect(out).toContain('max-width: none')
+  })
+
+  test('comma-separated viewBox values (SVG spec allows either separator)', () => {
+    const svg = '<svg viewBox="4,4,300,100" width="100%" style="max-width:300px;">'
+    const out = widenSvgToNaturalSize(svg)
+    expect(out).toContain('width="300"')
+    expect(out).toContain('max-width: none')
+  })
+
+  test('mixed comma-and-space viewBox values', () => {
+    const svg = '<svg viewBox="4, 4, 300.5, 100" width="100%" style="max-width:300.5px;">'
+    const out = widenSvgToNaturalSize(svg)
+    expect(out).toContain('width="300.5"')
+  })
+
   test('touches ONLY the opening <svg> tag — a width/max-width appearing later, inside a node, survives', () => {
-    const svg = '<svg viewBox="0 0 100 50" width="100%" style="max-width:100px;">'
+    const svg = '<svg viewBox="4 4 100 50" width="100%" style="max-width:100px;">'
       + '<rect width="100%" style="max-width:40px" /></svg>'
     const out = widenSvgToNaturalSize(svg)
-    expect(out).toContain('<svg viewBox="0 0 100 50" width="100" style="max-width: none;">')
+    expect(out).toContain('<svg viewBox="4 4 100 50" width="100" style="max-width: none;">')
     // The nested <rect>'s own attributes are untouched — the substitution is anchored to `<svg\b`.
     expect(out).toContain('<rect width="100%" style="max-width:40px" />')
   })
 
-  test('a markup with no viewBox (should never happen) is returned untouched, never guessed at', () => {
+  test('a malformed viewBox (not four numbers) falls back to the svg\'s own numeric width attribute', () => {
+    const svg = '<svg viewBox="not a viewbox" width="642.75" style="max-width:200px;"></svg>'
+    const out = widenSvgToNaturalSize(svg)
+    expect(out).toContain('width="642.75"')
+    expect(out).toContain('max-width: none')
+  })
+
+  test('no viewBox at all falls back to a numeric width attribute', () => {
+    const svg = '<svg width="500" style="max-width:200px;"></svg>'
+    const out = widenSvgToNaturalSize(svg)
+    expect(out).toContain('width="500"')
+    expect(out).toContain('max-width: none')
+  })
+
+  test('no viewBox and a percentage width (mermaid\'s actual shape with nothing to read) is untouched', () => {
     const svg = '<svg width="100%" style="max-width:200px;"></svg>'
+    expect(widenSvgToNaturalSize(svg)).toBe(svg)
+  })
+
+  test('neither a parseable viewBox nor a numeric width is returned untouched, never guessed at', () => {
+    const svg = '<svg role="graphics-document"></svg>'
     expect(widenSvgToNaturalSize(svg)).toBe(svg)
   })
 })
