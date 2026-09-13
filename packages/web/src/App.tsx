@@ -6,7 +6,7 @@ import {
   Activity, AlertTriangle, ArrowLeft, ArrowRight, BarChart2, Bot,
   Calendar, CheckCircle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
   Clock, Code2, Cpu, Database, DollarSign, Download,
-  FileCode, FileDown, FileText, Flame, FolderOpen, GitBranch,
+  FileCode, FileDown, FileText, Flame, FolderOpen, FolderTree, GitBranch,
   GitCommit, GitCompare, Globe, Home, KeyRound, Layers,
   LogOut, Maximize2, MessageSquare, MessagesSquare, Moon, MoreHorizontal,
   PanelLeft, RefreshCw, Server, Settings, Shield, ShieldCheck,
@@ -18,6 +18,8 @@ import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_
 import { usePlanBasis } from './hooks/usePlanBasis'
 import { planScopeHarnesses, planScopeNote, sessionPlanFactor } from './lib/costBasis'
 import { bootLoading } from './lib/bootPhase'
+import { editorEnabledFor } from './lib/editorGate'
+import { resolveTeamSessionRefresh } from './lib/teamSessionRefresh'
 import { DEFAULT_CARD_ORDER, migrateCardOrder, type CardId } from './lib/cardOrder'
 import { BillingIntroModal } from './components/BillingIntroModal'
 import type { LoadProgress } from './hooks/useData'
@@ -39,6 +41,7 @@ import { ProjectsList } from './components/ProjectsList'
 import { FiltersBar } from './components/FiltersBar'
 import { NotificationToasts } from './components/NotificationToasts'
 import { BetaTag } from './components/BetaTag'
+import { NewTag } from './components/NewTag'
 import { KeyboardProbe, keyboardProbeOn } from './components/KeyboardProbe'
 import { shouldResetDocumentScroll } from './lib/viewportReset'
 import { MagnifierLayer } from './components/a11y/MagnifierLayer'
@@ -146,6 +149,10 @@ interface TeamSessionState {
   chatEnabled?: boolean
   /** The same, for `/api/shell/*`. Undefined reads as OFF — see `AppContext.shellEnabled`. */
   shellEnabled?: boolean
+  /** The same, for the repository explorer's `/api/fleet/tree*`. Already RESOLVED by the server
+   *  (`sessions/editor-gate.ts`): the capability AND the switch. Undefined reads as OFF — see
+   *  `AppContext.editorEnabled`. */
+  editorEnabled?: boolean
 }
 
 export interface IamAccount { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: { teamId: string; role: 'manager' | 'user' }[]; mustChangePassword: boolean }
@@ -1419,12 +1426,26 @@ export default function AppLayout() {
   }, [])
   useEffect(() => { if (teamSession?.central) reloadIam() }, [teamSession?.central, reloadIam])
 
-  useEffect(() => {
-    fetch('/api/team/session')
+  /**
+   * Re-reads the session so every capability+preference the server resolves — `editorEnabled`
+   * (through `editorGate.ts`), `shellEnabled`, `chatEnabled`, `central`, … — can catch up without a
+   * reload. This used to be a mount-only effect, so a switch flipped in Settings (`SessionsSettings`)
+   * never reached a page that had already read the old answer: the settings screen itself updated
+   * (it re-reads `/api/preferences` on its own), but every Studio entry stayed gone, or stayed
+   * present, exactly as it was at boot. The browser must not re-derive the resolved flag from a
+   * capability plus a preference itself — that is what `editorGate.ts`'s own header warns against —
+   * so the fix is to ask the SERVER again rather than mirror a guess into context.
+   *
+   * `resolveTeamSessionRefresh` is what keeps a transient failure from wiping out everything already
+   * known (`central`, `capabilities`, …) back to the bare boot default — see its own header.
+   */
+  const refreshTeamSession = useCallback(() => {
+    return fetch('/api/team/session')
       .then(r => r.ok ? (r.json() as Promise<TeamSessionState>) : null)
-      .then(s => setTeamSession(s ?? { required: false, authed: true }))
-      .catch(() => setTeamSession({ required: false, authed: true }))
+      .then(s => setTeamSession(prev => resolveTeamSessionRefresh(prev, s, { required: false, authed: true })))
+      .catch(() => setTeamSession(prev => resolveTeamSessionRefresh(prev, null, { required: false, authed: true })))
   }, [])
+  useEffect(() => { void refreshTeamSession() }, [refreshTeamSession])
 
   useEffect(() => {
     fetch('/api/team/status')
@@ -2055,6 +2076,9 @@ export default function AppLayout() {
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
   const [chatSoundId, setChatSoundId] = useState('ping')
+  // The repository explorer's autosave switch. A plain preference, loaded with the rest below and
+  // defaulting to OFF — it is not a capability, so it is never read off `/api/team/session`.
+  const [editorAutosave, setEditorAutosave] = useState(false)
 
   const [cardPrecision, setCardPrecisionState] = useState<Record<string, boolean>>({})
   const precisionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -2108,7 +2132,7 @@ export default function AppLayout() {
     // only a real 200 response with no archiveMode may set it. On failure we retry with
     // backoff and leave state at `undefined` (neutral loading bg) so nothing false-gates.
     let cancelled = false
-    const apply = (prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean; installDismissed?: boolean; team?: TeamConfig; billing?: unknown }) => {
+    const apply = (prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; editorAutosave?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean; installDismissed?: boolean; team?: TeamConfig; billing?: unknown }) => {
       if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
       // Total and never throws: a hand-edited preferences.json must not blank the dashboard.
       const nextBilling = normalizeBillingSettings(prefs.billing)
@@ -2125,6 +2149,9 @@ export default function AppLayout() {
       if (prefs.cardOrder) setCardOrder(migrateCardOrder(prefs.cardOrder))
       if (prefs.chatModel) setChatModel(prefs.chatModel as ChatModelId)
       if (prefs.chatSoundEnabled !== undefined) setChatSoundEnabled(prefs.chatSoundEnabled)
+      // Absent reads as OFF, so this is `=== true` rather than the `!== undefined` guard above —
+      // autosave was never on before it had a switch, and an upgrade must not turn it on.
+      setEditorAutosave(prefs.editorAutosave === true)
       setInstallDismissedPref(prefs.installDismissed === true)
       if ((prefs as Record<string, unknown>).chatSoundId) setChatSoundId((prefs as Record<string, unknown>).chatSoundId as string)
       // Resolve the archive mode (migrates the legacy archiveSessions boolean). Only reached on
@@ -3011,6 +3038,16 @@ export default function AppLayout() {
     isCentral,
     capabilities: teamSession?.capabilities,
     shellEnabled: teamSession?.shellEnabled === true,
+    // Already resolved by the server (capability AND switch) — never re-derived here. Undefined on
+    // an older server reads as OFF, so the Studio is simply absent there. `editorEnabledFor` also
+    // subtracts a CENTRAL, and this is the only place that happens: `editor-gate.ts` carries no
+    // central term, so the server says `true` there while the whole `/api/fleet` prefix is refused.
+    // Publishing the narrowed value closes every consumer at once — see `lib/editorGate.ts`.
+    editorEnabled: editorEnabledFor(teamSession?.editorEnabled, isCentral),
+    // The one way a page can make the line above catch up after `SessionsSettings` flips the
+    // preference: ask the server again, never mirror the toggle's own guess into context.
+    refreshTeamSession,
+    editorAutosave, setEditorAutosave,
     me: iam?.account,
     teams: teamsList,
     machines: machinesList,
@@ -3220,8 +3257,8 @@ export default function AppLayout() {
           onClick={toggleArtifacts}
           aria-pressed={artifacts.open}
           title={lang === 'pt'
-            ? 'Conteúdo desta sessão — arquivos, docs, atividade, galeria e skills'
-            : 'This session’s contents — files, docs, activity, gallery and skills'}
+            ? 'Conteúdo desta sessão — atividade, galeria, skills, subagentes e mais'
+            : 'This session’s contents — activity, gallery, skills, subagents and more'}
           style={{
             display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
             height: 30, padding: '0 10px', borderRadius: 9, cursor: 'pointer',
@@ -3244,6 +3281,46 @@ export default function AppLayout() {
         </button>
       )}
 
+      {/* AGENTISTICS STUDIO — the second way in, and the short one.
+          It lived only behind the aside's tab strip, which is two presses and a launcher grid away
+          from a reader who does not already know it is there; this row had the space because the
+          dashboard's action cluster moved out of it.
+
+          ABSENT, NEVER DISABLED, when the gate is closed. `appCtx.editorEnabled` is the SERVER's own
+          answer — `CAPS.localShell` AND the user's switch, combined by `sessions/editor-gate.ts` —
+          and it is read here rather than re-derived from a capability plus a preference, which is the
+          one rule this feature's wiring has. A greyed button would explain nothing and the route
+          refuses anyway. It needs no `!isCentral` of its own: `appCtx.editorEnabled` is already
+          narrowed by one where it is published, because the whole `/api/fleet` prefix is refused on
+          a central and a term each surface has to remember is a term the next one forgets.
+
+          It carries BOTH marks. `beta` is the caveat every other entry to this feature wears, and
+          `new` is why a reader should look at a button that was not on this row yesterday — two
+          different statements, so two marks (see `NewTag`). The same pair is on the mobile entry in
+          `SessionsPage`'s session menu: a feature marked on one nav and not the other teaches the
+          reader that the unmarked one is something else. */}
+      {selectedFleetSession && appCtx.editorEnabled && (
+        <button
+          onClick={() => openArtifacts('studio')}
+          title={lang === 'pt'
+            ? 'Agentistics Studio — os arquivos desta sessão em árvore, com busca e editor'
+            : 'Agentistics Studio — this session’s files as a tree, with search and an editor'}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+            height: 30, padding: '0 9px', borderRadius: 9, cursor: 'pointer',
+            border: '1px solid var(--border-subtle)',
+            background: 'var(--bg-elevated)', color: 'var(--text-secondary)',
+            fontFamily: 'inherit', fontSize: 12,
+          }}
+        >
+          {/* `FolderTree`, the glyph the strip entry already wears — one feature, one icon. */}
+          <FolderTree size={14} />
+          <span>Studio</span>
+          <BetaTag what={lang === 'pt' ? 'O Studio' : 'The Studio'} />
+          <NewTag lang={lang === 'pt' ? 'pt' : 'en'} />
+        </button>
+      )}
+
       {selectedSessionRow && (
         <SessionActions
           row={selectedSessionRow}
@@ -3255,6 +3332,7 @@ export default function AppLayout() {
           // until the next poll carries the new row. See `reopenedSessionRoute`.
           onOpened={id => {
             const r = reopenedSessionRoute(id, {
+              id: selectedSessionRow.id,
               harness: selectedSessionRow.harness,
               title: selectedSessionRow.title,
             })

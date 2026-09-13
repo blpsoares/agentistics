@@ -256,7 +256,7 @@ export function SessionsAside({
       // message. The row it came FROM names the wait; see `reopenedSessionRoute`.
       if (out.ok && action === 'resume' && out.id) {
         const from = rows.find(r => r.id === id)
-        const r = reopenedSessionRoute(out.id, from ? { harness: from.harness, title: from.title } : undefined)
+        const r = reopenedSessionRoute(out.id, from ? { id, harness: from.harness, title: from.title } : { id })
         navigate(r.path, r.options)
       }
     })

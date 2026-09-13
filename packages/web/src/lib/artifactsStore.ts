@@ -18,6 +18,7 @@
  */
 
 import { useSyncExternalStore } from 'react'
+import { holdIfUnsaved } from './unsavedBuffers'
 
 export interface ArtifactsState {
   /** Which session the count and the open flag describe. `null` before one is selected. */
@@ -98,8 +99,22 @@ export function openArtifacts(tab?: string, ref?: string): void {
   })
 }
 
-/** Closing is also a DECISION not to be reopened automatically — see `ArtifactsState.dismissed`. */
+/**
+ * Closing is also a DECISION not to be reopened automatically — see `ArtifactsState.dismissed`.
+ *
+ * AND IT ASKS FIRST WHEN THE STUDIO HOLDS UNSAVED BUFFERS. Closing the panel unmounts the whole
+ * pane, Monaco models and all, so a close with dirty buffers is a discard. The question is asked
+ * HERE, in the only function that closes, rather than at each button that calls it: the panel's
+ * own close, the header's toggle and the page menu's toggle all arrive through this, and a guard
+ * at the call sites is a guard the next caller forgets. `unsavedBuffers.ts` holds the question; the
+ * close happens only when the reader chooses to discard.
+ */
 export function closeArtifacts(): void {
+  if (state.open && holdIfUnsaved('close', closeNow)) return
+  closeNow()
+}
+
+function closeNow(): void {
   emit({ ...state, open: false, dismissed: true })
 }
 

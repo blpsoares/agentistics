@@ -532,6 +532,14 @@ page's origin is `http:` or `https:` and cannot be forged into another scheme, s
 ability to frame anything, and `lan` / `public` are untouched — they keep `frame-ancestors 'none'`
 and the legacy header. `security-headers.test.ts` pins both directions.
 
+The Studio's MEDIA responses (`/api/fleet/media`, `/api/fleet/tree/media`) are the one exception to
+`frame-ancestors 'none'`, because the Studio shows a PDF in an `<iframe>` of the dashboard itself.
+They carry `default-src 'none'; sandbox; frame-ancestors 'self'` (plus `vscode-webview:` on `local`)
+and, where the profile does not embed, `X-Frame-Options: SAMEORIGIN` — never `ALLOW`, never absent
+off `local`. Measured in Chromium: the same origin renders the PDF, a foreign origin is refused with a
+`frame-ancestors` violation. `applyBaselineHeaders` (`response-policy.ts`) is the one function that
+composes this and `index.ts` calls it; `response-policy.test.ts` tests that function, not a copy.
+
 ## 8c. Managing a machine's sessions from a central — what is guaranteed, and what is not
 
 Reaching into another machine's live sessions is the most powerful thing a central can be asked to
