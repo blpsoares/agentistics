@@ -76,10 +76,13 @@ test('...and the layout is a STYLE, not a second copy of the pane', () => {
   // single answer to "which shape"; a branch that returned early would not need it.
   expect(has('const artShell:')).toBe(true)
   expect(has('const artOuter: CSSProperties')).toBe(true)
-  expect(has('<div style={artOuter}>')).toBe(true)
-  // The box now renders `rightSlotContent` — the Studio's own target box, or `artifactsPane`,
-  // decided by `lib/panelSlots.ts`'s `layout.right` — never the pane directly, or the Studio's
-  // switcher (`rightSwitcher`) would have nowhere to sit above whichever one is showing.
+  // `ref={rightAsideRef}` was added alongside `style={artOuter}` so this box's live left edge can
+  // be reported to `App.tsx`'s Filtros panel (`rightAsideEdge.ts`) — same one slot, same one style
+  // object, with a second attribute rather than a second render site.
+  expect(has('<div style={artOuter} ref={rightAsideRef}>')).toBe(true)
+  // The box renders `rightSlotContent` — the Studio's own target box, `cli`/`shell`'s own region, or
+  // `artifactsPane`, decided by `lib/panelSlots.ts`'s `layout.right` — never the pane directly, or
+  // the Studio's switcher (`rightSwitcher`) would have nowhere to sit above whichever one is showing.
   expect(has('<div style={artInner}>{rightSlotContent}</div>')).toBe(true)
   expect(has('const rightSlotContent =')).toBe(true)
   // And the centre is a value. A `return` inside the layout branches is how the four sites happened.
