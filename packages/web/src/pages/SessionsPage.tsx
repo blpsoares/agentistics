@@ -52,8 +52,8 @@ import { ArtifactsAside } from '../components/sessions/ArtifactsAside'
 import { HardwarePanel } from '../components/sessions/HardwarePanel'
 import { UnsavedChangesGuard } from '../components/sessions/UnsavedChangesGuard'
 import {
-  ASIDE_ANIM_MS, ASIDE_EASE, edgeHint, panelWidth, resolveArtifactLayout,
-  type ArtifactLayout,
+  artifactsPanelMax, ASIDE_ANIM_MS, ASIDE_EASE, edgeHint, PANEL_MIN_WIDTH, panelWidth,
+  resolveArtifactLayout, type ArtifactLayout,
 } from '../lib/artifactLayout'
 import {
   closeArtifacts, openArtifacts, setArtifactCount, useArtifacts,
@@ -480,7 +480,12 @@ export default function SessionsPage() {
     // 620 by default, not 440: the panel's job is reading a FILE, and code at 440px wraps or
     // scrolls sideways on nearly every line. A reader who wants the conversation wider can drag it
     // back, and that choice is remembered.
-    return Number.isFinite(v) && v >= 280 ? Math.min(v, 900) : 620
+    //
+    // THE CAP IS THE VIEWPORT'S OWN ROOM (design item 6), not a flat 900px any more — that ceiling
+    // was reported too narrow on a wide monitor, where it was barely half the screen. See
+    // `artifactsPanelMax`.
+    const cap = artifactsPanelMax(typeof window === 'undefined' ? 1440 : window.innerWidth)
+    return Number.isFinite(v) && v >= PANEL_MIN_WIDTH ? Math.min(v, cap) : 620
   })
   const dragArt = useRef<{ x: number; w: number } | null>(null)
   /** A resize in progress. Only used to suspend the open/close animation — see `asideMotion`. */
@@ -488,8 +493,11 @@ export default function SessionsPage() {
   useEffect(() => {
     const move = (e: MouseEvent) => {
       if (!dragArt.current) return
-      // The panel grows as the pointer moves LEFT, so the delta is inverted.
-      const next = Math.max(280, Math.min(900, dragArt.current.w + (dragArt.current.x - e.clientX)))
+      // The panel grows as the pointer moves LEFT, so the delta is inverted. The cap is read FRESH
+      // on every move rather than captured once — a window resized mid-drag is the same situation
+      // `artifactsPanelMax` already handles for an ordinary reflow.
+      const cap = artifactsPanelMax(window.innerWidth)
+      const next = Math.max(PANEL_MIN_WIDTH, Math.min(cap, dragArt.current.w + (dragArt.current.x - e.clientX)))
       setArtWidth(next)
     }
     const up = () => {
