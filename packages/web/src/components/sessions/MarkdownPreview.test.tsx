@@ -9,7 +9,8 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { MarkdownPreview } from './MarkdownPreview'
+import ReactMarkdown from 'react-markdown'
+import { MarkdownPreview, type MarkdownPreviewProps } from './MarkdownPreview'
 
 function render(text: string, opts: Partial<Parameters<typeof MarkdownPreview>[0]> = {}): string {
   return renderToStaticMarkup(
@@ -22,6 +23,32 @@ function render(text: string, opts: Partial<Parameters<typeof MarkdownPreview>[0
       {...opts}
     />,
   )
+}
+
+const BASE_PROPS: MarkdownPreviewProps = {
+  text: 'body', sessionId: 's1', docPath: 'docs/guide.md', lang: 'en', theme: 'dark',
+}
+
+/**
+ * Walks the element tree `MarkdownPreview(props)` returns (calling the component as a PLAIN
+ * FUNCTION, never rendered — this repo's stack has no jsdom) looking for the one element whose
+ * `type` is `wanted`. Used to reach the `<ReactMarkdown components={…}>` element buried inside the
+ * frontmatter conditionals, so a test can inspect the `components` map's own function IDENTITIES
+ * without a DOM.
+ */
+function findElement(node: unknown, wanted: unknown): { props: Record<string, unknown> } | null {
+  if (node === null || typeof node !== 'object') return null
+  const el = node as { type?: unknown; props?: { children?: unknown } }
+  if (el.type === wanted) return el as { props: Record<string, unknown> }
+  const children = el.props?.children
+  if (Array.isArray(children)) {
+    for (const c of children) {
+      const found = findElement(c, wanted)
+      if (found !== null) return found
+    }
+    return null
+  }
+  return findElement(children, wanted)
 }
 
 describe('security — untrusted repository content renders inert', () => {
@@ -91,6 +118,19 @@ describe('security — untrusted repository content renders inert', () => {
     // by `resolveRepoRelativePath`'s own tests for the path it would be called with.
     expect(opened).toBeNull()
   })
+
+  // M7: a relative link used to carry its raw `href`, so a middle click / "open in new tab" hit a
+  // meaningless dashboard URL — harmless, but a real oddity next to a link that visually looks like
+  // one. There is nothing to navigate TO (it names a path inside a session's repository, not a URL),
+  // so the fix is no `href` at all: still clickable, still reachable from a keyboard, never a
+  // navigation target.
+  test('an internal link carries no href — nothing for a middle click to navigate to (M7)', () => {
+    const html = render('[other](./other.md)')
+    expect(html).not.toContain('href="./other.md"')
+    expect(html).not.toContain('href=".%2Fother.md"')
+    expect(html).toContain('role="link"')
+    expect(html).toContain('tabindex="0"')
+  })
 })
 
 describe('frontmatter', () => {
@@ -124,5 +164,51 @@ describe('code fences', () => {
     // through to the code highlighter, which would have printed the raw arrow/bracket tokens.
     expect(html).not.toContain('<span style="color')
     expect(html).toContain('Drawing the diagram')
+  })
+
+  // M5: the diagram (and its "drawing…"/error card) used to render INSIDE `.ag-chat-md pre` — a box
+  // inside a box, and a `<div>` nested inside a `<pre>`. `MarkdownPre` intercepts exactly the element
+  // `MarkdownCode` returns for a mermaid fence and skips the wrapper for it alone.
+  test('a mermaid fence is NOT wrapped in a <pre> — the fix for M5', () => {
+    const html = render('```mermaid\ngraph TD\n  A --> B\n```\n')
+    expect(html).not.toContain('<pre')
+  })
+
+  test('an ordinary fence keeps its <pre> wrapper — M5 does not touch non-mermaid code', () => {
+    const html = render('```ts\nconst x = 1\n```\n')
+    expect(html).toContain('<pre')
+  })
+})
+
+// I1: every custom renderer used to be a closure created fresh inside `MarkdownPreview`'s own body,
+// so a poll-driven re-render handed `react-markdown` a brand-new function identity for `img`/`code`
+// on every pass — read as a DIFFERENT component type at that tree position, so React unmounted and
+// remounted every image, link and diagram on every poll (measured: re-fetched images, re-run
+// `mermaid.render()`). Calling `MarkdownPreview` as a PLAIN FUNCTION twice (this repo's stack has no
+// jsdom to actually re-render a mounted tree) and comparing the `components` map `<ReactMarkdown>`
+// receives each time is what proves the renderer FUNCTIONS themselves never change, which is what
+// keeps React from ever unmounting anything the source did not actually change.
+describe('renderer identity survives a re-render (I1)', () => {
+  test('a/img/code/pre are the exact same function on every call, not merely equal', () => {
+    const el1 = MarkdownPreview(BASE_PROPS)
+    const el2 = MarkdownPreview({ ...BASE_PROPS })
+    const rm1 = findElement(el1, ReactMarkdown)
+    const rm2 = findElement(el2, ReactMarkdown)
+    expect(rm1).not.toBeNull()
+    expect(rm2).not.toBeNull()
+    const c1 = rm1!.props.components as Record<string, unknown>
+    const c2 = rm2!.props.components as Record<string, unknown>
+    for (const key of ['a', 'img', 'code', 'pre']) {
+      expect(c1[key]).toBeDefined()
+      expect(c1[key]).toBe(c2[key])
+    }
+  })
+
+  test('the whole components object is the same reference too — one static map, not rebuilt', () => {
+    const el1 = MarkdownPreview(BASE_PROPS)
+    const el2 = MarkdownPreview({ ...BASE_PROPS, text: 'a different body' })
+    const rm1 = findElement(el1, ReactMarkdown)
+    const rm2 = findElement(el2, ReactMarkdown)
+    expect(rm1!.props.components).toBe(rm2!.props.components)
   })
 })

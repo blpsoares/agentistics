@@ -89,6 +89,62 @@ function errorMessageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+/** Mermaid's own scratch element id for one render call — `d<id>`, distinct from the `<id>`
+ * `render()` returns the finished SVG under. Exported so a test can prove the id this component
+ * asks to remove is the exact one mermaid would have left behind, not a guess. */
+export function mermaidScratchElementId(renderId: string): string {
+  return `d${renderId}`
+}
+
+/** The one DOM method this belt-and-suspenders cleanup needs — kept this narrow so a test can hand
+ * it a plain object instead of a real `document`. */
+interface ScratchElementHost {
+  getElementById(id: string): { remove(): void } | null
+}
+
+/**
+ * Removes the stray scratch element mermaid's `render()` can still attach directly to
+ * `document.body` on a failed parse (see `MermaidDiagram`'s own `initialize` call for why
+ * `suppressErrorRendering` should already have stopped this on every path this component reaches —
+ * this is the belt, for whichever path does not). Idempotent and safe to call unconditionally:
+ * answers whether anything was actually removed, and never throws when there was nothing to remove.
+ */
+export function removeMermaidScratchElement(host: ScratchElementHost, renderId: string): boolean {
+  const el = host.getElementById(mermaidScratchElementId(renderId))
+  if (el === null) return false
+  el.remove()
+  return true
+}
+
+/**
+ * The root `<svg>`'s viewBox width, PIXELS — mermaid's own "how wide is this diagram, really" —
+ * or `null` when the markup carries no `viewBox` to read (never guessed at).
+ */
+const VIEWBOX_WIDTH = /<svg\b[^>]*\bviewBox="0 0 ([\d.]+) [\d.]+"/
+
+/**
+ * Mermaid emits its root `<svg>` at `width="100%"` with `style="max-width:<viewBox width>px"` —
+ * meant to shrink a diagram to fit a narrow READING column, which is the opposite of what this
+ * component wants: the diagram sits inside its OWN `overflowX: auto` box (see the return below),
+ * so the right behaviour is to draw at natural size and let THAT box scroll. Left alone, the SVG
+ * never overflows its box at all — there is nothing to scroll — and a six-node flowchart shrank to
+ * ~4px, unreadable text on a 390px column (I4).
+ *
+ * Both substitutions are scoped to the OPENING `<svg …>` tag alone (`[^>]*` cannot cross the `>`
+ * that ends it), so a `width="…"` or a `max-width:` appearing later, inside the diagram's own
+ * nodes, is never touched. A markup with no `viewBox` (should never happen — mermaid always emits
+ * one — but "refuse, never guess" applies here too) is returned untouched rather than rewritten
+ * from an invented number.
+ */
+export function widenSvgToNaturalSize(svg: string): string {
+  const vb = VIEWBOX_WIDTH.exec(svg)
+  if (vb === null) return svg
+  const width = vb[1]!
+  return svg
+    .replace(/(<svg\b[^>]*\bwidth=")[^"]*(")/, `$1${width}$2`)
+    .replace(/(<svg\b[^>]*\bstyle="[^"]*max-width:)[^;"]*(;?[^"]*")/, `$1 none$2`)
+}
+
 export function MermaidDiagram({ source, theme, lang }: MermaidDiagramProps) {
   const pt = lang === 'pt'
   const [state, setState] = useState<DrawState>({ kind: 'loading' })
@@ -104,14 +160,34 @@ export function MermaidDiagram({ source, theme, lang }: MermaidDiagramProps) {
         const mermaid = mod.default
         mermaid.initialize({
           startOnLoad: false,
+          // Without this, a parse failure inside `render()` leaves mermaid's own error graphic —
+          // a full "Syntax error in text / mermaid version …" SVG — as a live child of
+          // `document.body`, outside this component's tree entirely, so React never gets a chance
+          // to clean it up on unmount or re-render. Every failed render left one behind, forever;
+          // combined with I1's remount-per-poll, a single bad fence grew the document by dozens of
+          // orphans and thousands of pixels within a minute. `suppressErrorRendering` stops mermaid
+          // from drawing that graphic in the first place — the `catch` below still runs and this
+          // component still shows its own error message.
+          suppressErrorRendering: true,
           securityLevel: 'strict',
           theme: 'base',
           themeVariables: mermaidThemeVariables(tokensFor(theme)),
+          // A label rendered as HTML (a `<div>`/`<span>` in a `foreignObject`, mermaid's default)
+          // can still carry an `<img src>` after mermaid's own DOMPurify pass — sanitizing strips
+          // `onerror` and the like but keeps the tag itself, so a repository file could put a
+          // tracking pixel, or a same-origin `/api/...` credentialed GET, inside a node's own label
+          // (I2). `false` here makes mermaid draw every label as plain SVG `<text>` instead — there
+          // is no HTML inside an SVG `<text>` node for an `<img>` tag to hide in. This is the
+          // ROOT-level setting (mermaid's own docs mark the per-diagram `flowchart.htmlLabels` and
+          // friends deprecated in its favour, and say the root one takes precedence), so it applies
+          // to every diagram type this component draws, not only flowcharts.
+          htmlLabels: false,
         })
-        const { svg } = await mermaid.render(idRef.current, source)
-        if (!cancelled) setState({ kind: 'ready', svg })
+        const { svg: rawSvg } = await mermaid.render(idRef.current, source)
+        if (!cancelled) setState({ kind: 'ready', svg: widenSvgToNaturalSize(rawSvg) })
       })
       .catch((err: unknown) => {
+        removeMermaidScratchElement(document, idRef.current)
         if (!cancelled) setState({ kind: 'error', message: errorMessageOf(err) })
       })
     return () => { cancelled = true }

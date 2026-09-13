@@ -1528,4 +1528,38 @@ describe('the save wiring, asserted over the source', () => {
     // comment: `inert=` is a JSX attribute, and this module's comments never write JSX.
     expect(src.includes("inert={save.phase.kind === 'conflict' || viewMode === 'preview'}")).toBe(true)
   })
+
+  // M6: the preview region used to carry NO `inert` of its own — reachable behind the conflict
+  // prompt exactly when the Monaco host (correctly `inert` in that same state) was not showing.
+  test('the preview region is inert while the conflict prompt is open too (M6)', () => {
+    expect(src.includes("inert={save.phase.kind === 'conflict'}")).toBe(true)
+  })
+
+  // M6: Ctrl+S in preview mode used to have nowhere to land — Monaco's own command only fires while
+  // MONACO is focused, and Monaco is `inert` throughout preview mode.
+  test('the preview region has its own Ctrl+S, since Monaco cannot be focused to receive one (M6)', () => {
+    expect(src).toContain("ev.key.toLowerCase() !== 's'")
+    expect(src.includes("requestSaveRef.current('explicit')")).toBe(true)
+  })
+
+  // M2: `discardAndReload` used to leave the preview showing the DISCARDED buffer — the debounce
+  // that would otherwise refresh it is deliberately skipped for this programmatic `setValue`
+  // (`applyingDiskRef`), so nothing else updated `previewText` for this one path.
+  test('discarding and reloading refreshes the preview immediately, not just the model (M2)', () => {
+    const fn = src.slice(src.indexOf('const discardAndReload ='), src.indexOf('const handleViewModeChange ='))
+    expect(fn).toContain('setPreviewText(disk.diskContent)')
+    // Ordered after the model is actually replaced — a preview refreshed from the STALE
+    // `contentRef`/model would show the buffer this discard is meant to replace.
+    expect(fn.indexOf('editor.setValue(disk.diskContent)')).toBeLessThan(fn.indexOf('setPreviewText(disk.diskContent)'))
+  })
+
+  // I3: the JSON diagnostics relaxation has to run before the FIRST model is ever created, or the
+  // very first tsconfig.json/*.jsonc opened this session still shows the old squiggles until a
+  // second file triggers it.
+  test('JSON diagnostics are configured before the first model is created (I3)', () => {
+    const mount = src.slice(src.indexOf("void import('../../lib/monacoSetup')"), src.indexOf('setMounted(n => n + 1)'))
+    expect(mount).toContain('configureJsonDiagnostics(monaco)')
+    expect(mount.indexOf('configureJsonDiagnostics(monaco)'))
+      .toBeLessThan(mount.indexOf('monaco.editor.createModel('))
+  })
 })

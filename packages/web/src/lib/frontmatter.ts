@@ -37,6 +37,20 @@ function stripBom(text: string): string {
 }
 
 /**
+ * `\r\n` → `\n`, and a bare stray `\r` along with it. `extractBlock` below gates on `text.startsWith
+ * ('---\n')`, so a Windows-authored file (`'---\r\nname: x\r\n---\r\n# Body'`) never even reached
+ * that check — it starts with `---\r`, not `---\n`, so `present` came back `false` and the whole
+ * block rendered as an `<hr>` plus a setext heading instead of a frontmatter table. Only the
+ * DETECTION/PARSING copy is normalized (see `parseFrontmatter`'s own `body` fallback below, which
+ * still uses the ORIGINAL `text`): a caller showing the raw file back — the "not present" case, or
+ * `raw`'s own display when `data` is `null` — should see exactly the bytes the file has, `\r`
+ * included, not a silently rewritten copy.
+ */
+function normalizeLineEndings(text: string): string {
+  return text.includes('\r') ? text.replace(/\r\n/g, '\n').replace(/\r/g, '\n') : text
+}
+
+/**
  * `key: value` at column 0. The key is a bare word (letters, digits, `_`, `-`, `.`) — real YAML
  * allows far more (quoted keys, colons inside brackets), and a key shaped like anything else is
  * exactly the kind of "real YAML" this module refuses rather than mis-reads.
@@ -119,7 +133,7 @@ function readFlatPairs(raw: string): Map<string, string> | null {
 
 /** `parseFrontmatter('')` and every other edge case answer `present: false` — never throws. */
 export function parseFrontmatter(text: string): FrontmatterResult {
-  const clean = stripBom(text)
+  const clean = normalizeLineEndings(stripBom(text))
   const found = extractBlock(clean)
   if (found === null) return { present: false, data: null, raw: '', body: text }
   return { present: true, data: readFlatPairs(found.raw), raw: found.raw, body: found.body }

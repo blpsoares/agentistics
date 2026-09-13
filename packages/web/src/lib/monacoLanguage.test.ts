@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
-import { languageForPath, languageIdsInUse } from './monacoLanguage'
+import { JSON_DIAGNOSTICS_OVERRIDE, languageForPath, languageIdsInUse } from './monacoLanguage'
 
 describe('languageForPath', () => {
   test('maps common extensions to Monaco language ids', () => {
@@ -116,6 +116,31 @@ describe('languageForPath', () => {
       expect(languageForPath('setup.ini')).toBe('ini')
       expect(languageForPath('app.properties')).toBe('ini')
     })
+  })
+
+  // --- I3: tsconfig*.json / *.jsonc, and the shell extensions the audit found untested -------------
+  test('shell scripts, the extensions the niche-file audit found with no dedicated test', () => {
+    for (const p of ['deploy.sh', 'setup.bash', 'profile.zsh']) {
+      expect(languageForPath(p), p).toBe('shell')
+    }
+  })
+  test('tsconfig*.json and *.jsonc stay the ordinary `json` language id', () => {
+    // There is no separate `'jsonc'` id — see `JSON_DIAGNOSTICS_OVERRIDE`'s own header for why the
+    // comment/trailing-comma leniency these files need is a GLOBAL diagnostics change instead, applied
+    // by `RepoFileEditor.tsx` once `jsonDefaults` loads. This only pins that the mapping itself never
+    // changed underneath that decision.
+    for (const p of ['tsconfig.json', 'tsconfig.base.json', 'packages/web/tsconfig.json', 'a.jsonc']) {
+      expect(languageForPath(p), p).toBe('json')
+    }
+  })
+})
+
+describe('JSON_DIAGNOSTICS_OVERRIDE', () => {
+  test('relaxes exactly the two diagnostics the review caught firing on tsconfig.json/*.jsonc', () => {
+    // "Comments are not permitted in JSON.(521)" and the matching trailing-comma diagnostic — see the
+    // review's I3 repro. `allowComments`/`schemas`/etc. are deliberately left at Monaco's own
+    // defaults; only these two severities move.
+    expect(JSON_DIAGNOSTICS_OVERRIDE).toEqual({ comments: 'ignore', trailingCommas: 'ignore' })
   })
 })
 

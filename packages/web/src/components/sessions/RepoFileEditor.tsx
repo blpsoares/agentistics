@@ -89,7 +89,7 @@ import {
 } from 'react'
 import { AlertTriangle, Check, Eye, File, Loader, RotateCcw, Save } from 'lucide-react'
 import type * as Monaco from 'monaco-editor'
-import { languageForPath } from '../../lib/monacoLanguage'
+import { languageForPath, JSON_DIAGNOSTICS_OVERRIDE } from '../../lib/monacoLanguage'
 import { codeThemeName, defineAgentisticsThemes, type CodeThemeVariant } from '../../lib/monacoTheme'
 import {
   isWriteConflict, readRepoFile, writeRepoFile,
@@ -107,6 +107,18 @@ import { RepoNote } from './repoNote'
 // What `loadMonaco()` RESOLVES — `monacoEntry`, not the barrel. The barrel's type promised
 // `typescript` and `lsp`, which that module does not have; see `monacoSetup.ts`'s `Monaco`.
 type MonacoModule = typeof import('../../lib/monacoEntry')
+
+// I3: applied exactly once, idempotently — see `JSON_DIAGNOSTICS_OVERRIDE`'s own header
+// (`monacoLanguage.ts`) for why this is a GLOBAL relaxation rather than a second language id.
+let jsonDiagnosticsConfigured = false
+function configureJsonDiagnostics(monaco: MonacoModule): void {
+  if (jsonDiagnosticsConfigured) return
+  jsonDiagnosticsConfigured = true
+  monaco.json.jsonDefaults.setDiagnosticsOptions({
+    ...monaco.json.jsonDefaults.diagnosticsOptions,
+    ...JSON_DIAGNOSTICS_OVERRIDE,
+  })
+}
 
 export interface RepoFileEditorProps {
   sessionId: string
@@ -805,6 +817,12 @@ export function RepoFileEditor({
   const [mounted, setMounted] = useState(0)
 
   const hostRef = useRef<HTMLDivElement | null>(null)
+  // M6: Monaco's own Ctrl+S command only fires while MONACO is focused, and Monaco is `inert` (never
+  // focusable) throughout preview mode — so a reader sitting in "Visualizar" and pressing Ctrl+S had
+  // focus living NOWHERE, and the keystroke went nowhere with it. This is the preview's own focus
+  // target, given the same command directly (`onKeyDown` below) and focused whenever the toggle
+  // switches TO preview.
+  const previewHostRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null)
   const contentRef = useRef('')
   /**
@@ -906,6 +924,7 @@ export function RepoFileEditor({
         // BEFORE `create`, always: a theme name monaco does not know yet resolves to plain `vs` and
         // says nothing about it. Idempotent, so paying for it on every mount costs nothing.
         defineAgentisticsThemes(monaco)
+        configureJsonDiagnostics(monaco)
         model = monaco.editor.createModel(contentRef.current, languageForPath(path))
         editor = monaco.editor.create(host, { ...optionsRef.current, model })
         editorRef.current = editor
@@ -1046,7 +1065,18 @@ export function RepoFileEditor({
     void writeNow(disk.diskMtimeMs, { kind: 'keep-mine' })
   }
 
-  /** "Discard and reload" — their edit goes, the disk version takes its place. */
+  /**
+   * "Discard and reload" — their edit goes, the disk version takes its place.
+   *
+   * **M2 — the preview used to keep showing the DISCARDED buffer.** `onDidChangeModelContent`'s own
+   * preview debounce is deliberately skipped here (`if (applyingDiskRef.current) return`, above) —
+   * this is a PROGRAMMATIC `setValue`, not a keystroke, and the debounce exists to coalesce typing,
+   * not to also cover a conflict resolution. Nothing else refreshed `previewText` for this path, so
+   * a reader sitting in "Visualizar" watched their own (soon-to-be-gone) edit for as long as it took
+   * a further keystroke or a toggle to notice the disk version had replaced it. Same immediate
+   * refresh `handleViewModeChange` already does for the OTHER moment the buffer changes out from
+   * under the debounce — switching INTO preview right after typing.
+   */
   const discardAndReload = () => {
     const disk = diskVersionOf(saveRef.current.phase)
     const editor = editorRef.current
@@ -1054,6 +1084,7 @@ export function RepoFileEditor({
     applyingDiskRef.current = true
     try { editor.setValue(disk.diskContent) } finally { applyingDiskRef.current = false }
     contentRef.current = disk.diskContent
+    setPreviewText(disk.diskContent)
     dispatch({ kind: 'take-disk' })
   }
 
@@ -1065,6 +1096,10 @@ export function RepoFileEditor({
     setViewMode(mode)
     if (mode === 'preview' && editorRef.current !== null) {
       setPreviewText(editorSaveText(editorRef.current))
+      // M6: give focus somewhere to live — see `previewHostRef`'s own comment. Deferred a tick so it
+      // runs after the preview region's `inert`/`pointerEvents` flip (driven by the `viewMode` state
+      // update above) actually lands; focusing an inert element is a no-op.
+      setTimeout(() => previewHostRef.current?.focus(), 0)
     }
   }
 
@@ -1173,12 +1208,25 @@ export function RepoFileEditor({
           }}
         />
         {docKind !== null && viewMode === 'preview' && (
+          // M6: `inert` while the conflict prompt is open — the preview was the ONE region left out
+          // of the `aria-modal` guarantee the Monaco host already keeps (see that div's own comment):
+          // its links and its scroll stayed keyboard-reachable behind a dialog claiming nothing was.
+          // `tabIndex={-1}` + `onKeyDown` are M6's other half: this is what Ctrl+S has to focus in
+          // preview mode, since Monaco itself is `inert` throughout it — see `previewHostRef`.
           <div
+            ref={previewHostRef}
+            tabIndex={-1}
+            inert={save.phase.kind === 'conflict'}
+            onKeyDown={ev => {
+              if (!(ev.ctrlKey || ev.metaKey) || ev.key.toLowerCase() !== 's') return
+              ev.preventDefault()
+              requestSaveRef.current('explicit')
+            }}
             style={{
               position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden',
               overscrollBehavior: 'contain', boxSizing: 'border-box',
               padding: isMobile ? '10px 12px' : '10px 14px',
-              background: 'var(--bg-card)',
+              background: 'var(--bg-card)', outline: 'none',
             }}
           >
             {docKind === 'markdown' ? (

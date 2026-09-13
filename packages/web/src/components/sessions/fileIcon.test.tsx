@@ -61,6 +61,17 @@ describe('fileIconId', () => {
     expect(fileIconId('setup.ini', 'file')).toBe('config')
   })
 
+  // M4: nginx.conf already lands on 'config' through the ordinary `.conf` extension rule (no rule
+  // of its own needed); Caddyfile has no extension to key on and drew the neutral glyph until now.
+  // `.mmd`/`.mermaid` have no dedicated diagram glyph in this set, so they join plain text rather
+  // than the generic file icon.
+  test('the niche-file audit: config files with no extension, and mermaid sources (M4)', () => {
+    expect(fileIconId('nginx.conf', 'file')).toBe('config')
+    expect(fileIconId('Caddyfile', 'file')).toBe('config')
+    expect(fileIconId('diagram.mmd', 'file')).toBe('text')
+    expect(fileIconId('flow.mermaid', 'file')).toBe('text')
+  })
+
   test('.env and its variants, and NOT .envrc', () => {
     expect(fileIconId('.env', 'file')).toBe('env')
     expect(fileIconId('.env.local', 'file')).toBe('env')

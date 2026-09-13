@@ -24,14 +24,43 @@ const MERMAID_ONLY_MARKERS = [
   '@braintree/sanitize-url', '@iconify/utils', '@upsetjs/venn.js',
   '/chevrotain/', '@chevrotain/',
   '/cytoscape/', 'cytoscape-cose-bilkent', 'cytoscape-fcose', 'cose-base', 'layout-base',
-  '/d3/', 'd3-sankey', 'dagre-d3-es', 'graphlib',
-  'dayjs', 'dompurify', 'elkjs', 'es-toolkit',
+  'dagre-d3-es', 'graphlib',
+  'dayjs', 'elkjs', 'es-toolkit',
   'katex', 'khroma', 'marked', 'roughjs', 'stylis', 'ts-dedent', 'uuid', 'lodash-es',
+  // `dompurify` is DELIBERATELY ABSENT (M1). It used to be a flat marker here, and that swept
+  // jspdf's OWN DOMPurify import (PDF export uses it too, and both features resolve to the exact
+  // same installed copy — there is only one `dompurify` in the lockfile) into
+  // `assets/mermaid/purify.es-*.js`: a chunk one file above named nothing to do with mermaid,
+  // routed into mermaid's directory and so excluded from the precache with it. A chunk made of
+  // nothing but `dompurify` is genuinely SHARED, exactly like the 14 chunks the header above already
+  // names as correctly left alone — it now falls through to the ordinary `assets/` bucket instead.
 ]
+
+/**
+ * `d3` is a META-PACKAGE: `d3@7.9.0`'s own `dependencies` are ~30 separate `d3-*` packages
+ * (`d3-shape`, `d3-scale`, `d3-array`, `d3-hierarchy`, `d3-time-format`, …), most of them reached
+ * through the bare `import 'd3'` mermaid's diagram renderers use — not only through the one
+ * (`d3-sankey`) this list used to name. A flat substring per sub-package is exactly the
+ * hand-maintained list this file's own header warns against, and it was already wrong: measured
+ * against a real build, `pieDiagram-*`, `ganttDiagram-*`, `sankeyDiagram-*`, `diagram-3UASUU5V-*`,
+ * `chunk-ZIGJFQKS-*` and `src-CKoDGS-*` are 100% mermaid (every module in each resolves through
+ * mermaid's own dependency tree) and still fell through to the generic `assets/` bucket — their
+ * modules are real `node_modules/d3-shape/`, `node_modules/d3-scale/`, … folders, and NONE of them
+ * contain the literal substring `/d3/` the old marker tested for (the character after `d3` there is
+ * `-`, never `/`). Matched as a FAMILY instead — any path whose package segment is `d3` or
+ * `d3-<word>` (one or more hyphenated words: `d3-scale-chromatic`, `d3-time-format`) — which also
+ * correctly sweeps in the recharts/victory-vendor side's OWN older `d3-shape@1.3.7`/`d3-path@1.0.9`
+ * if a chunk is ever made of nothing else. That is the safe direction to be wrong in, the same one
+ * `assetFileNames` below states explicitly: worst case a genuinely chart-only chunk skips the
+ * aggressive precache and is fetched once over the ordinary HTTP cache instead of never — never a
+ * correctness bug, unlike shipping mermaid's own diagram-type chunks to every visitor's precache.
+ */
+const D3_FAMILY = /\/d3(-[a-z0-9]+)*\//
 
 function isMermaidOnlyChunk(chunk: Rollup.PreRenderedChunk | Rollup.RenderedChunk): boolean {
   const ids = chunk.moduleIds ?? []
-  return ids.length > 0 && ids.every(id => MERMAID_ONLY_MARKERS.some(marker => id.includes(marker)))
+  return ids.length > 0
+    && ids.every(id => D3_FAMILY.test(id) || MERMAID_ONLY_MARKERS.some(marker => id.includes(marker)))
 }
 
 export default defineConfig({

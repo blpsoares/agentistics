@@ -80,6 +80,9 @@ const BY_NAME: Record<string, FileIconId> = {
   '.editorconfig': 'config',
   '.npmrc': 'config',
   '.nvmrc': 'config',
+  // M4: a reverse-proxy config file with no extension to key on — `nginx.conf` already lands on
+  // `config` through the ordinary `.conf` extension rule below, and this is Caddy's equivalent.
+  'caddyfile': 'config',
   // `LICENSE` is deliberately ABSENT. It has no extension and it is not a `.txt`; a TXT badge on it
   // would be a claim about a format nobody declared, and the neutral glyph is the honest answer.
 }
@@ -113,6 +116,10 @@ const BY_EXT: Record<string, FileIconId> = {
   tf: 'config', tfvars: 'config', hcl: 'config',
   // A Makefile FRAGMENT, included by a top-level one — same glyph as `makefile` above.
   mk: 'shell',
+  // M4: no dedicated diagram glyph exists in this set, so a mermaid source file is grouped with
+  // plain text rather than drawing the generic file glyph — the same honest-subset choice
+  // `monacoLanguage.ts` makes when a real grammar is missing, not a claim that this is a good fit.
+  mmd: 'text', mermaid: 'text',
 }
 
 /**

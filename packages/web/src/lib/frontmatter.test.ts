@@ -77,4 +77,27 @@ describe('parseFrontmatter', () => {
     expect(() => parseFrontmatter('')).not.toThrow()
     expect(parseFrontmatter('').present).toBe(false)
   })
+
+  // M3: a Windows-authored SKILL.md (`---\r\nname: x\r\n---\r\n# Body`) used to fail the very first
+  // gate (`text.startsWith('---\n')`, which a `---\r\n` opening fence never satisfies) and render its
+  // frontmatter as an `<hr>` plus a setext heading instead of a table.
+  test('a CRLF-terminated fence is still detected — the opening AND the closing line', () => {
+    const text = '---\r\nname: x\r\ndescription: one line\r\n---\r\n# Body\r\n'
+    const r = parseFrontmatter(text)
+    expect(r.present).toBe(true)
+    expect(r.data).toEqual(new Map([['name', 'x'], ['description', 'one line']]))
+    expect(r.body).toBe('# Body\n')
+  })
+
+  test('CRLF and a nested block fold the same way LF does', () => {
+    const text = '---\r\nname: skill\r\nmetadata:\r\n  type: feedback\r\n---\r\nbody\r\n'
+    const r = parseFrontmatter(text)
+    expect(r.data).toEqual(new Map([['name', 'skill'], ['metadata', 'type: feedback']]))
+  })
+
+  test('a bare CR-only line ending is normalized the same way', () => {
+    const r = parseFrontmatter('---\rname: x\r---\rbody\r')
+    expect(r.present).toBe(true)
+    expect(r.data).toEqual(new Map([['name', 'x']]))
+  })
 })
