@@ -17,11 +17,13 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  agentActivity, applyRootRefresh, clampTreeWidth, closeOutcome, DIVIDER_W, EDITOR_MIN, EditorStack,
-  Layer, mountedEditors, nextGoTo, NewFileRow, paneHits, resolveTreeWidth, sessionMovedOn, SPLIT_MIN,
+  agentActivity, applyRootRefresh, clampTreeWidth, closeOutcome, DIVIDER_RAIL_W, DIVIDER_W,
+  dividerKeyDelta, dividerWantedWidth, EDITOR_MIN, EditorStack,
+  Layer, mountedEditors, nextGoTo, NewFileRow, paneHits, resolveTreeCollapsed, resolveTreeSide,
+  resolveTreeWidth, sessionMovedOn, SPLIT_MIN,
   Studio, StudioBar, StudioBody, sameFile,
   studioLayout, TabStrip, Toolbar, TREE_DEFAULT, TREE_MAX, TREE_MIN, TreeDivider, Watermark,
-  watermarkOpacity,
+  watermarkOpacity, type TreeSide,
 } from './Studio'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -800,11 +802,60 @@ describe('resolveTreeWidth — what a stored width may be', () => {
   })
 })
 
+// item 9 — this REVERSES the earlier "collapse is momentary, never stored" decision recorded in
+// Studio.tsx: the owner asked for a minimized tree to stay minimized across sessions.
+describe('resolveTreeCollapsed — item 9, the minimized state is now remembered', () => {
+  test('only the literal "1" reads as collapsed', () => {
+    expect(resolveTreeCollapsed('1')).toBe(true)
+  })
+
+  test('nothing stored, junk, or a stray "0" all read as NOT collapsed — the safer floor', () => {
+    expect(resolveTreeCollapsed(null)).toBe(false)
+    expect(resolveTreeCollapsed('')).toBe(false)
+    expect(resolveTreeCollapsed('true')).toBe(false)
+    expect(resolveTreeCollapsed('0')).toBe(false)
+  })
+})
+
+describe('resolveTreeSide — item 10, "move side bar right"', () => {
+  test('the literal "right" is the only way to the right side', () => {
+    expect(resolveTreeSide('right')).toBe('right')
+  })
+
+  test('nothing stored, or anything else, reads as "left" — where the tree has always been', () => {
+    expect(resolveTreeSide(null)).toBe('left')
+    expect(resolveTreeSide('')).toBe('left')
+    expect(resolveTreeSide('RIGHT')).toBe('left')
+    expect(resolveTreeSide('left')).toBe('left')
+  })
+})
+
+describe('dividerWantedWidth / dividerKeyDelta — the drag/keyboard direction follows the side (item 10)', () => {
+  test('from the left (the ordinary case), dragging right grows the column', () => {
+    expect(dividerWantedWidth(200, 40, false)).toBe(240)
+    expect(dividerWantedWidth(200, -40, false)).toBe(160)
+  })
+
+  test('from the right, the SAME rightward drag now shrinks it — the divider sits on the other side', () => {
+    expect(dividerWantedWidth(200, 40, true)).toBe(160)
+    expect(dividerWantedWidth(200, -40, true)).toBe(240)
+  })
+
+  test('ArrowRight always means "grow the column" — the keyboard ignores `side` entirely', () => {
+    expect(dividerKeyDelta('ArrowRight')).toBeGreaterThan(0)
+    expect(dividerKeyDelta('ArrowLeft')).toBeLessThan(0)
+  })
+
+  test('a key that means nothing to the divider asks for no change', () => {
+    expect(dividerKeyDelta('Tab')).toBe(0)
+  })
+})
+
 describe('StudioBody — where the panes sit, and what that may never cost', () => {
   const body = (over: Partial<Parameters<typeof StudioBody>[0]> = {}) => renderToStaticMarkup(
     <StudioBody
       layout="split" treeWidth={200} treeShown={true} editorShown={true} available={620} lang="en"
-      onResize={() => {}} onCommit={() => {}} onCollapse={() => {}}
+      onResize={() => {}} onCommit={() => {}} onCollapse={() => {}} onExpand={() => {}}
       tree={<p>THE TREE</p>} editor={<p>THE EDITOR</p>}
       {...over}
     />,
@@ -899,12 +950,54 @@ describe('StudioBody — where the panes sit, and what that may never cost', () 
     expect(body({ treeShown: false })).not.toContain('role="separator"')
   })
 
+  // item 9 — a SECOND way back, at the column's own location, rather than only the Studio bar's.
+  test('minimizing REPLACES the separator with a labelled rail, at the same spot', () => {
+    const html = body({ treeShown: false })
+    expect(html).not.toContain('role="separator"')
+    expect(html).toContain('aria-label="Show the file tree"')
+  })
+
+  test('the rail exists whether or not a file is open — it is `collapsed`, never `editorShown`', () => {
+    expect(body({ treeShown: false, editorShown: false })).toContain('aria-label="Show the file tree"')
+    expect(body({ treeShown: false, editorShown: true })).toContain('aria-label="Show the file tree"')
+  })
+
+  test('the rail is in Portuguese too', () => {
+    expect(body({ treeShown: false, lang: 'pt' })).toContain('aria-label="Mostrar árvore de arquivos"')
+  })
+
+  test('an EXPANDED column offers the separator, never the rail', () => {
+    const html = body()
+    expect(html).toContain('role="separator"')
+    expect(html).not.toContain('Show the file tree')
+  })
+
   test('stacked, there is no separator either: there is nothing beside anything', () => {
     expect(body({ layout: 'layers', editorShown: false })).not.toContain('role="separator"')
   })
 
   test('the split offers one', () => {
     expect(body()).toContain('role="separator"')
+  })
+
+  // item 10 — "move side bar right": the SAME two boxes, only their paint order flips.
+  describe('side', () => {
+    test('defaults to a plain row — the tree paints first, as it always has', () => {
+      // The closing quote is what tells "row" apart from "row-reverse", both of which contain "row".
+      expect(body()).toContain('flex-direction:row"')
+    })
+
+    test('"right" flips ONLY the CSS direction — the DOM order (and so React\'s identity) is untouched', () => {
+      const html = body({ side: 'right' })
+      expect(html).toContain('flex-direction:row-reverse')
+      const order = html.match(/data-studio-pane="(tree|editor)"/g)
+      expect(order).toEqual(['data-studio-pane="tree"', 'data-studio-pane="editor"'])
+    })
+
+    test('the side rides on the container as data, for anything that needs to ask from outside', () => {
+      expect(body()).toContain('data-studio-side="left"')
+      expect(body({ side: 'right' })).toContain('data-studio-side="right"')
+    })
   })
 })
 
@@ -941,10 +1034,14 @@ describe('TreeDivider — draggable, and reachable without a pointer', () => {
 })
 
 describe('StudioBar — minimizing the tree, and getting it back', () => {
-  const bar = (tree?: { collapsed: boolean; onToggle: () => void }, lang: 'pt' | 'en' = 'en') =>
-    renderToStaticMarkup(
-      <StudioBar isMobile={false} lang={lang} onExit={() => {}} {...(tree ? { tree } : {})} />,
-    )
+  const bar = (
+    tree?: { collapsed: boolean; onToggle: () => void; side?: TreeSide; onFlipSide?: () => void },
+    lang: 'pt' | 'en' = 'en',
+  ) => renderToStaticMarkup(
+    <StudioBar isMobile={false} lang={lang} onExit={() => {}}
+      {...(tree ? { tree: { side: 'left' as const, onFlipSide: () => {}, ...tree } } : {})}
+    />,
+  )
 
   test('with no split there is no toggle — a button that does nothing is worse than none', () => {
     expect(bar()).not.toContain('Hide the file tree')
@@ -970,6 +1067,40 @@ describe('StudioBar — minimizing the tree, and getting it back', () => {
 
   test('the toggle is a TOGGLE: it reports the state it is in', () => {
     expect(bar({ collapsed: false, onToggle: () => {} })).toContain('aria-pressed="true"')
+  })
+
+  // item 5 — the toggle carries a visible word on desktop now, not only an icon and a tooltip.
+  test('the collapse toggle carries a visible label, not only an icon', () => {
+    expect(bar({ collapsed: false, onToggle: () => {} })).toContain('Hide tree')
+    expect(bar({ collapsed: true, onToggle: () => {} })).toContain('Show tree')
+    expect(bar({ collapsed: false, onToggle: () => {} }, 'pt')).toContain('Ocultar árvore')
+    expect(bar({ collapsed: true, onToggle: () => {} }, 'pt')).toContain('Mostrar árvore')
+  })
+
+  // item 10 — "move side bar right".
+  describe('the flip-side control', () => {
+    test('absent with no split, exactly like the collapse toggle', () => {
+      expect(bar()).not.toContain('Move the tree')
+    })
+
+    test('says where it would go, from the left', () => {
+      const html = bar({ collapsed: false, onToggle: () => {}, side: 'left' })
+      expect(html).toContain('Move the tree to the right')
+      expect(html).toContain('Tree right')
+    })
+
+    test('says where it would go, from the right', () => {
+      const html = bar({ collapsed: false, onToggle: () => {}, side: 'right' })
+      expect(html).toContain('Move the tree to the left')
+      expect(html).toContain('Tree left')
+    })
+
+    test('and in Portuguese', () => {
+      expect(bar({ collapsed: false, onToggle: () => {}, side: 'left' }, 'pt'))
+        .toContain('Mover a árvore para a direita')
+      expect(bar({ collapsed: false, onToggle: () => {}, side: 'right' }, 'pt'))
+        .toContain('Mover a árvore para a esquerda')
+    })
   })
 })
 

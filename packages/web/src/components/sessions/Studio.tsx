@@ -95,8 +95,8 @@
 
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
-  AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, FilePlus, FolderPlus,
-  Loader, PanelLeftClose, PanelLeftOpen, Plus, Search, Undo2, X,
+  AlertTriangle, ArrowLeft, ArrowLeftRight, Check, ChevronDown, ChevronLeft, ChevronRight, FilePlus,
+  FolderPlus, Loader, PanelLeftClose, PanelLeftOpen, Plus, Search, Undo2, X,
 } from 'lucide-react'
 import {
   applyChildren, applyError, baseNameOf, canMoveInto, closeTab, destinationPath, flattenVisible,
@@ -324,6 +324,11 @@ export const EDITOR_MIN = 220
 /** The grip between the panes. A 1px line is not something a pointer can land on. */
 export const DIVIDER_W = 6
 
+/** The collapsed tree's own rail (design item 9) — wider than the ordinary divider because it
+ *  carries an icon rather than a hairline, and is the ONLY way back to the tree that lives at the
+ *  column's own location. */
+export const DIVIDER_RAIL_W = 20
+
 /**
  * What the tree opens at.
  *
@@ -404,14 +409,55 @@ function readTreeWidth(): number {
 
 /**
  * Remember the width — on the END of a drag and on each keyboard step, never on every pointer move.
- *
- * The COLLAPSE is deliberately not stored beside it. A width is a measurement of this reader's
- * screen and habits and is tedious to make again; collapsing is a momentary "get this out of my
- * way" for one file, and a Studio that reopens with its tree hidden is a feature that looks broken
- * — the tree staying beside the editor is the whole of what was asked for.
  */
 function storeTreeWidth(width: number): void {
   try { localStorage.setItem(TREE_WIDTH_KEY, String(width)) } catch { /* private mode */ }
+}
+
+/**
+ * WHETHER THE TREE IS MINIMIZED, remembered per browser (UX pass item 9).
+ *
+ * This REVERSES an earlier decision recorded right here: the collapse used to be treated as
+ * "momentary" and deliberately left unstored, on the reasoning that a Studio reopening with its
+ * tree hidden would look broken. The owner asked for the opposite — a reader who minimizes the
+ * tree to read one file wide wants that choice to hold across sessions, not to be silently undone
+ * on the next open. `resolveTreeCollapsed` is the pure reading of whatever was stored; anything
+ * that is not exactly `'1'` — absent, cleared, junk — reads as NOT collapsed, the same shape every
+ * other guarded flag in this file takes when the record cannot be trusted.
+ */
+export const TREE_COLLAPSED_KEY = 'agentistics:studio-tree-collapsed'
+
+export function resolveTreeCollapsed(stored: string | null): boolean {
+  return stored === '1'
+}
+
+function readTreeCollapsed(): boolean {
+  try { return resolveTreeCollapsed(localStorage.getItem(TREE_COLLAPSED_KEY)) } catch { return false }
+}
+
+function storeTreeCollapsed(collapsed: boolean): void {
+  try { localStorage.setItem(TREE_COLLAPSED_KEY, collapsed ? '1' : '0') } catch { /* private mode */ }
+}
+
+/**
+ * WHICH SIDE THE TREE SITS ON (UX pass item 10 — "move side bar right", VS Code's own phrase for
+ * this). `resolveTreeSide` treats anything but the literal `'right'` as `'left'` — the tree's
+ * position since before this option existed, and the safer floor for a value a hand edit or an
+ * older build left unreadable.
+ */
+export const TREE_SIDE_KEY = 'agentistics:studio-tree-side'
+export type TreeSide = 'left' | 'right'
+
+export function resolveTreeSide(stored: string | null): TreeSide {
+  return stored === 'right' ? 'right' : 'left'
+}
+
+function readTreeSide(): TreeSide {
+  try { return resolveTreeSide(localStorage.getItem(TREE_SIDE_KEY)) } catch { return 'left' }
+}
+
+function storeTreeSide(side: TreeSide): void {
+  try { localStorage.setItem(TREE_SIDE_KEY, side) } catch { /* private mode */ }
 }
 
 /**
@@ -524,7 +570,19 @@ export function Studio({
   const [moving, setMoving] = useState<Moving | null>(null)
   const [toast, setToast] = useState<ToastState | null>(null)
   const [treeWidth, setTreeWidth] = useState<number>(readTreeWidth)
-  const [treeCollapsed, setTreeCollapsed] = useState(false)
+  // Persisted per browser (item 9) — see `resolveTreeCollapsed`'s own header for why this reverses
+  // an earlier decision recorded there.
+  const [treeCollapsed, setTreeCollapsedState] = useState<boolean>(readTreeCollapsed)
+  const setTreeCollapsed = useCallback((next: boolean) => {
+    setTreeCollapsedState(next)
+    storeTreeCollapsed(next)
+  }, [])
+  // Persisted per browser (item 10 — "move side bar right").
+  const [treeSide, setTreeSideState] = useState<TreeSide>(readTreeSide)
+  const setTreeSide = useCallback((next: TreeSide) => {
+    setTreeSideState(next)
+    storeTreeSide(next)
+  }, [])
 
   /**
    * The width of the region the two panes share, MEASURED.
@@ -812,7 +870,14 @@ export function Studio({
         lang={lang}
         onExit={onExit}
         {...(split
-          ? { tree: { collapsed: treeCollapsed, onToggle: () => setTreeCollapsed(v => !v) } }
+          ? {
+            tree: {
+              collapsed: treeCollapsed,
+              onToggle: () => setTreeCollapsed(!treeCollapsed),
+              side: treeSide,
+              onFlipSide: () => setTreeSide(treeSide === 'left' ? 'right' : 'left'),
+            },
+          }
           : {})}
       />
 
@@ -845,6 +910,7 @@ export function Studio({
       */}
       <StudioBody
         layout={layout}
+        side={treeSide}
         treeWidth={shownTreeWidth}
         treeShown={treeShown}
         editorShown={editorShown}
@@ -854,6 +920,7 @@ export function Studio({
         onResize={resize}
         onCommit={commit}
         onCollapse={() => setTreeCollapsed(true)}
+        onExpand={() => setTreeCollapsed(false)}
         tree={<>
           {view === 'tree' && (
             <Toolbar
@@ -1033,8 +1100,9 @@ export function StudioBar({ isMobile, lang, onExit, tree }: {
   isMobile: boolean
   lang: 'pt' | 'en'
   onExit: () => void
-  /** The tree column's collapse, when there IS one — i.e. only while the split is in force. */
-  tree?: { collapsed: boolean; onToggle: () => void }
+  /** The tree column's collapse and side, when there IS a column — i.e. only while the split is in
+   *  force (`studioLayout` never offers a split on a phone, so this is desktop-only in practice). */
+  tree?: { collapsed: boolean; onToggle: () => void; side: TreeSide; onFlipSide: () => void }
 }) {
   const pt = lang === 'pt'
   return (
@@ -1078,15 +1146,37 @@ export function StudioBar({ isMobile, lang, onExit, tree }: {
       </button>
 
       {tree !== undefined && (
-        <IconButton
+        <LabeledIconButton
           label={tree.collapsed
             ? (pt ? 'Mostrar a árvore de arquivos' : 'Show the file tree')
             : (pt ? 'Esconder a árvore de arquivos' : 'Hide the file tree')}
+          // The short word is what rides on screen (design item 5) — the fuller sentence above
+          // stays the tooltip/aria-label, which is what a screen reader announces regardless.
+          visibleText={tree.collapsed ? (pt ? 'Mostrar árvore' : 'Show tree') : (pt ? 'Ocultar árvore' : 'Hide tree')}
+          isMobile={isMobile}
           pressed={!tree.collapsed}
           onClick={tree.onToggle}
         >
           {tree.collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
-        </IconButton>
+        </LabeledIconButton>
+      )}
+
+      {/* MOVE THE TREE TO THE OTHER SIDE (design item 10, "move side bar right") — a control on the
+          Studio bar, labelled, next to the collapse toggle it shares a gate with (both are
+          meaningless outside the split). It flips `treeSide`, which `StudioBody` reads to mirror the
+          whole column arrangement — the resize handle, the minimize rail (item 9) and the drag
+          direction all follow it; see that component's own header. */}
+      {tree !== undefined && (
+        <LabeledIconButton
+          label={tree.side === 'left'
+            ? (pt ? 'Mover a árvore para a direita' : 'Move the tree to the right')
+            : (pt ? 'Mover a árvore para a esquerda' : 'Move the tree to the left')}
+          visibleText={tree.side === 'left' ? (pt ? 'Árvore à direita' : 'Tree right') : (pt ? 'Árvore à esquerda' : 'Tree left')}
+          isMobile={isMobile}
+          onClick={tree.onFlipSide}
+        >
+          <ArrowLeftRight size={14} />
+        </LabeledIconButton>
       )}
 
       <span style={{
@@ -1245,10 +1335,20 @@ export function paneHits(shown: boolean): 'none' | undefined {
  * inline, so those attributes are the only honest way to ask this question from outside.
  */
 export function StudioBody({
-  layout, treeWidth, treeShown, editorShown, available, lang,
-  containerRef, onResize, onCommit, onCollapse, tree, editor,
+  layout, side = 'left', treeWidth, treeShown, editorShown, available, lang,
+  containerRef, onResize, onCommit, onCollapse, onExpand, tree, editor,
 }: {
   layout: StudioLayout
+  /**
+   * WHICH SIDE THE TREE SITS ON (design item 10). Read here as one CSS property
+   * (`flexDirection: row-reverse`) rather than by swapping which of the two DOM nodes is written
+   * first — the pane order is the exact invariant `both arrangements are the SAME two boxes in the
+   * same order` (this file's own test) exists to protect, and a component that reordered its
+   * children to flip sides would need a second reason to never break that. `row-reverse` flips only
+   * what is PAINTED where; `mountedEditors`, `Layer` and every buffer under either pane are
+   * untouched. Defaults to `'left'` — the tree's position before this option existed.
+   */
+  side?: TreeSide
   /** Already clamped by the caller — this component measures nothing and decides nothing. */
   treeWidth: number
   treeShown: boolean
@@ -1260,16 +1360,28 @@ export function StudioBody({
   onResize: (width: number) => void
   onCommit: (width: number) => void
   onCollapse: () => void
+  /**
+   * BRING THE TREE BACK (design item 9) — read only while collapsed, when it replaces the
+   * separator with a slim rail. The Studio bar's own toggle already does this; the rail exists
+   * because that bar sits at the panel's TOP edge, disconnected from where the (now zero-width)
+   * column actually is, and a control's location is part of how discoverable it is.
+   */
+  onExpand: () => void
   tree: ReactNode
   editor: ReactNode
 }) {
   const split = layout === 'split'
   const collapsed = split && !treeShown
+  const reverse = side === 'right'
   return (
     <div
       ref={containerRef}
       data-studio-layout={layout}
-      style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0, display: 'flex' }}
+      data-studio-side={side}
+      style={{
+        position: 'relative', flex: 1, minHeight: 0, minWidth: 0, display: 'flex',
+        flexDirection: reverse ? 'row-reverse' : 'row',
+      }}
     >
       <div
         data-studio-pane="tree"
@@ -1294,16 +1406,19 @@ export function StudioBody({
         </div>
       </div>
 
-      {split && !collapsed && (
+      {split && (collapsed ? (
+        <CollapsedTreeRail lang={lang} onExpand={onExpand} />
+      ) : (
         <TreeDivider
           width={treeWidth}
           available={available}
           lang={lang}
+          reverse={reverse}
           onResize={onResize}
           onCommit={onCommit}
           onCollapse={onCollapse}
         />
-      )}
+      ))}
 
       <div
         data-studio-pane="editor"
@@ -1317,8 +1432,63 @@ export function StudioBody({
   )
 }
 
+/**
+ * THE MINIMIZED TREE'S OWN WAY BACK (design item 9) — a slim rail sitting exactly where the
+ * separator would be, so the control that hides the tree and the control that brings it back
+ * occupy the SAME strip of screen rather than one living at the panel's top edge and the other
+ * nowhere. Present with a file open or without one: `StudioBody` renders it whenever `collapsed`
+ * is true, and `collapsed` is `split && !treeShown` — split holds regardless of whether a file is
+ * open, so this is not conditioned on `editorShown` at all.
+ */
+function CollapsedTreeRail({ lang, onExpand }: { lang: 'pt' | 'en'; onExpand: () => void }) {
+  const pt = lang === 'pt'
+  const label = pt ? 'Mostrar árvore de arquivos' : 'Show the file tree'
+  return (
+    <button
+      type="button"
+      onClick={onExpand}
+      aria-label={label}
+      title={label}
+      style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: DIVIDER_RAIL_W, flexShrink: 0, alignSelf: 'stretch',
+        border: 'none', borderLeft: '1px solid var(--border)', background: 'transparent',
+        color: 'var(--text-tertiary)', cursor: 'pointer', padding: 0,
+      }}
+      onMouseEnter={e => { e.currentTarget.style.color = 'var(--anthropic-orange)' }}
+      onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-tertiary)' }}
+    >
+      <PanelLeftOpen size={13} />
+    </button>
+  )
+}
+
 /** How far one arrow key moves the column. `AsideResizer`'s own step, so the two feel the same. */
 const DIVIDER_STEP = 16
+
+/**
+ * THE WIDTH A DRAG ASKS FOR (design item 10). Dragging the divider AWAY from the tree must always
+ * GROW the column, whichever side it sits on — with the tree on the LEFT the divider sits to its
+ * RIGHT, so moving the pointer right (a positive `deltaX`) grows it; flipped to the RIGHT side, the
+ * divider now sits on the tree's LEFT, and the same rightward drag would move INTO the column,
+ * shrinking it, unless the sign is reversed. Pure so the arithmetic is testable without a pointer.
+ */
+export function dividerWantedWidth(startWidth: number, deltaX: number, reverse: boolean): number {
+  return startWidth + (reverse ? -deltaX : deltaX)
+}
+
+/**
+ * The KEYBOARD, deliberately UNAFFECTED by `side`. `ArrowRight` always means "grow the column",
+ * never "move toward the right edge of the screen" — the same LOGICAL-VALUE convention `Home`/`End`
+ * already use here (they jump to `TREE_MIN`/the real maximum regardless of which side the tree is
+ * on, never to "the left edge of the screen"/"the right edge"). A physical mapping would flip the
+ * meaning of the key depending on where the tree happens to sit, which is the opposite of what a
+ * keyboard shortcut is for — a slider's ArrowRight/ArrowUp increases its value on every slider ever
+ * built, whichever way the slider itself is drawn.
+ */
+export function dividerKeyDelta(key: string): number {
+  return key === 'ArrowLeft' ? -DIVIDER_STEP : key === 'ArrowRight' ? DIVIDER_STEP : 0
+}
 
 /**
  * The grip between the tree and the editor.
@@ -1337,10 +1507,14 @@ const DIVIDER_STEP = 16
  * knows how much room there is (`clampTreeWidth` against the measured region), so there is one
  * answer to how wide the column may be and it is testable without a pointer.
  */
-export function TreeDivider({ width, available, lang, onResize, onCommit, onCollapse }: {
+export function TreeDivider({ width, available, lang, reverse = false, onResize, onCommit, onCollapse }: {
   width: number
   available: number
   lang: 'pt' | 'en'
+  /** The tree sits on the RIGHT (design item 10) — the divider is now on the tree's LEFT rather
+   *  than its right, so the pointer/keyboard direction that GROWS the column flips too. See
+   *  `dividerWantedWidth`/`dividerKeyDelta`. */
+  reverse?: boolean
   onResize: (width: number) => void
   onCommit: (width: number) => void
   onCollapse: () => void
@@ -1365,7 +1539,7 @@ export function TreeDivider({ width, available, lang, onResize, onCommit, onColl
       // The delta from where the drag STARTED, never the pointer's absolute x: this column's left
       // edge is wherever the aside happens to be, and reading it every frame is a forced layout.
       if (from === null) return
-      const want = from.w + (e.clientX - from.x)
+      const want = dividerWantedWidth(from.w, e.clientX - from.x, reverse)
       wanted.current = want
       onResize(want)
     }
@@ -1384,7 +1558,7 @@ export function TreeDivider({ width, available, lang, onResize, onCommit, onColl
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up)
     }
-  }, [onResize, onCommit])
+  }, [onResize, onCommit, reverse])
 
   // What the column could reach HERE, so the announced maximum is the real one rather than the
   // absolute cap. Unmeasured falls back to the cap, which is the only honest answer then.
@@ -1410,7 +1584,7 @@ export function TreeDivider({ width, available, lang, onResize, onCommit, onColl
       }}
       onDoubleClick={() => onCommit(TREE_DEFAULT)}
       onKeyDown={e => {
-        const delta = e.key === 'ArrowLeft' ? -DIVIDER_STEP : e.key === 'ArrowRight' ? DIVIDER_STEP : 0
+        const delta = dividerKeyDelta(e.key)
         if (delta !== 0) { e.preventDefault(); onCommit(width + delta); return }
         if (e.key === 'Home') { e.preventDefault(); onCommit(TREE_MIN); return }
         if (e.key === 'End') { e.preventDefault(); onCommit(max); return }
@@ -2207,6 +2381,51 @@ function IconButton({ label, onClick, disabled, pressed, children }: {
       }}
     >
       {children}
+    </button>
+  )
+}
+
+/**
+ * `IconButton`, PLUS a short visible word (design item 5 — the plain icon-only pair on the Studio
+ * bar was reported as confusing, circled in a screenshot beside the aside's own move-to-bottom
+ * icon). A SEPARATE component rather than a new option on `IconButton` itself: that one is used
+ * throughout this file for rename/cancel/close/back controls where an icon alone is exactly right
+ * (a small square button beside an input, or a back arrow with a title next to it already) — giving
+ * every one of those a label as a side effect of this fix would widen controls nobody asked about.
+ *
+ * `label` is the FULL sentence (the tooltip, and what a screen reader announces); `visibleText` is
+ * the short word actually painted next to the icon, so the button stays a compact bar item rather
+ * than a full sentence wide.
+ */
+function LabeledIconButton({ label, visibleText, isMobile, onClick, pressed, children }: {
+  label: string
+  visibleText: string
+  isMobile: boolean
+  onClick: () => void
+  pressed?: boolean
+  children: ReactNode
+}) {
+  return (
+    <button
+      className="ag-tap-icon"
+      type="button"
+      aria-label={label}
+      aria-pressed={pressed}
+      title={label}
+      onClick={onClick}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0, boxSizing: 'border-box',
+        // 44px is the MOBILE figure. Stated for completeness — `studioLayout` never offers the
+        // split (the only arrangement that passes `tree` to this bar at all) on a phone, so this
+        // branch is desktop-only in practice today; the rule still holds if that ever changes.
+        minHeight: isMobile ? 44 : 22, padding: isMobile ? '0 10px' : '0 6px',
+        background: 'transparent', border: 'none', borderRadius: 6, cursor: 'pointer',
+        color: 'var(--text-tertiary)', fontFamily: 'inherit', fontSize: 11, fontWeight: 600,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {children}
+      <span>{visibleText}</span>
     </button>
   )
 }
