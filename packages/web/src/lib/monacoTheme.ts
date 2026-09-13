@@ -495,7 +495,9 @@ const SYNTAX: readonly SyntaxRule[] = [
   // keeping punctuation quieter than the names around it, which is what `faint` was reaching for.
   // Checked by eye against both alternatives at 12.5px on both grounds: `faint` loses the colons
   // inside `(name: string, kind: 'file')` on the light theme, and `fg` gives a `;` the same weight
-  // as an identifier.
+  // as an identifier. **THIS PUTS `delimiter` IN THE SAME SLOT AS `comment`**, so a `;` and a `//`
+  // carry the exact same colour — deliberate, not an oversight: both are quieter-than-code prose
+  // the reader looks past rather than reads for meaning, and neither competes with a name.
   { token: 'delimiter', slot: 'muted' },
   { token: 'delimiter.bracket', slot: 'fg' },
   { token: 'meta', slot: 'muted' },

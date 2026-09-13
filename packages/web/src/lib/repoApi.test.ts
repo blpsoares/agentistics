@@ -22,7 +22,8 @@ function stubJson(body: unknown, status = 200): Seen {
   return seen
 }
 
-/** The query string with `signal` removed — the URL as the test wrote it, minus nothing else. */
+/** Stubs `fetch` with a raw, non-JSON text body — a response that fails the contract before JSON
+ *  parsing even starts (a proxy's HTML error page, say). */
 function stubRaw(text: string, status = 200): Seen {
   const seen: Seen = { url: '', init: undefined }
   globalThis.fetch = ((url: string, init?: RequestInit) => {
@@ -175,6 +176,21 @@ describe('repoApi — a refusal is carried through, never re-worded', () => {
     expect(out.ok).toBe(false)
     expect(isWriteConflict(out)).toBe(false)
   })
+
+  test('isWriteConflict checks `status` too, not only `reason` and the shape', () => {
+    // A hand-built value with everything a real conflict carries EXCEPT the 409 — the guard's own
+    // declared type says `status: 409`, and the check must actually read it rather than trust the
+    // type annotation to have been honoured by whoever built the value.
+    const wrongStatus = {
+      ok: false as const,
+      failure: 'refused' as const,
+      status: 200,
+      reason: 'conflict' as const,
+      content: 'on disk now',
+      mtimeMs: 9,
+    }
+    expect(isWriteConflict(wrongStatus)).toBe(false)
+  })
 })
 
 describe('repoApi — a call that never got an answer is its own outcome', () => {
@@ -203,6 +219,20 @@ describe('repoApi — a call that never got an answer is its own outcome', () =>
   test('a 200 whose body does not honour the contract is `malformed`, not an empty directory', async () => {
     stubJson({ ok: true }, 200)
     const out = await fetchTree('s1', '', 'en')
+    expect(out).toEqual({ ok: false, failure: 'unreachable', cause: 'malformed' })
+  })
+
+  test('a search hit missing its own fields is `malformed`, not a hit list with a hole in it', async () => {
+    // fetchTree validates every child; searchRepo used to validate only `Array.isArray(hits)`,
+    // so a hit shaped wrong anywhere in the array reached the caller as if it were real.
+    stubJson({ ok: true, hits: [{ kind: 'name' }], truncated: false })
+    const out = await searchRepo('s1', 'q', 'en')
+    expect(out).toEqual({ ok: false, failure: 'unreachable', cause: 'malformed' })
+  })
+
+  test('a content hit missing its line or text is `malformed` too', async () => {
+    stubJson({ ok: true, hits: [{ kind: 'content', path: 'a.ts', line: 1 }], truncated: false })
+    const out = await searchRepo('s1', 'q', 'en')
     expect(out).toEqual({ ok: false, failure: 'unreachable', cause: 'malformed' })
   })
 

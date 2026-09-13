@@ -14,7 +14,7 @@
  * runs. `RepoSearchResults` therefore takes its state as a prop and `createSearchQueue` takes its
  * delay, which is what makes both drivable directly — with the same arguments the component passes.
  */
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   createSearchQueue, queryState, RepoSearchResults, runSearch, snippetOf,
@@ -31,6 +31,12 @@ const env = globalThis as unknown as { window?: { innerWidth: number } }
 env.window ??= { innerWidth: 1280 }
 const desktop = () => { env.window!.innerWidth = 1280 }
 const phone = () => { env.window!.innerWidth = 390 }
+
+// A `phone()` a test body restores by hand with its own trailing `desktop()` call is undone only on
+// the SUCCESS path — an assertion that throws between the two leaves `innerWidth: 390` for whatever
+// test runs next in the process. This global `window` is never removed either way, so the guard has
+// to be a reset, not a teardown.
+afterEach(() => desktop())
 
 function noop() { /* these renders never open anything */ }
 
