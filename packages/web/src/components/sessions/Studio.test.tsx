@@ -29,6 +29,8 @@ import { stripComments } from '../../lib/stripComments'
 import { makeRootNode, type OpenTab, type TreeNode } from '../../lib/repoTreeModel'
 import { ICON_HUES, fileIconHueOnActiveTab } from './fileIcon'
 import type { LiveEvent, LiveTurn } from '../../lib/artifactTabs'
+import { RepoFileEditor } from './RepoFileEditor'
+import type { ReactElement } from 'react'
 
 /**
  * `useIsMobile` reads `window.innerWidth` in its state initializer. Bun's runtime has no DOM, and
@@ -331,6 +333,37 @@ describe('EditorStack', () => {
 
   test('nothing mounted draws an empty region rather than a note about it', () => {
     expect(stack([], null)).not.toContain('data-editor-path')
+  })
+
+  /**
+   * I5 — relative links in a rendered markdown preview open the file in the Studio. `RepoFileEditor`
+   * never mounts under `renderToStaticMarkup` (its file read is async, so it is stuck in `loading`),
+   * so the wiring cannot be observed in the markup — the same reason `MarkdownPreview.test.tsx`'s I1
+   * fix walks the returned ELEMENT TREE instead of rendered HTML. `EditorStack` takes no hooks, so
+   * calling it directly (not through JSX) hands back that tree without any DOM at all.
+   */
+  test('onOpenPath reaches RepoFileEditor unchanged (I5 wiring)', () => {
+    const onOpenPath = (_path: string) => {}
+    const tree = EditorStack({
+      sessionId: 's1', paths: ['a.md'], activePath: 'a.md', autosave: false, lang: 'en',
+      goTo: null, onDirtyChange: () => {}, onOpenPath,
+    }) as ReactElement<{ children: ReactElement[] }>
+    const [layer] = tree.props.children
+    const editorDiv = (layer as ReactElement<{ children: ReactElement }>).props.children
+    const editor = (editorDiv as ReactElement<{ children: ReactElement }>).props.children
+    expect(editor.type).toBe(RepoFileEditor)
+    expect((editor.props as { onOpenPath?: unknown }).onOpenPath).toBe(onOpenPath)
+  })
+
+  test('onOpenPath omitted leaves RepoFileEditor without one, not a stub', () => {
+    const tree = EditorStack({
+      sessionId: 's1', paths: ['a.md'], activePath: 'a.md', autosave: false, lang: 'en',
+      goTo: null, onDirtyChange: () => {},
+    }) as ReactElement<{ children: ReactElement[] }>
+    const [layer] = tree.props.children
+    const editorDiv = (layer as ReactElement<{ children: ReactElement }>).props.children
+    const editor = (editorDiv as ReactElement<{ children: ReactElement }>).props.children
+    expect((editor.props as { onOpenPath?: unknown }).onOpenPath).toBeUndefined()
   })
 })
 

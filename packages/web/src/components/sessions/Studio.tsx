@@ -942,6 +942,7 @@ export function Studio({
             harness={harness}
             composerMounted={composerMounted}
             onMention={onMention}
+            onOpenPath={path => openFile(path)}
           />
         }
       />
@@ -1467,7 +1468,7 @@ export function TreeDivider({ width, available, lang, onResize, onCommit, onColl
  */
 export function EditorStack({
   sessionId, paths, keys, activePath, autosave, lang, goTo, onDirtyChange,
-  harness, composerMounted, onMention,
+  harness, composerMounted, onMention, onOpenPath,
 }: {
   sessionId: string
   paths: readonly string[]
@@ -1483,6 +1484,9 @@ export function EditorStack({
   harness?: HarnessId
   composerMounted?: boolean
   onMention?: (result: { text: string; needsSwitch: boolean }) => void
+  /** A relative link the markdown preview renders — opens that repo file in the Studio, the same
+   *  way a tree click does. See `RepoFileEditor`'s own doc comment for the prop this forwards. */
+  onOpenPath?: (path: string) => void
 }) {
   return (
     <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0 }}>
@@ -1505,6 +1509,7 @@ export function EditorStack({
                 harness={harness}
                 composerMounted={composerMounted}
                 onMention={onMention}
+                onOpenPath={onOpenPath}
               />
             </div>
           </Layer>
