@@ -41,6 +41,7 @@ import {
   type ArtifactLayout,
 } from '../lib/artifactLayout'
 import { closeArtifacts, openArtifacts, setArtifactCount, useArtifacts } from '../lib/artifactsStore'
+import { setRightAsideEdge } from '../lib/rightAsideEdge'
 import type { SessionDrilldownProps } from '../components/SessionDrilldown'
 import type { Artifact } from '../lib/sessionArtifacts'
 import { liveEvents, type LiveTurn } from '../lib/artifactTabs'
@@ -997,6 +998,37 @@ export default function SessionsPage() {
     : { display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }
 
   /**
+   * THE ASIDE'S OWN LEFT EDGE, MEASURED — reported through `rightAsideEdge.ts` so `App.tsx`'s
+   * Filtros panel (a different file, no ancestor of this one) can stop short of it. See that
+   * module's own doc comment for why this is not folded into `artifactsStore`.
+   *
+   * Re-measured on every cause the edge can move: the aside's OWN box changing size (the drag
+   * handle above, or the open/close width transition — `ResizeObserver` on `artOuter` itself) and
+   * the ROOM around it changing without the aside's own box changing size at all (a sidebar drag or
+   * a window resize shrinks `splitRef`, which shifts an `overlay` aside's `right: 0` position with
+   * no size change of its own — `ResizeObserver` would miss that, `splitRoom` catches it, because it
+   * is already recomputed for exactly that set of causes; see `panelWidth`, above).
+   *
+   * `getBoundingClientRect()`, not the observer's own `contentRect` — that rect is relative to the
+   * element's OWN padding box, not the viewport, so it cannot answer "where is this on screen."
+   */
+  const rightAsideRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const el = rightAsideRef.current
+    if (isMobile || artShell === 'none' || artShell === 'fullscreen' || !el) {
+      setRightAsideEdge(null)
+      return
+    }
+    const report = () => setRightAsideEdge(el.getBoundingClientRect().left)
+    report()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(report)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [isMobile, artShell, splitRoom])
+  useEffect(() => () => setRightAsideEdge(null), [])
+
+  /**
    * What the pane sits beside or under. A VALUE, never a `return`: the moment one of these is
    * returned on its own, the pane it was meant to share a parent with is at a different index.
    */
@@ -1410,7 +1442,7 @@ export default function SessionsPage() {
         /> : null}
       {/* THE ONE PANE. See the block comment at the top of this section. */}
       {artShell === 'none' ? null : (
-        <div style={artOuter}>
+        <div style={artOuter} ref={rightAsideRef}>
           <div style={artInner}>{artifactsPane}</div>
         </div>
       )}

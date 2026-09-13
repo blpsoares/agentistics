@@ -99,7 +99,8 @@ import { ToggleSwitch } from './components/ToggleSwitch'
 import { fleetFilterOptions, filterFleet, SESSION_FILTER_DIMS } from './lib/fleetFilter'
 import { runningConversationIds } from './lib/activeConversations'
 import { countActiveFilters } from './lib/activeFilterCount'
-import { filtrosPanelInert, sessionsFiltersShouldReturnFocus } from './lib/sessionsFiltersPanel'
+import { filtrosPanelInert, sessionsFiltersShouldReturnFocus, filtrosPanelBounds } from './lib/sessionsFiltersPanel'
+import { useRightAsideEdge } from './lib/rightAsideEdge'
 import { CentralSessions } from './components/sessions/CentralSessions'
 // The sessions workspace's container geometry, named ONCE (see FleetOverview's header): the
 // filter row in the strip and the body under it have to move together at every width.
@@ -1017,16 +1018,6 @@ const TOPBAR_H = 44
 const SIDEBAR_W = 248
 const SIDEBAR_W_COLLAPSED = 64
 
-/**
- * The Filtros tab's hanging panel — a fixed, conservative width rather than a computed one.
- *
- * This file has no live figure for the artifacts aside's width (that state lives in
- * `SessionsPage`/`artifactsStore.ts`, a different file, and it is a re-sizable, dragged width that
- * `ArtifactsState` does not even carry) — see `sessionTopBar`'s own Filtros tab comment for the full
- * reasoning. `440` is narrow enough that, at that aside's DEFAULT drag width (620px), the two do not
- * overlap at 1440 or 1024 — the two viewports review and the coordinator asked to verify.
- */
-const FILTROS_PANEL_W = 440
 const FILTROS_PANEL_ID = 'sessions-filtros-panel'
 
 /** Themed hover tooltip for the collapsed sidebar (icons only). Renders via a portal so it
@@ -1393,6 +1384,17 @@ export default function AppLayout() {
       Array<'members' | 'teams' | 'machines' | 'presence' | 'repos' | 'tags' | 'projects' | 'models'>
     : undefined
   const isMobile = useIsMobile()
+  /**
+   * The viewport's own width, tracked reactively — `useIsMobile` only answers a boolean at its own
+   * 768px breakpoint, and `filtrosPanelBounds` needs the actual figure at every size above it (the
+   * fallback right edge for a closed artifacts aside, and the ceiling on an unbounded wide monitor).
+   */
+  const [viewportW, setViewportW] = useState(() => (typeof window === 'undefined' ? 1440 : window.innerWidth))
+  useEffect(() => {
+    const onResize = () => setViewportW(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [riskyMode, setRiskyMode] = useState(false)
   const [lang, setLangState] = useState<Lang>('en')
@@ -1965,6 +1967,27 @@ export default function AppLayout() {
   // the panel is open. See `activeFilterCount.ts` for why this cannot simply be read off the
   // component instead.
   const sessionsActiveFilterCount = countActiveFilters(filters, activeOnly)
+
+  /**
+   * WHERE THE FILTROS PANEL MAY SIT — see `filtrosPanelBounds`'s own doc comment for the review
+   * finding this replaces (a fixed 440px cap that overlapped the artifacts aside's tabs at
+   * 1024×768, because that aside renders narrower there than its own 620px default).
+   *
+   * The LEFT edge is exact today — this file owns the fleet aside's width as state, the same
+   * figure `sessionTopBar`'s left-anchor already used — so there is nothing to measure for it.
+   * The RIGHT edge is the one this file has no live figure for: `useRightAsideEdge` reads it from
+   * `SessionsPage`'s own `ResizeObserver`, `null` meaning "no aside on screen" (closed, or a route
+   * with no `SessionsPage` mounted), which `filtrosPanelBounds` falls back to the viewport for.
+   *
+   * `viewportW` needs its own listener — `useIsMobile` only answers a boolean at its own
+   * breakpoint, not the width this arithmetic needs at every size above it.
+   */
+  const rightAsideEdge = useRightAsideEdge()
+  const filtrosBounds = filtrosPanelBounds(
+    { left: 0, right: (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth) + PAGE_INSET },
+    rightAsideEdge === null ? null : { left: rightAsideEdge, right: viewportW },
+    viewportW,
+  )
 
   /**
    * The selected session's title/tabs/actions row, lifted UP into this shared header from
@@ -3366,27 +3389,24 @@ export default function AppLayout() {
           POSITIONED ancestor, so `top: 100%` lands on the strip's own bottom edge no matter what
           this row's own layout is doing) — same anchor, same reasoning as Estatísticas.
 
-          LEFT-ANCHORED AT A KNOWN PIXEL, never spanning the viewport. `TopBar`'s own root is
-          `left: 0; right: 0` — the WHOLE viewport, which is what makes the fixed strip full-bleed —
-          and the previous version of this panel inherited that same span for ITSELF. Reproduced by
-          review at 1440: the card ran x 52→1388, painting over the fleet aside's own search field
-          and its "Painel / Sessões" switch, over the top of the open conversation, and over the
-          artifacts aside's tab row. `sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth` is
-          the EXACT figure `TopBar` itself already receives as `asideWidth` — the fleet aside's own
-          column — plus `PAGE_INSET`, the same inset the session title above starts at. That fixes
-          the LEFT edge exactly.
-
-          The RIGHT edge is a STATED LIMIT, not a measurement: the artifacts aside's width is
-          state that lives in `SessionsPage`/`artifactsStore.ts` (a different file, and a dragged,
-          re-sizable width `ArtifactsState` does not carry — only `open` does), so this component
-          has no live figure for where that aside starts. `FILTROS_PANEL_W` is therefore a fixed,
-          conservative cap rather than a computed one: narrow enough that, at the aside's DEFAULT
-          drag width (620px, `SessionsPage.tsx`), the panel's right edge still clears its left edge
-          at both viewports review and the coordinator asked to verify (1440 and 1024). A reader who
-          drags the artifacts panel far wider than its default could still overlap this one — the
-          same residual risk the review flagged as unresolved by a left-offset alone, now narrowed
-          rather than eliminated. A precise fix needs `artifactsStore.ts` to carry the panel's live
-          width, which is out of this file's ownership.
+          BOUNDED BY THE ROOM THAT IS ACTUALLY THERE, never a fixed span or a fixed cap — both were
+          tried and both broke. `TopBar`'s own root is `left: 0; right: 0`, the whole viewport, and
+          an earlier version of this panel inherited that same span: reproduced by review at 1440,
+          the card ran x 52→1388, painting over the fleet aside's own search field, over the open
+          conversation, and over the artifacts aside's tab row. The FIX AFTER THAT one anchored the
+          left edge correctly (`sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth` is the exact
+          figure `TopBar` itself already receives as `asideWidth`, plus `PAGE_INSET`) but capped the
+          width at a fixed 440px, reasoning that the artifacts aside's DEFAULT drag width (620px)
+          would always leave that much clear — re-review at 1024×768 found that aside renders at
+          439px there, not 620px, so the fixed cap overlapped its "Studio" and "Live" tabs by 15px.
+          `filtrosBounds` (`lib/sessionsFiltersPanel.ts`'s `filtrosPanelBounds`) is the durable
+          answer: the left edge is still this file's own exact figure, but the right edge is now
+          `useRightAsideEdge()` — the artifacts aside's LIVE left edge, measured in `SessionsPage.tsx`
+          with a `ResizeObserver` and reported through `rightAsideEdge.ts` (a different file, no
+          ancestor of this one, the same bridge `artifactsStore.ts` already is for that aside's open
+          flag) — falling back to the viewport's own width when the aside is not on screen at all.
+          Re-measured on every drag, open/close and window resize; see that module's own comment for
+          what the two triggers cover between them.
 
           zIndex 10, not 300: `TopBar` itself is the z-300 stacking context this whole bar lives
           inside, so a CHILD's z-index only orders it among the STRIP'S OWN other floating pieces —
@@ -3417,7 +3437,7 @@ export default function AppLayout() {
           resets an `inert`ed focus to. */}
       <div style={{
         position: 'absolute', top: '100%',
-        left: (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth) + PAGE_INSET,
+        left: filtrosBounds.left,
         zIndex: 10, pointerEvents: 'none',
       }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', pointerEvents: 'auto' }}>
@@ -3455,7 +3475,7 @@ export default function AppLayout() {
               display: 'grid',
               gridTemplateRows: sessionsFiltersOpen ? '1fr' : '0fr',
               transition: 'grid-template-rows 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
-              width: FILTROS_PANEL_W, maxWidth: 'calc(100vw - 48px)',
+              width: filtrosBounds.width, maxWidth: 'calc(100vw - 48px)',
             }}
             onTransitionEnd={e => {
               if (e.target !== e.currentTarget) return
