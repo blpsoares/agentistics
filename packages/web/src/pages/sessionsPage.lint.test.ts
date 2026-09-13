@@ -77,7 +77,11 @@ test('...and the layout is a STYLE, not a second copy of the pane', () => {
   expect(has('const artShell:')).toBe(true)
   expect(has('const artOuter: CSSProperties')).toBe(true)
   expect(has('<div style={artOuter}>')).toBe(true)
-  expect(has('<div style={artInner}>{artifactsPane}</div>')).toBe(true)
+  // The box now renders `rightSlotContent` — the Studio's own target box, or `artifactsPane`,
+  // decided by `lib/panelSlots.ts`'s `layout.right` — never the pane directly, or the Studio's
+  // switcher (`rightSwitcher`) would have nowhere to sit above whichever one is showing.
+  expect(has('<div style={artInner}>{rightSlotContent}</div>')).toBe(true)
+  expect(has('const rightSlotContent =')).toBe(true)
   // And the centre is a value. A `return` inside the layout branches is how the four sites happened.
   expect(has('let centre: ReactNode')).toBe(true)
 })
@@ -141,10 +145,14 @@ test('and it is the only reading of `ctx.editorEnabled` on this page', () => {
   expect([...SRC.matchAll(/ctx\.editorEnabled/g)]).toHaveLength(1)
 })
 
-test('both Studio entries on this page are gated on that one value', () => {
-  // The mobile session-menu row, and the prop the aside's strip entry and layer mount read.
+test('every Studio entry on this page is gated on that one value', () => {
+  // The mobile session-menu row (unchanged), the right slot's own switcher, and the `StudioHost`
+  // mount that actually renders it — the Studio moved out of `ArtifactsAside` (`lib/panelSlots.ts`),
+  // so the prop that used to gate ITS strip entry and layer (`editorEnabled={editorEnabled}`) is
+  // gone with it; these three are what replaced it.
   expect(/\.\.\.\(editorEnabled \? \[\{\s*\n\s*id: 'studio',/.test(SRC)).toBe(true)
-  expect(has('editorEnabled={editorEnabled}')).toBe(true)
+  expect(has('const rightSwitcher = editorEnabled && selected ? (')).toBe(true)
+  expect(has("{editorEnabled && selected && isPanelShown(slotLayout, 'studio') && (")).toBe(true)
 })
 
 test('the scan still sees the defect it exists to catch', () => {

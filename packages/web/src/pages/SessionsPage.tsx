@@ -19,7 +19,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
-import { ChevronLeft, FileText, FolderTree, MessagesSquare, Plus, TerminalSquare } from 'lucide-react'
+import { ChevronLeft, FileText, FolderTree, MessagesSquare, PanelBottomOpen, Plus, TerminalSquare } from 'lucide-react'
+import { StudioHost } from '../components/sessions/StudioHost'
+import { isPanelShown, resolveForViewport, usePanelSlots } from '../lib/panelSlots'
 import type { AppContext } from '../lib/app-context'
 import { useFleet, useFleetIndex, type FleetActionId } from '../lib/fleet'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -375,6 +377,24 @@ export default function SessionsPage() {
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
   }, [artWidth])
   const art = useArtifacts()
+  /**
+   * WHERE THE STUDIO, CLI AND SHELL SIT — `lib/panelSlots.ts`, design §1. `resolveForViewport` is
+   * the phone reading: a stored `bottom: 'studio'` becomes the fullscreen right sheet without
+   * rewriting what a desktop would see. `rightSlotEl` / `bottomStudioEl` are the physical DOM boxes
+   * `StudioHost` moves its persistent carrier into — see that component's own header for why a MOVE
+   * must never be a remount.
+   */
+  const { layout: rawSlotLayout, openPanel: openSlotPanel, closePanel: closeSlotPanel, movePanel: moveSlotPanel } = usePanelSlots()
+  const slotLayout = resolveForViewport(rawSlotLayout, isMobile)
+  const rightIsStudio = slotLayout.right === 'studio'
+  const bottomIsStudio = slotLayout.bottom === 'studio'
+  const [rightSlotEl, setRightSlotEl] = useState<HTMLDivElement | null>(null)
+  const [bottomStudioEl, setBottomStudioEl] = useState<HTMLDivElement | null>(null)
+  /** `null` PARKS the Studio — mounted, hidden, taking no space — which is also what a COLLAPSED
+   *  bottom band holding it means: collapsing must not be a way to lose a buffer. */
+  const studioTarget: HTMLElement | null = rightIsStudio
+    ? rightSlotEl
+    : bottomIsStudio && slotLayout.bottomOpen ? bottomStudioEl : null
   const onArtifacts = useCallback((a: { artifacts: Artifact[]; loading: boolean; unavailable?: string; older?: string; unlisted: boolean; turns: readonly LiveTurn[] }) => {
     setArtifacts(a.artifacts)
     setArtifactTurns(a.turns)
@@ -403,7 +423,10 @@ export default function SessionsPage() {
    */
 
   const artLayout = resolveArtifactLayout({
-    open: art.open && selected !== undefined,
+    // The RIGHT SLOT is open whenever Contents wants it OR panelSlots has put the Studio there —
+    // opening the Studio from the header button must show the box even though it never touched
+    // `art.open`; see `StudioHost.tsx` and `lib/panelSlots.ts`.
+    open: (art.open || rightIsStudio) && selected !== undefined,
     width: typeof window === 'undefined' ? 1440 : window.innerWidth,
     isMobile,
     // Phase B ships without the reversal control; the split-rail default is what the plan measured.
@@ -559,10 +582,6 @@ export default function SessionsPage() {
       unlistedWrites={artifactsUnlisted}
       {...(outsideNote ? { outsideNote } : {})}
       turns={artifactTurns}
-      // The repository explorer's gate and its autosave switch. The gate decides whether the tab
-      // exists at all — see `ArtifactsAsideProps`.
-      editorEnabled={editorEnabled}
-      editorAutosave={editorAutosave}
       tabRequest={art.tabRequest}
       // The session itself, for the TASKS tab: what it is filed under, and the composer that files
       // it somewhere new without leaving the session you are sitting in.
@@ -583,15 +602,81 @@ export default function SessionsPage() {
   )
 
   /**
-   * THE QUESTION BEFORE THE PANE IS DROPPED — asked at THIS level because this is the level that
-   * drops it. `artShell === 'none'` unmounts `ArtifactsAside`, the Studio's `Layer` and every Monaco
-   * model with it; the Studio keeps its buffers through everything INSIDE the panel and asks before
-   * closing one dirty tab, and none of that could see the panel itself being closed or the page
-   * navigating away. Autosave is off by default, so that was three typed lines gone 260 ms after a
-   * press on the panel's close, with nothing asked.
+   * THE RIGHT SLOT'S OWN SWITCHER (design §1.3) — present only when there is a second thing this
+   * slot could show, i.e. the Studio's gate is open. `Contents` keeps going through the OLD
+   * `artifactsStore`, deliberately: `contents` is `panelSlots.ts`'s own `PanelId` too, but this pass
+   * routes only `studio` (and, on a later pass, `cli`/`shell`) through it, so a request for it never
+   * touches this store — see `panelSlots.showPanel`'s own doc comment.
+   */
+  const rightSwitcher = editorEnabled && selected ? (
+    <div role="tablist" aria-label={pt ? 'Studio ou Conteúdo' : 'Studio or Contents'} style={{
+      display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0,
+      padding: '4px 6px', borderBottom: '1px solid var(--border)',
+    }}>
+      {([
+        ['contents', pt ? 'Conteúdo' : 'Contents', <FileText key="c" size={12} />, !rightIsStudio],
+        ['studio', 'Studio', <FolderTree key="s" size={12} />, rightIsStudio],
+      ] as const).map(([id, label, icon, on]) => (
+        <button
+          key={id}
+          role="tab"
+          aria-selected={on}
+          onClick={() => {
+            if (id === 'studio') openSlotPanel('studio', 'right')
+            else { closeSlotPanel('studio'); openArtifacts() }
+          }}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 5, padding: '4px 9px',
+            borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+            fontSize: 11.5, fontWeight: on ? 700 : 500,
+            background: on ? 'var(--bg-elevated)' : 'transparent',
+            color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
+          }}
+        >{icon}{label}</button>
+      ))}
+      {/* ABSENT on mobile — a phone has no bottom slot at all (`dockedAllowed` in
+          `lib/terminalSurface.ts`), so a "move to bottom" control there would move the Studio
+          somewhere `resolveForViewport` immediately reads back as the right sheet it already is. */}
+      {rightIsStudio && !isMobile && (
+        <button className="ag-tap-icon"
+          onClick={() => moveSlotPanel('studio', 'bottom')}
+          title={pt ? 'Mover o Studio para baixo' : 'Move the Studio to the bottom'}
+          aria-label={pt ? 'Mover o Studio para baixo' : 'Move the Studio to the bottom'}
+          style={{
+            marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 24, height: 22, borderRadius: 6, padding: 0,
+            border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+            color: 'var(--text-secondary)', cursor: 'pointer',
+          }}
+        ><PanelBottomOpen size={13} /></button>
+      )}
+    </div>
+  ) : null
+
+  /** What the right box actually shows: the Studio's own target (StudioHost re-parents its carrier
+   *  into it) while `panelSlots` says so, `ArtifactsAside` otherwise — unchanged. */
+  const rightSlotContent = rightIsStudio ? (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
+      {rightSwitcher}
+      <div ref={setRightSlotEl} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }} />
+    </div>
+  ) : (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
+      {rightSwitcher}
+      {artifactsPane}
+    </div>
+  )
+
+  /**
+   * THE QUESTION BEFORE A NAVIGATION DROPS THE STUDIO — asked at THIS level because this is where
+   * the page can still hold it. `artShell === 'none'` unmounts `ArtifactsAside`, which owns no Monaco
+   * buffers of its own any more: the Studio is its own panel now (`lib/panelSlots.ts`), and closing
+   * or displacing IT asks first through `showPanel` / `hidePanel` at the point it is closed or
+   * displaced — the very same `unsavedBuffers.ts` this guard also watches. What this guard is for is
+   * the drop NEITHER of those functions can see: the page navigating away while the Studio, wherever
+   * it currently sits, still holds unsaved buffers.
    *
-   * The guard holds every drop that has a moment to be held: the close (`closeArtifacts` asks through
-   * `unsavedBuffers.ts`), every router navigation that leaves this session's page — another session,
+   * It holds every such drop: every router navigation that leaves this session's page — another session,
    * the dedicated terminal, `SideNav`, and on a phone the arrival of a new session, which is a
    * navigation first — the browser's own Back/Forward (a `popstate` listener
    * registered in `main.tsx` BEFORE the first render, because in Chromium window listeners run in
@@ -628,6 +713,10 @@ export default function SessionsPage() {
       onArtifacts={onArtifacts}
       // The capability AND the user's switch, as the server reports them. Absent reads as OFF.
       shellEnabled={shellEnabled}
+      // Gates whether the BOTTOM band may ever show the Studio, and hands it the DOM box
+      // `StudioHost` (mounted once, here in `SessionsPage`) moves its persistent carrier into.
+      editorEnabled={editorEnabled}
+      onStudioBandRef={setBottomStudioEl}
       // The terminal's own screen. A route, so it survives a reload and can be sent to somebody.
       onOpenTerminal={() => navigate(dedicatedTerminalPath(selected.id))}
       onOpenShellFullscreen={() => navigate(dedicatedTerminalPath(selected.id, 'shell'))}
@@ -1411,8 +1500,28 @@ export default function SessionsPage() {
       {/* THE ONE PANE. See the block comment at the top of this section. */}
       {artShell === 'none' ? null : (
         <div style={artOuter}>
-          <div style={artInner}>{artifactsPane}</div>
+          <div style={artInner}>{rightSlotContent}</div>
         </div>
+      )}
+      {/* THE STUDIO'S OWN PERSISTENT HOST — a SIBLING of the pane above, never nested inside its
+          `artShell === 'none'` branch: the Studio can be shown in the BOTTOM band while the right
+          pane is fully closed, and nesting it there would unmount it the moment that pane closed.
+          Mounted only once the reader has actually opened it (`isPanelShown`), and only while the
+          gate is open — the same two conditions `ArtifactsAside`'s own Studio mount used to read
+          before this feature moved the Studio out of it. */}
+      {editorEnabled && selected && isPanelShown(slotLayout, 'studio') && (
+        <StudioHost
+          sessionId={selected.id}
+          lang={pt ? 'pt' : 'en'}
+          autosave={editorAutosave === true}
+          turns={artifactTurns}
+          // INTERIM: `Studio.tsx`'s own bar still carries a "‹ Contents" control calling `onExit`
+          // (W1-A's block — removing it is one of the one-line changes named in this session's
+          // report). Until it is gone, `onExit` closes the panel outright, which is the closest
+          // reading of "leave" the new model has — displacing it never asks, closing it does.
+          onExit={() => closeSlotPanel('studio')}
+          target={studioTarget}
+        />
       )}
       {/* Mobile-only chrome, and a slot that is always here so it can never shift the pane. */}
       {isMobile ? filtersSheet : null}

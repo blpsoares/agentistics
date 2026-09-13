@@ -23,9 +23,19 @@ export type TerminalPlacement =
   | 'replacing'
   /** Its own screen, at its own route. */
   | 'dedicated'
+  /**
+   * The session's own pane, shown in the RIGHT slot (`lib/panelSlots.ts`'s `cli` panel).
+   *
+   * Its own value rather than a reuse of `replacing` or `dedicated`: it is neither. It does not
+   * replace the conversation (the composer beside it keeps working, exactly as `docked` leaves it)
+   * and it is not the terminal's own screen (there is no route here — the slot's own close is the
+   * way out). It carries the SAME consent rules as `replacing`, because both are placements you went
+   * to on purpose: focus is the gate, and a phone gets the key strip.
+   */
+  | 'aside'
 
 export const TERMINAL_PLACEMENTS: readonly TerminalPlacement[] = [
-  'card', 'docked', 'replacing', 'dedicated',
+  'card', 'docked', 'replacing', 'dedicated', 'aside',
 ]
 
 /**

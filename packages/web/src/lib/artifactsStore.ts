@@ -18,7 +18,7 @@
  */
 
 import { useSyncExternalStore } from 'react'
-import { holdIfUnsaved } from './unsavedBuffers'
+import { showPanel } from './panelSlots'
 
 export interface ArtifactsState {
   /** Which session the count and the open flag describe. `null` before one is selected. */
@@ -91,6 +91,12 @@ export function setArtifactCount(sessionId: string, count: number): void {
 }
 
 export function openArtifacts(tab?: string, ref?: string): void {
+  // THE STUDIO IS NO LONGER A MODE OF THIS PANEL — see `panelSlots.ts`. This is kept as a thin
+  // compatibility shim so the header button and the mobile session menu (which both still call
+  // `openArtifacts('studio')`) need no second import: a request for it opens the STUDIO panel in
+  // its own slot and touches nothing here. This store's `open`/`dismissed`/`tabRequest` describe the
+  // CONTENTS panel alone, exactly as `contents` is its own `PanelId` in the new model.
+  if (tab === 'studio') { showPanel('studio'); return }
   emit({
     ...state, open: true,
     // `ref` names a STEP to open once the tab is there — the edge strip names an action, and
@@ -102,15 +108,15 @@ export function openArtifacts(tab?: string, ref?: string): void {
 /**
  * Closing is also a DECISION not to be reopened automatically — see `ArtifactsState.dismissed`.
  *
- * AND IT ASKS FIRST WHEN THE STUDIO HOLDS UNSAVED BUFFERS. Closing the panel unmounts the whole
- * pane, Monaco models and all, so a close with dirty buffers is a discard. The question is asked
- * HERE, in the only function that closes, rather than at each button that calls it: the panel's
- * own close, the header's toggle and the page menu's toggle all arrive through this, and a guard
- * at the call sites is a guard the next caller forgets. `unsavedBuffers.ts` holds the question; the
- * close happens only when the reader chooses to discard.
+ * IT NO LONGER ASKS ABOUT THE STUDIO. This panel used to unmount the Studio along with itself — one
+ * DOM tree, one close — so a close with dirty Monaco buffers was a silent discard, and the question
+ * was asked here, in the one function every close went through. The Studio is now its OWN panel
+ * (`panelSlots.ts`), placed in its own slot independently of this one: closing Contents no longer
+ * touches it at all, so asking about its buffers here would hold a close that drops nothing. The
+ * hold moved with the buffers — `panelSlots.ts`'s `showPanel` / `hidePanel` ask before the Studio
+ * itself is displaced or closed, through the very same `unsavedBuffers.ts`.
  */
 export function closeArtifacts(): void {
-  if (state.open && holdIfUnsaved('close', closeNow)) return
   closeNow()
 }
 

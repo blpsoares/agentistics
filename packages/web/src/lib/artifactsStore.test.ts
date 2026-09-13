@@ -3,8 +3,9 @@ import {
   closeArtifacts, getArtifacts, openArtifacts, resetArtifacts, setArtifactCount, toggleArtifacts,
 } from './artifactsStore'
 import { answerUnsaved, getUnsaved, reportUnsaved, resetUnsaved } from './unsavedBuffers'
+import { getPanelLayout, isPanelShown, resetPanelSlots } from './panelSlots'
 
-beforeEach(() => { resetArtifacts(); resetUnsaved() })
+beforeEach(() => { resetArtifacts(); resetUnsaved(); resetPanelSlots() })
 
 test('it starts knowing nothing — no session, no count, shut', () => {
   expect(getArtifacts()).toEqual({ sessionId: null, open: false, count: 0, dismissed: false, tabRequest: null })
@@ -89,45 +90,40 @@ test('opening without naming a tab leaves the reader where they were', () => {
 })
 
 /**
- * CLOSING THE PANEL WITH UNSAVED STUDIO BUFFERS ASKS FIRST.
+ * CLOSING CONTENTS NO LONGER ASKS ABOUT THE STUDIO'S BUFFERS.
  *
- * Closing unmounts the whole pane, Monaco models and all. The Studio asked before closing ONE dirty
- * tab and nothing asked before closing the panel holding N — so the question lives in the one
- * function every close goes through.
+ * This panel used to unmount the Studio along with itself — one DOM tree, one close — so a dirty
+ * Monaco buffer held the WHOLE panel's close. The Studio is now its own panel (`panelSlots.ts`),
+ * placed in its own slot independently of Contents: closing this one no longer touches it, so a
+ * dirty Studio must not hold a close that drops nothing of the Studio's. The hold moved with the
+ * buffers — `panelSlots.ts`'s `showPanel` / `hidePanel` ask before the Studio itself is displaced or
+ * closed, exhaustively covered by `panelSlots.test.ts`.
  */
-test('a close with a dirty buffer is HELD: the panel stays open until the reader discards', () => {
-  setArtifactCount('a', 0)
-  openArtifacts('studio')
-  reportUnsaved('studio', ['README.md'])
-  closeArtifacts()
-  expect(getArtifacts().open).toBe(true)
-  expect(getUnsaved().question).toEqual({ cause: 'close' })
-  answerUnsaved(true)
-  expect(getArtifacts()).toMatchObject({ open: false, dismissed: true })
-})
-
-test('"keep editing" leaves the panel open and forgets the close', () => {
+test('closing Contents with a dirty Studio buffer reported is immediate — that buffer is not this panel’s', () => {
   setArtifactCount('a', 0)
   openArtifacts()
-  reportUnsaved('studio', ['README.md'])
-  closeArtifacts()
-  answerUnsaved(false)
-  expect(getArtifacts()).toMatchObject({ open: true, dismissed: false })
-})
-
-test('the header toggle is held the same way — it closes through the same function', () => {
-  setArtifactCount('a', 0)
-  toggleArtifacts()
   reportUnsaved('studio', ['x.ts'])
-  toggleArtifacts()
-  expect(getArtifacts().open).toBe(true)
-  expect(getUnsaved().question).toEqual({ cause: 'close' })
+  closeArtifacts()
+  expect(getArtifacts()).toMatchObject({ open: false, dismissed: true })
+  expect(getUnsaved().question).toBeNull()
 })
 
-test('with nothing unsaved a close is immediate and asks nothing', () => {
+test('with nothing unsaved anywhere a close is immediate and asks nothing', () => {
   setArtifactCount('a', 0)
   openArtifacts()
   closeArtifacts()
   expect(getArtifacts().open).toBe(false)
   expect(getUnsaved().question).toBeNull()
+})
+
+/**
+ * `openArtifacts('studio')` IS A COMPATIBILITY SHIM: it delegates to `panelSlots.showPanel`, and
+ * touches nothing of THIS store — a request for the Studio must not light up the Contents button,
+ * which is the one-open-flag defect this whole feature exists to fix.
+ */
+test('openArtifacts("studio") opens the STUDIO panel via panelSlots, and never this panel', () => {
+  setArtifactCount('a', 0)
+  openArtifacts('studio')
+  expect(isPanelShown(getPanelLayout(), 'studio')).toBe(true)
+  expect(getArtifacts()).toMatchObject({ open: false, tabRequest: null })
 })
