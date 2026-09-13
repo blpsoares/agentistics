@@ -358,6 +358,14 @@ function StudioBand({
         <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-secondary)' }}>
           STUDIO
         </span>
+        {/* THE SPACER COMES BEFORE THE SEGMENT, not after — this is the whole fix for item 1. The
+            band's header must not change SHAPE with its occupant: `ShellBand`'s own desktop bar
+            (this same band, showing `cli`/`shell` instead) has always put its segment on the RIGHT,
+            right before the move/close/collapse icon buttons — a spacer, then the segment, then the
+            icons. This bar used to put the segment right after the "STUDIO" label instead, which
+            read as the segment sitting on the LEFT the moment the Studio (rather than Claude Code or
+            Shell) was the band's occupant — reported with a screenshot circling exactly that jump. */}
+        <span style={{ flex: 1 }} />
         {(onSelectCli || onSelectShell) && (
           <div role="tablist" aria-label={pt ? 'Qual terminal' : 'Which terminal'} onClick={e => e.stopPropagation()}
             style={{
@@ -384,7 +392,6 @@ function StudioBand({
             ))}
           </div>
         )}
-        <span style={{ flex: 1 }} />
         <button className="ag-tap-icon"
           onClick={e => { e.stopPropagation(); onMoveToRight() }}
           title={pt ? 'Mover o Studio para a direita' : 'Move the Studio to the right'}
