@@ -31,6 +31,8 @@ import {
   isPanelShown, mountPanel, resolveForGates, resolveForViewport, rightSlotShowing, usePanelSlots,
   type PanelGates,
 } from '../lib/panelSlots'
+import { MENTION_ADDED_TOAST } from '../lib/mentionInsert'
+import type { HarnessId } from '@agentistics/core'
 import { getCentralMachine } from '../lib/centralMachinePick'
 import type { AppContext } from '../lib/app-context'
 import { useFleet, useFleetIndex, type FleetActionId } from '../lib/fleet'
@@ -87,6 +89,13 @@ export interface StudioHostMountParams {
   turns: readonly LiveTurn[]
   onExit: () => void
   target: HTMLElement | null
+  /** The session's own harness — picks the mention format for §6's "Mencionar seleção"/"Mencionar
+   *  na conversa" via `mentionSpec.ts`. */
+  harness?: HarnessId
+  /** Whether the composer is on screen right now — the centre's `chat`/`terminal` choice. */
+  composerMounted: boolean
+  /** Fired after either mention gesture queues a reference — see `Studio.tsx`'s own `onMention`. */
+  onMention: (result: { text: string; needsSwitch: boolean }) => void
   /**
    * NEVER A REAL FIELD (I4, fix wave 3) — declared `never` so a stray `key` on this params object is
    * a TYPE ERROR at every route a value can reach `mountStudioHostPanel` through, not only a literal
@@ -140,6 +149,9 @@ export function mountStudioHostPanel(params: StudioHostMountParams): ReactElemen
     turns: params.turns,
     onExit: params.onExit,
     target: params.target,
+    harness: params.harness,
+    composerMounted: params.composerMounted,
+    onMention: params.onMention,
   })
 }
 
@@ -344,6 +356,33 @@ export default function SessionsPage() {
     else next.set('view', v)
     return next
   }, { replace: true })
+
+  /**
+   * "Adicionado à mensagem" (§6, `mentionInsert.ts`'s `MENTION_ADDED_TOAST`) — a LOCAL, ephemeral
+   * acknowledgement, not the server-side notification bell (`lib/notifications.ts`'s
+   * `pushNotification`, which persists a row and is for account-wide events, not a one-off UI
+   * confirmation). Shown only when a mention gesture fired `needsSwitch` — the composer was not on
+   * screen, so the reader has nothing else telling them the reference landed. `useState` + a plain
+   * `setTimeout`, the same shape `RepoFileEditor.tsx`'s own `SAVED_NOTICE_MS` already uses.
+   */
+  const [mentionNotice, setMentionNotice] = useState(false)
+  useEffect(() => {
+    if (!mentionNotice) return
+    const t = setTimeout(() => setMentionNotice(false), 3000)
+    return () => clearTimeout(t)
+  }, [mentionNotice])
+  /**
+   * The ONE handler both Studio mention gestures fire through (the tree's "Mencionar na conversa"
+   * and, via `EditorStack`, Monaco's "Mencionar seleção") — see `Studio.tsx`'s own `onMention` prop.
+   * The reference is queued into the draft store either way (`composerStore.ts` survives the
+   * composer not being mounted yet); this only switches the centre and raises the toast when the
+   * composer was NOT on screen to show the reader anything happened.
+   */
+  const onStudioMention = (result: { text: string; needsSwitch: boolean }) => {
+    if (!result.needsSwitch) return
+    setSessionView('chat')
+    setMentionNotice(true)
+  }
 
   /** The fleet as the aside is showing it — one narrowing, read by both. */
   const overviewRows = useMemo(
@@ -1692,15 +1731,34 @@ export default function SessionsPage() {
         lang: pt ? 'pt' : 'en',
         autosave: editorAutosave === true,
         turns: artifactTurns,
-        // INTERIM: `Studio.tsx`'s own bar still carries a "‹ Contents" control calling `onExit`
-        // (W1-A's block — removing it is one of the one-line changes named in this session's
-        // report). Until it is gone, `onExit` closes the panel outright, which is the closest
-        // reading of "leave" the new model has — displacing it never asks, closing it does.
+        // `Studio.tsx`'s own bar is a bare close control now (W1-A): `onExit` closes the panel
+        // outright, the closest reading of "leave" the slots model has — displacing it never asks,
+        // closing it does.
         onExit: () => closeSlotPanel('studio'),
         target: studioTarget,
+        harness: selected.harness as HarnessId,
+        composerMounted: sessionView === 'chat',
+        onMention: onStudioMention,
       })}
       {/* Mobile-only chrome, and a slot that is always here so it can never shift the pane. */}
       {isMobile ? filtersSheet : null}
+      {/* §6's "Adicionado à mensagem" — see `onStudioMention` above. `position: fixed` rather than
+          relying on an ancestor's own positioning, since this page's several return branches do not
+          all share one — the same reason `role="status"` is used everywhere else a sentence appears
+          and disappears on its own (`Studio.tsx`'s `StudioToast`). */}
+      {mentionNotice && (
+        <div
+          role="status"
+          style={{
+            position: 'fixed', left: '50%', bottom: isMobile ? 78 : 14, transform: 'translateX(-50%)',
+            zIndex: 60, padding: '7px 14px', borderRadius: 10,
+            background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+            boxShadow: 'var(--ag-shadow-pop)', fontSize: 12.5, color: 'var(--text-primary)',
+          }}
+        >
+          {MENTION_ADDED_TOAST[pt ? 'pt' : 'en']}
+        </div>
+      )}
       {/* LAST, and always present, so adding it shifted no slot above. The return that holds the
           pane holds the question asked before the pane is dropped — see `leaveGuard`. */}
       {leaveGuard}

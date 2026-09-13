@@ -79,9 +79,10 @@ import { TreeContextMenu, type TreeMenuAction } from './TreeContextMenu'
  * OWN error beside it, the same contract `Studio`'s `creating`/`NewFileRow` already keep for a new
  * file.
  *
- * `onMention` is the one OPTIONAL handler — see `TreeContextMenu.tsx`'s own header: its absence
- * removes the menu row rather than greying it, because the feature behind it (§6 of the design)
- * belongs to a later package.
+ * `onMention` is the one OPTIONAL handler — see `TreeContextMenu.tsx`'s own header: an absent handler
+ * removes the menu row rather than greying it (`Studio.tsx` always supplies one; the type stays
+ * optional because the menu itself must keep working with no caller wired at all — the same
+ * "optional prop, absence removes the row" contract `copyPath` follows).
  */
 export interface TreeOps {
   renaming: { path: string; name: string; busy: boolean; error: string | null } | null

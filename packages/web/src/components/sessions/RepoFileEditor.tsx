@@ -804,6 +804,18 @@ export function RepoFileEditor({
    */
   const mentionCtxRef = useRef({ sessionId, harness, composerMounted, onMention, pt })
   mentionCtxRef.current = { sessionId, harness, composerMounted, onMention, pt }
+  /**
+   * MOBILE's OWN TRIGGER for "Mencionar seleção" — the desktop chip and keybinding have no
+   * equivalent on a phone (no hover, no reliable modifier chord), so the editor bar carries a
+   * button instead. Two pieces, because the button lives in REACT-rendered chrome (`RepoSaveStrip`)
+   * while `mentionSelection` is a closure created once inside the Monaco mount effect:
+   *  - `hasSelection` is state a bar button can read, updated from the same
+   *    `onDidChangeCursorSelection` listener that already drives the desktop chip's reposition;
+   *  - `mentionSelectionRef` exposes the effect-scoped closure to the rest of the component, the
+   *    same pattern `requestSaveRef` already uses in this file for the identical reason.
+   */
+  const [hasSelection, setHasSelection] = useState(false)
+  const mentionSelectionRef = useRef<() => void>(() => {})
 
   // --- read the file ---------------------------------------------------------
   // `lang` is NOT a dependency on purpose. It changes only the wording of a refusal, while
@@ -920,6 +932,7 @@ export function RepoFileEditor({
           const result = insertMention(ctx.sessionId, ctx.harness, target, ctx.composerMounted)
           ctx.onMention?.(result)
         }
+        mentionSelectionRef.current = mentionSelection
         editor.addAction({
           id: 'agentistics.mentionSelection',
           label: mentionCtxRef.current.pt ? 'Mencionar seleção' : 'Mention selection',
@@ -929,12 +942,24 @@ export function RepoFileEditor({
           run: mentionSelection,
         })
 
+        // MOBILE'S OWN TRIGGER (`RepoSaveStrip`'s "Mencionar" button) needs to know whether there is
+        // a selection to act on — there is no hover and no reliable modifier chord on a phone, so it
+        // cannot rely on the desktop chip/keybinding below. Registered unconditionally (both mobile
+        // and desktop) rather than folded into the desktop-only listener further down: the two serve
+        // different consumers (React state for a bar button vs. repositioning a Monaco content
+        // widget) and gating this one on `!mobileRef.current` would leave `hasSelection` permanently
+        // `false` on the one platform the bar button exists for.
+        editor.onDidChangeCursorSelection(() => {
+          setHasSelection(!editor?.getSelection()?.isEmpty())
+        })
+
         /**
-         * The floating chip at the end of a non-empty selection (desktop only — §1.6/§6.1 leave the
-         * mobile trigger to an editor-bar button the coordinator adds after merge; see the report).
-         * A CONTENT WIDGET rather than a plain absolutely-positioned `<div>`: Monaco owns the
-         * scroll/zoom transform for anything anchored to buffer coordinates, and re-deriving that
-         * by hand is exactly the kind of thing that drifts one line off after a resize.
+         * The floating chip at the end of a non-empty selection (desktop only — a phone reaches the
+         * same action through `RepoSaveStrip`'s "Mencionar" button instead, driven by `hasSelection`
+         * and `mentionSelectionRef` above). A CONTENT WIDGET rather than a plain absolutely-positioned
+         * `<div>`: Monaco owns the scroll/zoom transform for anything anchored to buffer coordinates,
+         * and re-deriving that by hand is exactly the kind of thing that drifts one line off after a
+         * resize.
          *
          * `getPosition` returning `null` for an empty selection is how it HIDES — Monaco simply
          * does not render a widget with nowhere to go, so there is no separate show/hide state to
@@ -992,6 +1017,8 @@ export function RepoFileEditor({
     return () => {
       disposed = true
       editorRef.current = null
+      mentionSelectionRef.current = () => {}
+      setHasSelection(false)
       editor?.dispose()
       model?.dispose()
     }
@@ -1191,6 +1218,8 @@ export function RepoFileEditor({
         isMobile={isMobile}
         autosave={autosave}
         onSave={() => requestSave('explicit')}
+        hasSelection={hasSelection}
+        onMentionSelection={() => mentionSelectionRef.current()}
       />
 
       {save.phase.kind === 'stale' && (
@@ -1393,18 +1422,29 @@ const TONE_COLOR: Record<SaveTone, string> = {
   bad: 'var(--accent-red)',
 }
 
-export function RepoSaveStrip({ state, lang, isMobile, autosave, onSave }: {
+export function RepoSaveStrip({
+  state, lang, isMobile, autosave, onSave, hasSelection, onMentionSelection,
+}: {
   state: SaveState
   lang: 'pt' | 'en'
   isMobile: boolean
   /** Only so a stopped autosave can be SAID; the strip decides nothing about saving. */
   autosave: boolean
   onSave: () => void
+  /**
+   * §6.1 gesture 3, "Mencionar seleção" — MOBILE'S OWN TRIGGER. The desktop floating chip and
+   * `Ctrl/Cmd+Alt+M` have no phone equivalent (no hover, no reliable modifier chord), so the bar
+   * carries a button instead — present only when the caller passes a trigger, per this file's own
+   * "an optional handler's absence removes the control" convention (`TreeContextMenu.tsx`).
+   */
+  hasSelection?: boolean
+  onMentionSelection?: () => void
 }) {
   const pt = lang === 'pt'
   const status = saveStatus(state, lang, autosave)
   const button = saveButtonState(state, lang, isMobile)
   const dirty = isDirty(state)
+  const showMention = isMobile && onMentionSelection !== undefined
 
   return (
     <div style={{
@@ -1432,6 +1472,29 @@ export function RepoSaveStrip({ state, lang, isMobile, autosave, onSave }: {
       >
         {status.text}
       </span>
+      {showMention && (
+        <button
+          type="button"
+          onClick={onMentionSelection}
+          disabled={!hasSelection}
+          aria-label={pt ? 'Mencionar a seleção na conversa' : 'Mention the selection in the conversation'}
+          style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+            flexShrink: 0, boxSizing: 'border-box',
+            // Same 44px-of-HEIGHT convention as the Save button beside it — a labelled control, so
+            // no `minWidth` is needed on top of it.
+            minHeight: 44,
+            padding: '0 10px',
+            borderRadius: 6, border: '1px solid var(--border-subtle)',
+            background: 'transparent', fontFamily: 'inherit', fontSize: 13,
+            color: hasSelection === true ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+            cursor: hasSelection === true ? 'pointer' : 'not-allowed',
+            opacity: hasSelection === true ? 1 : 0.55,
+          }}
+        >
+          {pt ? 'Mencionar' : 'Mention'}
+        </button>
+      )}
       <button
         type="button"
         onClick={onSave}

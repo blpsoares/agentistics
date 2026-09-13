@@ -27,6 +27,8 @@ const BASE: StudioHostMountParams = {
   turns: [],
   onExit: () => {},
   target: null,
+  composerMounted: true,
+  onMention: () => {},
 }
 
 describe('mountStudioHostPanel — the real call site SessionsPage.tsx uses', () => {
@@ -41,6 +43,7 @@ describe('mountStudioHostPanel — the real call site SessionsPage.tsx uses', ()
     expect(el?.key).toBeNull()
     expect(el?.props).toEqual({
       sessionId: 'session-1', lang: 'en', autosave: false, turns: [], onExit: BASE.onExit, target: null,
+      harness: undefined, composerMounted: true, onMention: BASE.onMention,
     })
   })
 

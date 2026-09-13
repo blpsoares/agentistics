@@ -34,10 +34,11 @@
  * own — which entries exist for a file versus a folder, and the one entry that can be absent.
  *
  * **`onMention` IS THE ONE OPTIONAL HANDLER, AND ITS ABSENCE REMOVES THE ROW RATHER THAN GREYING
- * IT.** "Mencionar na conversa" belongs to a later package (§6 of the design this feature shipped
- * under); until that package wires a real handler in, a disabled row with no explanation would read
- * as a bug report waiting to be filed, while an absent row is simply a menu that does not yet offer
- * something nobody can use.
+ * IT.** "Mencionar na conversa" (§6) is wired in by `Studio.tsx`, which always supplies a handler —
+ * kept optional here (rather than required) because a disabled row with no explanation would read as
+ * a bug report waiting to be filed, while an absent row is simply a menu that does not offer
+ * something nobody can use; a future caller that has no conversation to mention into is free to omit
+ * it the same way.
  */
 
 import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react'

@@ -119,6 +119,8 @@ import { RepoFileEditor } from './RepoFileEditor'
 import { RepoSearchView } from './RepoSearchView'
 import { RepoTreeView, toggleDirectory, treeViewState, type TreeOps } from './RepoTreeView'
 import { RepoNote } from './repoNote'
+import { insertMention } from '../../lib/mentionInsert'
+import type { HarnessId } from '@agentistics/core'
 
 export interface StudioProps {
   sessionId: string
@@ -138,6 +140,26 @@ export interface StudioProps {
    * makes that possible: the parent flips which layer is SHOWN and keeps both mounted.
    */
   onExit: () => void
+  /**
+   * The session's own harness — picks the mention FORMAT for both "Mencionar seleção" (Monaco) and
+   * "Mencionar na conversa" (the tree's own context menu) via `mentionSpec.ts`. Omitted (or
+   * unverified) falls back to the plain, harness-agnostic form — never a guessed `@`.
+   */
+  harness?: HarnessId
+  /**
+   * Whether the message composer is on screen for this session RIGHT NOW — see `mentionInsert.ts`'s
+   * `insertMention`. This component has no visibility into which centre view (chat/terminal) is
+   * showing, so the caller passes it in; omitted defaults to `true` (no forced switch).
+   */
+  composerMounted?: boolean
+  /**
+   * Fired after EITHER mention gesture this component owns (the tree's "Mencionar na conversa", and
+   * — forwarded from `RepoFileEditor` through `EditorStack` — Monaco's "Mencionar seleção") queues a
+   * reference into the draft store. The reference is queued either way; this is only for
+   * `needsSwitch`, which tells the caller when to switch the centre to the conversation and show the
+   * "Adicionado à mensagem" toast (`MENTION_ADDED_TOAST`, `mentionInsert.ts`).
+   */
+  onMention?: (result: { text: string; needsSwitch: boolean }) => void
 }
 
 /** Which layer the panel is showing while no file is open. */
@@ -463,7 +485,9 @@ export function nextGoTo(
 
 // --- the component -------------------------------------------------------------------------------
 
-export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps) {
+export function Studio({
+  sessionId, lang, autosave, turns, onExit, harness, composerMounted = true, onMention,
+}: StudioProps) {
   const isMobile = useIsMobile()
   const pt = lang === 'pt'
   const [tree, setTree] = useState<TreeNode>(makeRootNode())
@@ -889,9 +913,17 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
                   onCopyRelativePath: copyRelativePath,
                   onCopyPath: copyPath,
                   onDropMove: (itemPath, itemKind, targetDir) => { void performMove(itemPath, itemKind, targetDir) },
-                  // `onMention` is intentionally absent — §6 (Mencionar na conversa) belongs to a
-                  // later package; see `TreeContextMenu.tsx`'s own header for why absence removes
-                  // the row rather than greying it.
+                  // "Mencionar na conversa" (§6, gesture 2). A directory is mentioned exactly like a
+                  // file — gesture 1 (drag onto the composer) already does this with no special case,
+                  // and refusing it here only for THIS gesture would make the two disagree about
+                  // what a directory mention means; see `mentionSpec.ts`'s `mentionFor`, which treats
+                  // any path identically. `insertMention` is the ONE function every mention gesture
+                  // calls (`lib/mentionInsert.ts`); `onMention` (this component's own prop) is fired
+                  // afterward so the caller can switch the centre and toast on `needsSwitch`.
+                  onMention: (path, _kind) => {
+                    const result = insertMention(sessionId, harness, { path }, composerMounted)
+                    onMention?.(result)
+                  },
                 }}
               />
             </div>
@@ -907,6 +939,9 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
             lang={lang}
             goTo={goTo}
             onDirtyChange={(path, dirty) => setTabs(prev => markDirty(prev, path, dirty))}
+            harness={harness}
+            composerMounted={composerMounted}
+            onMention={onMention}
           />
         }
       />
@@ -1430,7 +1465,10 @@ export function TreeDivider({ width, available, lang, onResize, onCommit, onColl
  * today's exact behaviour, so every caller that never renames anything (every test below, and every
  * caller before this task) is unaffected.
  */
-export function EditorStack({ sessionId, paths, keys, activePath, autosave, lang, goTo, onDirtyChange }: {
+export function EditorStack({
+  sessionId, paths, keys, activePath, autosave, lang, goTo, onDirtyChange,
+  harness, composerMounted, onMention,
+}: {
   sessionId: string
   paths: readonly string[]
   /** Same length and order as `paths` — see the note above. Absent falls back to `path` itself. */
@@ -1440,6 +1478,11 @@ export function EditorStack({ sessionId, paths, keys, activePath, autosave, lang
   lang: 'pt' | 'en'
   goTo: GoTo | null
   onDirtyChange: (path: string, dirty: boolean) => void
+  /** Threaded straight through to every `RepoFileEditor` — §6's "Mencionar seleção" (gesture 3). See
+   *  `StudioProps`' own doc comments; `Studio.tsx` is the one caller and passes its own props here. */
+  harness?: HarnessId
+  composerMounted?: boolean
+  onMention?: (result: { text: string; needsSwitch: boolean }) => void
 }) {
   return (
     <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0 }}>
@@ -1459,6 +1502,9 @@ export function EditorStack({ sessionId, paths, keys, activePath, autosave, lang
                 {...(goTo !== null && goTo.path === path
                   ? { gotoLine: goTo.line, gotoSeq: goTo.seq }
                   : {})}
+                harness={harness}
+                composerMounted={composerMounted}
+                onMention={onMention}
               />
             </div>
           </Layer>

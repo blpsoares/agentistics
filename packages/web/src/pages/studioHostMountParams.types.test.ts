@@ -31,6 +31,8 @@ const BASE: StudioHostMountParams = {
   turns: [],
   onExit: () => {},
   target: null,
+  composerMounted: true,
+  onMention: () => {},
 }
 
 test('shape 1 — a `key` in a direct object literal passed to the params type is a type error', () => {

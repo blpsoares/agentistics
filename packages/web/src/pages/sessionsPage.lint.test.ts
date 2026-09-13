@@ -290,9 +290,13 @@ describe('StudioHost is mounted once, through mountStudioHostPanel (I4)', () => 
 
     // LAST field, appended right before the closing `})}` — the shape the re-review found that the
     // occurrence-count test cannot see at all, because it never touches the fixed prefix string.
+    // `onMention:` is the literal's current last field (§6 wiring added `harness`/`composerMounted`/
+    // `onMention` after `target`) — this must move whenever a field is added after it, or the plant
+    // silently stops matching anything and the test passes for the wrong reason (see the failure
+    // this exact drift caused when `target: studioTarget,` was still assumed to be last).
     const last = SRC.replace(
-      'target: studioTarget,' + CALL_CLOSE,
-      "target: studioTarget,\n        key: rightIsStudio ? 'right' : 'bottom'," + CALL_CLOSE,
+      'onMention: onStudioMention,' + CALL_CLOSE,
+      "onMention: onStudioMention,\n        key: rightIsStudio ? 'right' : 'bottom'," + CALL_CLOSE,
     )
     const lastStart = last.indexOf(CALL_GUARD)
     const lastClose = last.indexOf(CALL_CLOSE, lastStart)
