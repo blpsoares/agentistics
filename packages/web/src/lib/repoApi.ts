@@ -27,15 +27,14 @@
  */
 
 /**
- * `TreeChild` is redeclared here rather than imported from the server's `editor-list.ts` (same
- * shape: `{ name, kind: 'file' | 'dir' }`), exactly as `repoTreeModel.ts` already does and for the
- * same reason — `packages/web/src/*` may never import `packages/server/server/*`, and this type is
- * too small and too specific to this feature to be worth promoting into `@agentistics/core`.
+ * `TreeChild` mirrors the server's `editor-list.ts` (`{ name, kind: 'file' | 'dir' }`) — that shape
+ * is never imported from `packages/server/server/*` (`packages/web/src/*` may never bundle it) — but
+ * it is imported from `repoTreeModel.ts` rather than redeclared a second time IN THIS SAME PACKAGE:
+ * the two used to carry byte-identical local copies, so a later `kind: 'symlink'` would have needed
+ * remembering in two places one file apart for no reason a package boundary requires.
  */
-export interface TreeChild {
-  name: string
-  kind: 'file' | 'dir'
-}
+import type { TreeChild } from './repoTreeModel'
+export type { TreeChild }
 
 /** Mirrors the server's `NameHit` / `ContentHit` / `SearchResult` (`editor-search.ts`). */
 export interface NameHit { kind: 'name'; path: string }
@@ -128,6 +127,7 @@ export type EntryResult = { ok: true } | RepoFailure
 export function isWriteConflict(result: WriteFileResult): result is WriteConflict {
   return result.ok === false
     && result.failure === 'refused'
+    && result.status === 409
     && result.reason === 'conflict'
     && typeof (result as WriteConflict).content === 'string'
     && typeof (result as WriteConflict).mtimeMs === 'number'
@@ -251,10 +251,24 @@ export async function searchRepo(sessionId: string, q: string, lang: RepoLang): 
     `/api/fleet/tree/search?${qs({ id: sessionId, q, lang })}`,
     {},
     SEARCH_TIMEOUT_MS,
-    body => (Array.isArray(body.hits) && typeof body.truncated === 'boolean'
-      ? { ok: true as const, hits: body.hits as SearchHit[], truncated: body.truncated }
+    body => (isHitList(body.hits) && typeof body.truncated === 'boolean'
+      ? { ok: true as const, hits: body.hits, truncated: body.truncated }
       : null),
   )
+}
+
+/** Same posture as `isChildList` above: a 200 whose `hits` are not shaped as promised is `malformed`. */
+function isHitList(value: unknown): value is SearchHit[] {
+  return Array.isArray(value) && value.every(h => (
+    typeof h === 'object' && h !== null
+    && typeof (h as SearchHit).path === 'string'
+    && (
+      ((h as NameHit).kind === 'name')
+      || ((h as ContentHit).kind === 'content'
+        && typeof (h as ContentHit).line === 'number'
+        && typeof (h as ContentHit).text === 'string')
+    )
+  ))
 }
 
 /**
