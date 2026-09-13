@@ -35,6 +35,20 @@ export function sessionMediaUrl(sessionId: string, path: string): string {
   return `/api/fleet/media?id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`
 }
 
+/**
+ * The URL that reads back one image, video or PDF in the session's REPOSITORY — see
+ * `GET /api/fleet/tree/media`.
+ *
+ * The fourth of these, and it is not `sessionMediaUrl` with a different path. That one is resolved
+ * against the artifacts allowlist (files this session WROTE) and refuses everything else; the Studio
+ * browses the session's whole directory, so a checked-in asset the session never opened — the exact
+ * file that prompted this — is the case that allowlist exists to refuse. Same closed content table
+ * and same anti-sniffing headers, different allowlist, therefore a different route.
+ */
+export function repoMediaUrl(sessionId: string, path: string): string {
+  return `/api/fleet/tree/media?id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`
+}
+
 /** The URL for one gallery row, whichever side it came from. ONE place, so no caller guesses. */
 export function galleryFileUrl(
   file: { path: string; name: string; origin?: 'sent' | 'produced' },

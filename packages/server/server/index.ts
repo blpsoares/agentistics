@@ -62,11 +62,12 @@ import { AUTH_PUBLIC, isAdminPath, MFA_EXEMPT } from './index-routes'
 import { CAPS, PROFILE } from './exposure'
 import { chatAllowed } from './chat-gate'
 import { shellAllowed } from './sessions/shell-gate'
+import { editorAllowed } from './sessions/editor-gate'
 import { limiter, RULES, rateRuleFor, tooManyRequests } from './rate-limit'
 import { resolveClientIp } from './client-ip'
 import { corsHeadersFor } from './cors'
 import { csrfVerdict } from './csrf'
-import { securityHeaders } from './security-headers'
+import { applyBaselineHeaders, OPAQUE_MEDIA_CSP } from './response-policy'
 import { TRUST_PROXY, ALLOWED_ORIGINS, TEAM_TLS, TEAM_SESSION_SECRET_ENV, TEAM_SESSION_SECRET, setResolvedSessionSecret } from './config'
 import { validateSecret, ensureSessionSecret } from './secret-store'
 import { requiresStepUp, verifyStepUp, STEPUP_HEADER } from './stepup'
@@ -396,9 +397,11 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
   // single scheme no web page can present (`security-headers.ts`), and everything the fleet routes
   // can do stays behind `localShell` regardless.
   const embed = PROFILE === 'local'
-  for (const [k, v] of Object.entries(securityHeaders({ tls: TEAM_TLS, dev: !SERVE_STATIC, isApi, embed }))) {
-    res.headers.set(k, v)
-  }
+  // The OWASP baseline, plus the one allowlisted exception for the media routes' opaque-byte
+  // responses — see `response-policy.ts` (`applyBaselineHeaders`) for what it does and why. Kept
+  // as a real function rather than inlined here so a test can call the SAME code this route calls,
+  // instead of a copy of it that can silently drift.
+  applyBaselineHeaders(res, { tls: TEAM_TLS, dev: !SERVE_STATIC, isApi, embed })
   // A sliding-session refresh recorded by the auth gate. Appended (not set) so a route that
   // issues its own cookie — login, logout — is never overwritten.
   const refreshed = refreshedCookies.get(req)
@@ -1551,6 +1554,26 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       }
     }
 
+    // THE REPOSITORY EXPLORER. Same shape as the utility shell's own gate a few lines up: two
+    // gates, enforced HERE and not only in the UI, because these routes read and write arbitrary
+    // files on the host — a hidden tab is not a closed door.
+    if (url.pathname === '/api/fleet/tree' || url.pathname.startsWith('/api/fleet/tree/')) {
+      if (!editorAllowed(CAPS.localShell, (await readPreferences()).editorEnabled)) {
+        return new Response(JSON.stringify({ error: 'editor_disabled' }), {
+          status: 403,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const { handleEditorTreeRoute } = await import('./sessions/editor-web')
+      const { hostForFleet, fleetLang } = await import('./sessions/fleet-web')
+      const editorLang = fleetLang(url.searchParams.get('lang'))
+      const res = await handleEditorTreeRoute(req, url, await hostForFleet(editorLang), editorLang)
+      if (res) {
+        for (const [k, v] of Object.entries(CORS_HEADERS)) res.headers.set(k, v)
+        return res
+      }
+    }
+
     // The task board. `capability-guard.ts` has already refused these on an exposed profile; the
     // handlers hold no arithmetic of their own (see `task-web.ts`).
     // The page's own filters, read off the query string. The board is scoped exactly as every other
@@ -2439,7 +2462,11 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             'Content-Type': out.mime,
             'Content-Disposition': `inline; filename="${out.name.replace(/[^\w.-]/g, '_')}"`,
             'X-Content-Type-Options': 'nosniff',
-            'Content-Security-Policy': "default-src 'none'; sandbox",
+            // The media marker: `applyBaselineHeaders` recognises it and REPLACES it with the media
+            // policy (this plus `frame-ancestors 'self'`, and `vscode-webview:` on an embedding
+            // profile), instead of the dashboard baseline — which is why this panel's PDF frame no
+            // longer draws the browser's "cannot display" glyph. See `response-policy.ts`.
+            'Content-Security-Policy': OPAQUE_MEDIA_CSP,
             // A session rewrites the file it is working on; a cached copy would show the old one.
             'Cache-Control': 'no-store',
           },
