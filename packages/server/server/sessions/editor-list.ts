@@ -46,3 +46,26 @@ export function childrenFromDirents(
     ...files.map(name => ({ name, kind: 'file' as const })),
   ]
 }
+
+/**
+ * Folds a set of EMPTY-directory names (found by `editor-fs.ts`'s own readdir + `git
+ * check-ignore` pass — see that module for why git's file-based listing can never produce these
+ * on its own) into an already-collapsed child list, and re-sorts once so the merged result reads
+ * exactly like `collapseToChildren`'s own output: directories first, each side alphabetical.
+ *
+ * `emptyDirNames` is deduplicated against `children`'s own directories defensively — the caller
+ * already excludes anything it knows about before this runs, so a name reappearing here would
+ * mean the two sources disagree, and a `Set` is the cheap way to never double a row over that.
+ */
+export function mergeEmptyDirs(
+  children: readonly TreeChild[], emptyDirNames: readonly string[],
+): TreeChild[] {
+  if (emptyDirNames.length === 0) return [...children]
+  const dirs = new Set(children.filter(c => c.kind === 'dir').map(c => c.name))
+  for (const name of emptyDirNames) dirs.add(name)
+  const files = children.filter(c => c.kind === 'file').map(c => c.name)
+  return [
+    ...[...dirs].sort(byName).map(name => ({ name, kind: 'dir' as const })),
+    ...files.sort(byName).map(name => ({ name, kind: 'file' as const })),
+  ]
+}

@@ -96,7 +96,13 @@ describe('handleEditorTreeRoute', () => {
   test('GET /api/fleet/tree lists the root', async () => {
     const req = new Request('http://x/api/fleet/tree?id=s1&path=')
     const { body } = await call(req, hostWith('s1', repo))
-    expect(body).toEqual({ ok: true, children: [{ name: 'a.ts', kind: 'file' }] })
+    // `movedir` is the empty directory the earlier "into-itself" test created and then failed to
+    // move — it is still sitting on disk, untracked and empty, and correctly appears as a `dir`
+    // row here: an empty, non-ignored directory is exactly what this route must list.
+    expect(body).toEqual({
+      ok: true,
+      children: [{ name: 'movedir', kind: 'dir' }, { name: 'a.ts', kind: 'file' }],
+    })
   })
 
   test('GET /api/fleet/tree/file reads a file', async () => {
