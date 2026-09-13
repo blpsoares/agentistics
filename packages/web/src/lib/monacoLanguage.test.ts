@@ -130,8 +130,17 @@ describe('languageIdsAreRegistered', () => {
    *
    * The commented form still cannot reach the `id:` scan below now: a line whose first non-space
    * characters are `//` (or ` *`) does not start with `import`.
+   *
+   * **NOR CAN A DECLARATION THAT MERELY NAMES ONE.** Anchoring at line start closed the leading-`//`
+   * shape, but `export const OK = true // import '.../register'` and `export const DROPPED = ['.../
+   * register']` both START with `export` and still carry the quoted path — so a genuinely deleted
+   * import survived as a trailing comment or a plain array literal and this scan went on reporting
+   * the grammar present. `(?!\s+(?:type|const|let|var|function|class|interface|enum|namespace)\b)`
+   * excludes every declaration shape a real specifier clause is never written as; a bare side-effect
+   * `import '...'` (what `monacoEntry.ts` writes for every grammar) is unaffected.
    */
-  const SPECIFIER = /^\s*(?:import|export)\b[^\n]*?['"]([^'"\n]+)['"]/gm
+  const SPECIFIER =
+    /^\s*(?:import|export)\b(?!\s+(?:type|const|let|var|function|class|interface|enum|namespace)\b)[^\n]*?['"]([^'"\n]+)['"]/gm
   /** …of which these are the ones that register a language. */
   const LANG_SUBPATH = /^monaco-editor\/(languages\/(?:definitions|features)\/[^/]+)\/register$/
 
@@ -184,5 +193,22 @@ describe('languageIdsAreRegistered', () => {
     expect(languageForPath('bunfig.toml')).toBe('ini')
     expect(languageForPath('App.vue')).toBe('html')
     expect(languageForPath('Makefile')).toBe('plaintext')
+  })
+
+  /**
+   * `SPECIFIER` was anchored at line start (Shape A, closed above), which stops a leading `//` from
+   * reaching it — but a line that genuinely STARTS with `export`/`import` and only later carries a
+   * `//` or a plain array literal still slips through, because nothing about "starts with import or
+   * export" tells a real specifier clause apart from a declaration that merely NAMES one as a
+   * string. Both shapes below would let a dropped grammar keep reading as "still imported".
+   */
+  test('the specifier scan is not fooled by a declaration that only NAMES a register path', () => {
+    const trailingComment = "export const OK = true // import 'monaco-editor/languages/definitions/lua/register'"
+    const arrayLiteral = "export const DROPPED_GRAMMARS = ['monaco-editor/languages/definitions/lua/register']"
+    expect([...trailingComment.matchAll(SPECIFIER)]).toEqual([])
+    expect([...arrayLiteral.matchAll(SPECIFIER)]).toEqual([])
+    // The scan must still see the real thing: a bare side-effect import, exactly what monacoEntry.ts
+    // writes for every grammar.
+    expect([...("import 'monaco-editor/languages/definitions/lua/register'").matchAll(SPECIFIER)].length).toBe(1)
   })
 })
