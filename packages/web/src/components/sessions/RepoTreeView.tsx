@@ -57,7 +57,7 @@
  * `creating` state for a new file.
  */
 
-import { useRef, useState, type DragEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent } from 'react'
 import {
   AlertTriangle, Check, ChevronDown, ChevronRight, Folder, Loader, MoreHorizontal, X,
 } from 'lucide-react'
@@ -179,6 +179,23 @@ const MAX_INDENT_LEVELS = 12
 /** The folder a drag is currently hovering LEGALLY over — `''` is the root's own empty area. */
 type DropTarget = string | null
 
+/**
+ * Moves focus onto the row named `path`'s own activate button, INSIDE `container` — never a bare
+ * `document.querySelector`, which would also match a row's `⋯` button or another panel entirely if
+ * the attribute value were ever reused. Compared field-by-field rather than built into a CSS
+ * attribute selector, so a path carrying a quote or a backslash cannot break the selector syntax.
+ * Returns whether a row was found, so a caller can tell "focused it" from "it is gone" (deleted, or
+ * scrolled out of a windowed future implementation) without guessing from a silent no-op.
+ */
+function focusRow(container: HTMLElement | null, path: string): boolean {
+  if (container === null) return false
+  const nodes = Array.from(container.querySelectorAll<HTMLElement>('[data-row-focus]'))
+  const hit = nodes.find(node => node.dataset.rowFocus === path)
+  if (hit === undefined) return false
+  hit.focus()
+  return true
+}
+
 export function RepoTreeView({ sessionId, tree, onTreeChange, onOpenFile, lang, ops }: RepoTreeViewProps) {
   const isMobile = useIsMobile()
   const pt = lang === 'pt'
@@ -195,10 +212,59 @@ export function RepoTreeView({ sessionId, tree, onTreeChange, onOpenFile, lang, 
   const [menuFor, setMenuFor] = useState<{ path: string; kind: 'file' | 'dir'; x: number; y: number } | null>(null)
   const openMenuAt = (path: string, kind: 'file' | 'dir', x: number, y: number) => setMenuFor({ path, kind, x, y })
 
+  // --- I4: focus returns to the row once the menu closes, or once a rename ends -------------------
+  // `TreeContextMenu` deliberately does none of this itself — see its own header for why only this
+  // component can tell "focus the row's button" from "let the rename input keep it" from "the row is
+  // gone, there is nothing left to focus".
+  const treeRef = useRef<HTMLDivElement>(null)
+  /**
+   * Only reclaim focus when NOTHING ELSE already has it. Both closes below can be caused by the
+   * reader clicking somewhere ELSE ON PURPOSE — an outside click dismissing the menu, or a blur
+   * cancelling a rename — and that click has already moved focus to its own, specific target by the
+   * time these effects run; unconditionally pulling focus back to the row would fight the very click
+   * that ended the interaction. `document.body` (or nothing) is what a removed-from-the-DOM focused
+   * element leaves behind (Escape on a rename, an action picked from the menu), and is the one case
+   * this restoration exists for.
+   */
+  const nothingElseFocused = () => {
+    const active = document.activeElement
+    return active === null || active === document.body
+  }
+  const pendingFocusPath = useRef<string | null>(null)
+  useEffect(() => {
+    if (menuFor !== null || pendingFocusPath.current === null) return
+    const path = pendingFocusPath.current
+    pendingFocusPath.current = null
+    // A "Renomear" pick swaps the row for its rename input in the SAME render pass that closes the
+    // menu — that input already has its own `autoFocus`, and fighting it here would just move focus
+    // straight back off it.
+    if ((ops.renaming === null || ops.renaming.path !== path) && nothingElseFocused()) {
+      focusRow(treeRef.current, path)
+    }
+  }, [menuFor, ops.renaming])
+
+  const prevRenamingPath = useRef<string | null>(null)
+  useEffect(() => {
+    const current = ops.renaming?.path ?? null
+    if (prevRenamingPath.current !== null && current === null && nothingElseFocused()) {
+      focusRow(treeRef.current, prevRenamingPath.current)
+    }
+    prevRenamingPath.current = current
+  }, [ops.renaming])
+
   // --- drag and drop (desktop only — "Mover para…" is the only move gesture on a phone) -----------
   const [dragging, setDragging] = useState<RepoDragPayload | null>(null)
   const [dropTarget, setDropTarget] = useState<DropTarget>(null)
   const expandTimer = useRef<{ path: string; handle: ReturnType<typeof setTimeout> } | null>(null)
+  /**
+   * The hover-expand timer's own view of the tree, read at FIRE time rather than the render that
+   * ARMED it 600ms earlier — a minor from the review (`session-w1c-tree-ops-review.md`): the timer's
+   * callback used to call `onToggle` unconditionally, which is a TOGGLE, not "expand". If the folder
+   * had already been expanded by some other means in the meantime, firing it collapsed the very
+   * folder it was meant to open.
+   */
+  const treeRefForExpand = useRef(tree)
+  treeRefForExpand.current = tree
   const clearExpandTimer = () => {
     if (expandTimer.current !== null) { clearTimeout(expandTimer.current.handle); expandTimer.current = null }
   }
@@ -218,7 +284,15 @@ export function RepoTreeView({ sessionId, tree, onTreeChange, onOpenFile, lang, 
       const row = rows.find(r => r.path === targetDir)
       if (row !== undefined && !row.expanded && expandTimer.current?.path !== targetDir) {
         clearExpandTimer()
-        expandTimer.current = { path: targetDir, handle: setTimeout(() => onToggle(targetDir), 600) }
+        expandTimer.current = {
+          path: targetDir,
+          handle: setTimeout(() => {
+            // EXPAND, never toggle: re-read the tree as of NOW, not as of the render that armed
+            // this timer — a folder opened by some other means in the last 600ms must stay open.
+            const node = findNode(treeRefForExpand.current, targetDir)
+            if (node !== null && !node.expanded) onToggle(targetDir)
+          }, 600),
+        }
       }
     },
     onDragOver: (e: DragEvent) => {
@@ -281,6 +355,7 @@ export function RepoTreeView({ sessionId, tree, onTreeChange, onOpenFile, lang, 
 
   return (
     <div
+      ref={treeRef}
       {...(isMobile ? {} : dirOver(''))}
       onDragEnd={clearDragState}
       style={{
@@ -354,7 +429,7 @@ export function RepoTreeView({ sessionId, tree, onTreeChange, onOpenFile, lang, 
           {...(ops.onMention ? { onMention: () => ops.onMention?.(menuFor.path, menuFor.kind) } : {})}
           copyPath={() => ops.onCopyPath(menuFor.path)}
           onAction={action => handleMenuAction(action, menuFor, ops, onToggle)}
-          onClose={() => setMenuFor(null)}
+          onClose={() => { pendingFocusPath.current = menuFor.path; setMenuFor(null) }}
         />
       )}
     </div>
@@ -484,6 +559,10 @@ function Row({
       <button
         type="button"
         {...(isDir ? { 'aria-expanded': row.expanded } : {})}
+        // I4: the target `focusRow` (this file's own header) restores focus to once the context menu
+        // closes or a rename ends. Never the path used as a raw CSS selector — see `focusRow`'s own
+        // note on why this is a field comparison instead.
+        data-row-focus={row.path}
         title={row.path}
         onClick={onActivate}
         onKeyDown={e => { if (e.key === 'F2' && !isMobile) { e.preventDefault(); onRenameKey() } }}
@@ -538,6 +617,13 @@ function Row({
           width: 26,
           background: 'transparent', border: 'none', borderRadius: 6,
           cursor: 'pointer', color: 'var(--text-tertiary)',
+          // A review minor (`session-w1c-tree-ops-review.md`): `.ag-tap-icon`'s DEFAULT grow (7px a
+          // side) projects a 40px target around this 26px button — 4px short of the floor. Raised
+          // here, on this control alone, rather than in the shared default (which most icon buttons
+          // sit further from a neighbour and do not need). Only the LEFT side's extra 2px reaches
+          // toward the name button beside it; that button opens the same row, never a destructive
+          // action, so the small overlap the CSS's own comment allows for costs nothing here.
+          ['--ag-tap-grow' as string]: '9px',
         }}
       >
         <MoreHorizontal size={14} />
@@ -571,6 +657,16 @@ function RenamingRow({ row, indent, isMobile, glyph, mark, renaming, onChange, o
   return (
     <div>
       <div
+        // A review minor (`session-w1c-tree-ops-review.md`): this row had no blur handling at all,
+        // so clicking anywhere else left it stuck mid-rename. `relatedTarget` is where focus is
+        // GOING — cancel only when that lands OUTSIDE this row (the confirm/cancel buttons and the
+        // input itself are inside it, so tabbing or clicking between them must not cancel).
+        // `relatedTarget` is `null` for some blur causes (the window itself losing focus); treated
+        // as "leaving the row" is the safer of the two readings — a rename left silently open is
+        // the defect this exists to fix, not the one to prefer.
+        onBlur={e => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) onCancel()
+        }}
         style={{
           display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
           padding: isMobile ? '6px 12px' : '3px 10px', paddingLeft: indent,
@@ -606,8 +702,13 @@ function RenamingRow({ row, indent, isMobile, glyph, mark, renaming, onChange, o
           }}
         />
         {renaming.busy && <Loader size={13} className="ag-working-spin" style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />}
+        {/* A review minor (`session-w1c-tree-ops-review.md`): these were painted 32×32 on a phone,
+            8px short of the floor, with no `.ag-tap-icon` to project the difference — the class
+            (index.css) grows an invisible 7px-a-side tap zone around the painted control instead of
+            enlarging the paint itself, the same rule the row's own `⋯` button follows above. */}
         <button
           type="button"
+          className="ag-tap-icon"
           aria-label={pt ? 'Confirmar' : 'Confirm'}
           onClick={onCommit}
           disabled={renaming.busy}
@@ -622,6 +723,7 @@ function RenamingRow({ row, indent, isMobile, glyph, mark, renaming, onChange, o
         </button>
         <button
           type="button"
+          className="ag-tap-icon"
           aria-label={pt ? 'Cancelar' : 'Cancel'}
           onClick={onCancel}
           style={{

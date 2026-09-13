@@ -12,6 +12,13 @@
  * session is refused exactly like a malformed one** — the caller's own `sessionId` is required and
  * compared here, never trusted from the payload, because a forged or simply stale cross-session
  * payload would otherwise ask the server to move a file in session A using session B's tree.
+ *
+ * **`path` IS REFUSED, NOT MERELY UNVALIDATED (a review minor, `session-w1c-tree-ops-review.md`).**
+ * The server is the actual containment boundary (`editor-fs.ts`'s own `escaped` refusal) and stays
+ * the authority here — this reader refuses only the shapes that are never a legitimate relative path
+ * FROM THIS TREE (`..`/absolute/empty-segment traversal, and a length no real path in a repository
+ * would reach) so a hostile or stale payload is turned away at the one place every consumer of this
+ * MIME shares, rather than trusted through to whichever route happens to be less careful.
  */
 
 export const REPO_DRAG_MIME = 'application/x-agentistics-repo-entry'
@@ -33,10 +40,29 @@ export function writeRepoDrag(dataTransfer: DataTransfer, payload: RepoDragPaylo
 }
 
 /**
+ * The longest `path` this reader accepts. No real path inside a repository this feature browses
+ * needs anything close to it; a payload past it is refused rather than passed through unbounded.
+ */
+export const MAX_DRAG_PATH_LENGTH = 4096
+
+/**
+ * Is `path` a plausible relative path FROM THIS TREE'S ROOT — never absolute, never carrying a `.`
+ * or `..` segment (a traversal attempt, or simply not what this tree's own paths look like — they
+ * are always joined fresh from listed names, never normalised from user input), and within the
+ * length ceiling. Exported and pure so the refusal is directly testable against hostile strings.
+ */
+export function isSafeRelativePath(path: string): boolean {
+  if (path === '' || path.length > MAX_DRAG_PATH_LENGTH) return false
+  if (path.startsWith('/') || path.startsWith('\\')) return false
+  return path.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..')
+}
+
+/**
  * `null` for anything this feature did not itself write: absent, unreadable, malformed JSON, a
- * shape missing a field, an unrecognised `kind`, an empty path, or a payload naming a session other
- * than the caller's own. A failed read is indistinguishable from "nothing of ours was dropped here"
- * on purpose — the caller's only correct response to either is to ignore the drop.
+ * shape missing a field, an unrecognised `kind`, a `path` that is not a safe relative path (see
+ * `isSafeRelativePath`), or a payload naming a session other than the caller's own. A failed read is
+ * indistinguishable from "nothing of ours was dropped here" on purpose — the caller's only correct
+ * response to either is to ignore the drop.
  */
 export function readRepoDrag(dataTransfer: DataTransfer, sessionId: string): RepoDragPayload | null {
   let raw: string
@@ -57,7 +83,7 @@ export function readRepoDrag(dataTransfer: DataTransfer, sessionId: string): Rep
 
   const { sessionId: sid, path, kind } = parsed as Record<string, unknown>
   if (typeof sid !== 'string' || sid === '') return null
-  if (typeof path !== 'string' || path === '') return null
+  if (typeof path !== 'string' || !isSafeRelativePath(path)) return null
   if (kind !== 'file' && kind !== 'dir') return null
   if (sid !== sessionId) return null
 

@@ -164,6 +164,39 @@ export function loadStateFor(res: ReadFileResult, lang: RepoLang): LoadState {
 }
 
 /**
+ * Is this render mid-RETARGET — a rename/move of an ALREADY-open file, as opposed to an ordinary
+ * "open a different file"? True only when the path actually moved AND a live editor exists to
+ * preserve. The second half is the guard the component's own header names: a retarget racing a file
+ * whose first read has not resolved yet has nothing to keep, so it is treated as an ordinary read.
+ */
+export function isMidRetarget(retargetFrom: string | undefined, hasEditor: boolean): boolean {
+  return retargetFrom !== undefined && hasEditor
+}
+
+/**
+ * What a render should show while `read.key` has not yet caught up with `path` — the ONE line
+ * responsible for C1 (2026-09-12, `session-w1c-tree-ops-review.md`). The naive
+ * `read.key === fileKey ? read.state : {kind:'loading'}` drops to `loading` for exactly the render
+ * between a retarget being DETECTED and the read effect PATCHING `read.key` to the new path, and the
+ * mount effect's cleanup — keyed on `load.kind` alone — disposes the live Monaco editor and model on
+ * that flip, before the effect gets a chance to say the buffer should survive. By the time the effect
+ * runs and repairs `read.key`, the editor is already gone, and the next mount recreates one from
+ * `contentRef.current` — the file's ORIGINAL disk text, not the dirty buffer.
+ *
+ * Mid-retarget, the mismatched key is expected and is never a reason to show `loading`: the state
+ * already on hand (`read.state`) is exactly the buffer this render must keep showing.
+ */
+export function loadStateForRender(
+  read: { key: string; state: LoadState },
+  fileKey: string,
+  retargetFrom: string | undefined,
+  hasEditor: boolean,
+): LoadState {
+  if (read.key === fileKey) return read.state
+  return isMidRetarget(retargetFrom, hasEditor) ? read.state : { kind: 'loading' }
+}
+
+/**
  * A binary file, said in one sentence.
  *
  * The SIZE goes through `formatBytes` (`lib/gallery.ts`) rather than a fourth hand-rolled byte
@@ -667,12 +700,14 @@ export function RepoFileEditor({
    * the new read replaces it. Deriving `load` from the pair makes that unobservable rather than
    * merely brief — and the host is expected to key this component by path anyway (see the header),
    * which is exactly the kind of unstated dependency this removes.
+   *
+   * `load` ITSELF is computed further down, once `editorRef`/`priorPathRef`/`retargetFrom` exist —
+   * see `loadStateForRender`'s own header for why a bare `read.key === fileKey` test is the bug.
    */
   const fileKey = fileKeyOf(sessionId, path)
   const [read, setRead] = useState<{ key: string; state: LoadState }>(
     { key: fileKey, state: { kind: 'loading' } },
   )
-  const load: LoadState = read.key === fileKey ? read.state : { kind: 'loading' }
   const [save, dispatch] = useReducer(nextSaveState, initialSaveState(0))
   /**
    * The theme is read off `<html data-theme>`, the one place `App.tsx` writes it, and followed with
@@ -710,14 +745,28 @@ export function RepoFileEditor({
    * survives is a rename or a move retargeting the tab it belongs to; an ordinary "open a different
    * file" always arrives as a brand new instance under a different key. `retargetFrom` is read
    * DURING RENDER, before anything writes to the ref, so it always names the path as of the LAST
-   * commit — and the write happens in an effect, which runs only AFTER render, so there is no risk
-   * of the read observing its own write (relevant under React's StrictMode double-render in dev: a
-   * mutate-during-render version of this same comparison would see its own first pass's write on
-   * the second, and report no rename had happened).
+   * commit.
+   *
+   * **`priorPathRef` is written in EXACTLY ONE place: inside the read effect below**, never in a
+   * free-running `useEffect` with no dependencies. That used to be two effects agreeing on one ref,
+   * and they did not agree on WHEN: the free-running one fired on every render — including the one
+   * the read effect's own `setRead` call schedules — so by the time that follow-up render ran,
+   * `priorPathRef` had already caught up to `path` and `retargetFrom` had silently gone back to
+   * `undefined`, one render after the retarget was correctly detected. That flip is itself a
+   * dependency change on the read effect's array, so the effect fired AGAIN, this time down the
+   * ordinary branch — reset, re-read from disk — discarding exactly the buffer the retarget skip a
+   * moment earlier existed to keep (C1, `session-w1c-tree-ops-review.md`). Confining the write to the
+   * read effect means it only ever moves once per REAL path change, in step with the branch decision
+   * that read it, which is what keeps `retargetFrom` from moving out from under its own effect.
    */
   const priorPathRef = useRef(path)
   const retargetFrom = path !== priorPathRef.current ? priorPathRef.current : undefined
-  useEffect(() => { priorPathRef.current = path })
+  /**
+   * What this render shows. `read.key` has not caught up with `path` yet on the very render a
+   * retarget is detected (`setRead` in the effect below has not run), and that mismatch must not be
+   * read as "loading" — see `loadStateForRender`'s own header for the failure this line prevents.
+   */
+  const load: LoadState = loadStateForRender(read, fileKey, retargetFrom, editorRef.current !== null)
   const dirtyRef = useRef(false)
   const requestSaveRef = useRef<(trigger: SaveTrigger) => void>(() => {})
   const options = monacoOptions({ isMobile, theme: monacoThemeFor(themeAttr) })
@@ -736,15 +785,25 @@ export function RepoFileEditor({
     // exists to read back — the rename already happened server-side before this prop changed. Only
     // the KEY this state is filed under moves, so the NEXT ordinary path change (a real file swap,
     // which always arrives as a fresh component instance — see `retargetFrom`'s own note) is not
-    // mistaken for "still loading" by `load`'s own `read.key === fileKey` test. Guarded on an
-    // editor actually EXISTING: a retarget racing a file that has not finished its first read yet
-    // (rare, but possible — a drag dropped on a tab before its initial fetch resolved) has nothing
-    // to preserve, so it falls through to the ordinary read below instead of leaving the tab stuck
-    // in `loading` forever under a key its own in-flight fetch was cancelled out from under.
-    if (retargetFrom !== undefined && editorRef.current !== null) {
+    // mistaken for "still loading" — `loadStateForRender` already covers the one render this effect
+    // has not run for yet. Guarded on an editor actually EXISTING: a retarget racing a file that has
+    // not finished its first read yet (rare, but possible — a drag dropped on a tab before its
+    // initial fetch resolved) has nothing to preserve, so it falls through to the ordinary read below
+    // instead of leaving the tab stuck in `loading` forever under a key its own in-flight fetch was
+    // cancelled out from under.
+    //
+    // `priorPathRef` is advanced HERE, on both branches, and nowhere else — see its own header for
+    // why a second, free-running effect writing the same ref is exactly what broke this the first
+    // time. `retargetFrom` is deliberately absent from this effect's dependency array: it is read
+    // once, from the closure captured when `sessionId`/`path` last actually changed, so a later
+    // render where `retargetFrom` alone recomputes to `undefined` (because this very effect just
+    // advanced `priorPathRef`) cannot re-trigger it down the wrong branch.
+    if (isMidRetarget(retargetFrom, editorRef.current !== null)) {
+      priorPathRef.current = path
       setRead(prev => ({ key: fileKeyOf(sessionId, path), state: prev.state }))
       return
     }
+    priorPathRef.current = path
     let cancelled = false
     // The reset goes out BEFORE the read, and regardless of how the read turns out. Only `ready`
     // dispatches `loaded`, so without it a failed or BINARY read left the previous file's edit count
@@ -760,7 +819,8 @@ export function RepoFileEditor({
       setRead({ key: fileKeyOf(sessionId, path), state: next })
     })
     return () => { cancelled = true }
-  }, [sessionId, path, retargetFrom])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, path])
 
   // --- follow the app's theme -----------------------------------------------
   useEffect(() => {

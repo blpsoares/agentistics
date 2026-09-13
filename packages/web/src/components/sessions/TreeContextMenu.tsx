@@ -7,7 +7,26 @@
  * must escape the tree's own `overflow: auto` clipping, it is positioned at the pointer (or at the
  * button that opened it) and flipped rather than clamped when it would run off the viewport edge —
  * a menu pinned to the screen's corner would cover the very row it belongs to — and it closes on an
- * outside `mousedown`, on `Escape`, and after any entry is taken, returning focus to what opened it.
+ * outside `mousedown`, on `Escape`, and after any entry is taken.
+ *
+ * **KEYBOARD (I4, `session-w1c-tree-ops-review.md`).** Opening the menu — by any route: a
+ * right-click, Shift+F10 (which Firefox and Chrome both turn into a native `contextmenu` event when
+ * a focused element is right-clicked, so this component never has to detect the chord itself), or a
+ * click/Enter/Space on the row's own `⋯` button — moves focus onto the FIRST item, which is also
+ * what makes Tab reach the menu rather than the next tree row: focus starts inside it, so the very
+ * next Tab moves between two menu buttons that are contiguous in the DOM (the portal renders them
+ * together), never out to whatever sits after the `⋯` button in the tree. ArrowUp/ArrowDown roves
+ * between items (wrapping at both ends — `nextMenuIndex`, exported and pure so this arithmetic is
+ * testable without a portal), Home/End jump to the first/last, and Tab/Shift+Tab from the last/first
+ * item wrap back around rather than leaving the menu to whatever follows the portal in the document.
+ *
+ * **RETURNING FOCUS TO THE ROW IS THE CALLER'S JOB, DELIBERATELY NOT THIS COMPONENT'S.** A naive
+ * "restore `document.activeElement` as it was on mount" is wrong here in a way it is not for
+ * `SessionRowMenu`: picking "Renomear" swaps the whole row for `RenamingRow` in the SAME render pass
+ * that closes this menu, so the button this component would try to refocus is already gone, and the
+ * rename input's own `autoFocus` must be left alone rather than fought over. Only `RepoTreeView`
+ * knows which of "focus the row's button", "let the rename input keep it" or "the row is gone,
+ * there is nothing to return to" applies, so it owns `onClose` and does the restoring itself.
  *
  * **THIS COMPONENT DECIDES NOTHING ABOUT WHAT AN ACTION DOES.** It renders a fixed ORDER of
  * entries and reports which one was picked; `RepoTreeView` and, above it, `Studio.tsx` own every
@@ -21,7 +40,7 @@
  * something nobody can use.
  */
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useIsMobile } from '../../hooks/useIsMobile'
 
@@ -63,6 +82,28 @@ export function treeMenuEntries(
   return entries
 }
 
+/**
+ * Roving focus's own arithmetic, pulled out so it can be asserted without a DOM. `current === -1`
+ * (nothing in the menu focused yet, e.g. Home/End pressed before any item was) resolves to a useful
+ * item rather than to nothing: the first for a "forward" key, the last for a "backward" one.
+ * `count === 0` answers `-1` — there is nothing to focus, and a caller must not act on that.
+ */
+export function nextMenuIndex(
+  key: 'ArrowDown' | 'ArrowUp' | 'Home' | 'End', current: number, count: number,
+): number {
+  if (count === 0) return -1
+  switch (key) {
+    case 'Home': return 0
+    case 'End': return count - 1
+    case 'ArrowDown': return current === -1 ? 0 : (current + 1) % count
+    case 'ArrowUp': return current === -1 ? count - 1 : (current - 1 + count) % count
+  }
+}
+
+function menuButtons(container: HTMLElement | null): HTMLButtonElement[] {
+  return container === null ? [] : Array.from(container.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'))
+}
+
 export interface TreeContextMenuProps {
   x: number
   y: number
@@ -92,6 +133,29 @@ export function TreeContextMenu({ x, y, kind, lang, onMention, copyPath, onActio
     }
   }, [onClose])
 
+  // Focus enters the menu the moment it exists — see the file header for why this alone is what
+  // makes Tab reach it instead of the next tree row, however the menu was opened.
+  useEffect(() => { menuButtons(ref.current)[0]?.focus() }, [])
+
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const buttons = menuButtons(ref.current)
+    if (buttons.length === 0) return
+    const current = buttons.indexOf(document.activeElement as HTMLButtonElement)
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
+      e.preventDefault()
+      const next = nextMenuIndex(e.key, current, buttons.length)
+      if (next >= 0) buttons[next]?.focus()
+      return
+    }
+    // A basic focus trap: Tab off either end wraps rather than leaving the menu for whatever
+    // follows the portal in the document — the portal is the LAST thing appended to `<body>`, so
+    // without this a Tab from the last item would leave the page entirely rather than cycling.
+    if (e.key === 'Tab') {
+      if (!e.shiftKey && current === buttons.length - 1) { e.preventDefault(); buttons[0]?.focus() }
+      else if (e.shiftKey && current === 0) { e.preventDefault(); buttons[buttons.length - 1]?.focus() }
+    }
+  }
+
   const pick = (action: TreeMenuAction) => {
     if (action === 'mention') { onMention?.(); onClose(); return }
     if (action === 'copy-path') { copyPath?.(); onClose(); return }
@@ -114,6 +178,7 @@ export function TreeContextMenu({ x, y, kind, lang, onMention, copyPath, onActio
     <div
       ref={ref}
       role="menu"
+      onKeyDown={onKeyDown}
       style={{
         position: 'fixed', top, left, width: w, zIndex: 700,
         background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10,

@@ -5,7 +5,7 @@
  * which is exactly why that decision is its own exported, pure function.
  */
 import { describe, expect, test } from 'bun:test'
-import { treeMenuEntries } from './TreeContextMenu'
+import { nextMenuIndex, treeMenuEntries } from './TreeContextMenu'
 
 describe('treeMenuEntries', () => {
   test('a file offers create/rename/move/copy/delete, in this order, with no mention and no copy-path by default', () => {
@@ -59,5 +59,47 @@ describe('treeMenuEntries', () => {
       expect(en[i]!.action).toBe(pt[i]!.action)
       expect(en[i]!.label).not.toBe(pt[i]!.label)
     }
+  })
+})
+
+/**
+ * I4 (`session-w1c-tree-ops-review.md`): the menu was unreachable by keyboard — Shift+F10 opened it
+ * but left focus on the row, ArrowDown did nothing, and Tab from the `⋯` button skipped past it to
+ * the next row (the portal sits at the end of `<body>`, so nothing put focus inside the menu first).
+ * `nextMenuIndex` is the roving-focus arithmetic behind the fix, pulled out so it is assertable
+ * without a portal, a pointer, or a render at all — the DOM wiring around it (auto-focus on mount,
+ * the Tab trap) is verified in a real browser per the brief.
+ */
+describe('nextMenuIndex', () => {
+  test('ArrowDown/ArrowUp with nothing yet focused resolve to something useful, not nothing', () => {
+    expect(nextMenuIndex('ArrowDown', -1, 5)).toBe(0)
+    expect(nextMenuIndex('ArrowUp', -1, 5)).toBe(4)
+  })
+
+  test('ArrowDown advances and wraps past the last item', () => {
+    expect(nextMenuIndex('ArrowDown', 0, 3)).toBe(1)
+    expect(nextMenuIndex('ArrowDown', 2, 3)).toBe(0)
+  })
+
+  test('ArrowUp retreats and wraps past the first item', () => {
+    expect(nextMenuIndex('ArrowUp', 2, 3)).toBe(1)
+    expect(nextMenuIndex('ArrowUp', 0, 3)).toBe(2)
+  })
+
+  test('Home always answers the first item, End always the last, regardless of current', () => {
+    expect(nextMenuIndex('Home', 4, 6)).toBe(0)
+    expect(nextMenuIndex('Home', -1, 6)).toBe(0)
+    expect(nextMenuIndex('End', 0, 6)).toBe(5)
+    expect(nextMenuIndex('End', -1, 6)).toBe(5)
+  })
+
+  test('an empty menu answers -1 for every key — nothing for a caller to focus', () => {
+    expect(nextMenuIndex('ArrowDown', -1, 0)).toBe(-1)
+    expect(nextMenuIndex('Home', -1, 0)).toBe(-1)
+  })
+
+  test('a menu of one item stays on it for both arrow keys', () => {
+    expect(nextMenuIndex('ArrowDown', 0, 1)).toBe(0)
+    expect(nextMenuIndex('ArrowUp', 0, 1)).toBe(0)
   })
 })

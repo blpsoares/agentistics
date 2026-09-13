@@ -944,7 +944,7 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
         />
       )}
 
-      {toast !== null && <StudioToast toast={toast} isMobile={isMobile} />}
+      {toast !== null && <StudioToast toast={toast} isMobile={isMobile} onDismiss={() => setToast(null)} />}
     </div>
   )
 }
@@ -1399,9 +1399,10 @@ export function TreeDivider({ width, available, lang, onResize, onCommit, onColl
  * rename or a move changes an open tab's `path` while it stays the SAME logical file. Keying by
  * `path` there would unmount `RepoFileEditor` and remount a fresh one, which disposes the live
  * Monaco model and re-reads the new name from disk — the unsaved text and the undo stack the rename
- * was never meant to touch, gone. `keys[i]` is each path's STABLE identity (`OpenTab.id`, the path
- * the tab was first opened at — see `repoTreeModel.ts`'s own header), so a renamed tab keeps the
- * SAME React instance and only its `path` PROP changes; `RepoFileEditor` detects that on its own
+ * was never meant to touch, gone. `keys[i]` is each path's STABLE identity (`OpenTab.id`, minted once
+ * when the tab is opened and never the path itself — see `repoTreeModel.ts`'s own header for why a
+ * path-derived id collided with a freshly created file reusing a renamed tab's old name), so a
+ * renamed tab keeps the SAME React instance and only its `path` PROP changes; `RepoFileEditor` detects that on its own
  * (comparing the prop against the path it saw last render) and treats it as a retarget rather than
  * a new file — see its own header. `keys` is OPTIONAL and defaults to `path` itself, which is
  * today's exact behaviour, so every caller that never renames anything (every test below, and every
@@ -1691,13 +1692,19 @@ export function NewFileRow({ state, isMobile, lang, onChange, onSubmit, onCancel
 /**
  * "Mover para…" — the ONLY move gesture on a phone, and a second way in on desktop.
  *
- * Reuses the SAME `tree` the tree view already maintains rather than fetching its own copy: a
- * folder only appears here once it has already been read at least once, exactly the condition
- * `applyDirRefresh`'s own header states for refreshing it after the move — so every destination
- * this picker can offer is already a real node the move's own refresh can land on. Expanding a
- * folder here calls the SAME `toggleDirectory` the tree view uses, which means a folder opened from
- * inside this picker stays open in the tree behind it; a harmless, honest side effect of sharing one
- * model rather than a defect worth a second one to avoid.
+ * SEEDED from the SAME `tree` the tree view already maintains rather than fetching its own from
+ * scratch: a folder only appears here once it has already been read at least once, exactly the
+ * condition `applyDirRefresh`'s own header states for refreshing it after the move — so every
+ * destination this picker can offer is already a real node the move's own refresh can land on.
+ *
+ * **It is a COPY from that point on, not a shared reference (a review minor,
+ * `session-w1c-tree-ops-review.md` — an earlier draft of this comment claimed otherwise).**
+ * `liveTree` is this component's OWN state, re-seeded from `tree` only when the PROP changes;
+ * expanding a folder here calls `toggleDirectory` against `liveTree`/`setLiveTree`, never against
+ * the tree view's own `onTreeChange`, so a folder opened from inside this picker does NOT stay open
+ * in the tree behind it once the picker closes. That is the right behaviour (a destination browsed
+ * while choosing where to move something is not a request to change what the tree itself has
+ * expanded) — the earlier comment simply described the wrong mechanism for it.
  *
  * Illegal targets are not merely refused on click — they are ABSENT from the list, the same rule
  * this product applies to a control that cannot act at all (`ControlService.startOptions`'s own
@@ -1853,8 +1860,18 @@ function MoveTargetRow({ label, depth, isMobile, onPick, grow }: {
  * A move's own toast: "Movido para `dir/`" with **Desfazer** for 6s, or a quiet copy confirmation
  * with no action at all. `role="status"` — the same ephemeral-announcement role this product uses
  * everywhere else a sentence appears and disappears on its own.
+ *
+ * **The action button DISMISSES ON CLICK (a review minor, `session-w1c-tree-ops-review.md`)** —
+ * pressing Desfazer used to leave the toast standing, live, for the rest of its 6s window, so a
+ * second, impatient press sent a SECOND undo request against a rename the first had already
+ * reversed, which the server correctly refused ("Não foi possível desfazer: Já existe algo nesse
+ * caminho.") — a refusal about nothing, caused only by the toast outliving the action it offered.
  */
-export function StudioToast({ toast, isMobile }: { toast: ToastState; isMobile: boolean }) {
+export function StudioToast({ toast, isMobile, onDismiss }: {
+  toast: ToastState
+  isMobile: boolean
+  onDismiss: () => void
+}) {
   return (
     <div
       role="status"
@@ -1876,7 +1893,7 @@ export function StudioToast({ toast, isMobile }: { toast: ToastState; isMobile: 
       {toast.action !== undefined && (
         <button
           type="button"
-          onClick={toast.action.onClick}
+          onClick={() => { toast.action?.onClick(); onDismiss() }}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0,
             minHeight: isMobile ? 44 : undefined,
@@ -2062,6 +2079,12 @@ function BarButton({ label, icon, isMobile, disabled, onClick }: {
 /**
  * An icon-only control: PAINTED small, TARGETED at 44px by `.ag-tap-icon`'s invisible box — the
  * repo's rule, and the reason a 13px glyph here is not a 44x44 square on a phone.
+ *
+ * A review minor (`session-w1c-tree-ops-review.md`): the CLASS was there, but `.ag-tap-icon`'s
+ * DEFAULT grow (7px a side) around a 22px button only reaches 36px, 8px short of the floor this
+ * doc comment already claimed. `--ag-tap-grow: 11px` is what a 22px control actually needs to clear
+ * 44 (`22 + 2×11`) — set here, on this one control, rather than raised for every `.ag-tap-icon` in
+ * the app, most of which sit on a larger painted button and do not need it.
  */
 function IconButton({ label, onClick, disabled, pressed, children }: {
   label: string
@@ -2086,6 +2109,7 @@ function IconButton({ label, onClick, disabled, pressed, children }: {
         padding: 0, background: 'transparent', border: 'none', borderRadius: 6,
         cursor: disabled === true ? 'not-allowed' : 'pointer',
         color: 'var(--text-tertiary)', opacity: disabled === true ? 0.45 : 1,
+        ['--ag-tap-grow' as string]: '11px',
       }}
     >
       {children}

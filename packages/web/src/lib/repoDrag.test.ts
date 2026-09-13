@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { readRepoDrag, REPO_DRAG_MIME, writeRepoDrag, type RepoDragPayload } from './repoDrag'
+import {
+  isSafeRelativePath, MAX_DRAG_PATH_LENGTH, readRepoDrag, REPO_DRAG_MIME, writeRepoDrag,
+  type RepoDragPayload,
+} from './repoDrag'
 
 /**
  * A minimal `DataTransfer` stand-in — this repo has no DOM (no jsdom), and the real interface is a
@@ -97,5 +100,63 @@ describe('readRepoDrag', () => {
       [REPO_DRAG_MIME]: JSON.stringify({ sessionId: 's1', path: 42, kind: 'file' }),
     })
     expect(readRepoDrag(dt, 's1')).toBeNull()
+  })
+
+  /**
+   * A review minor (`session-w1c-tree-ops-review.md`): `path` used to pass through completely
+   * unvalidated — `..`, an absolute path and a 1 MB string all round-tripped. Not itself a hole (the
+   * server refuses escapes), but this reader is the ONE place every consumer of the MIME shares, and
+   * it is meant to be trustworthy on its own rather than relying on every future caller to be careful.
+   */
+  test('a `..` segment anywhere in the path is refused', () => {
+    for (const path of ['..', '../a.ts', 'src/../../etc/passwd', 'src/..', 'a/../b']) {
+      const dt = fakeDataTransfer({ [REPO_DRAG_MIME]: JSON.stringify({ sessionId: 's1', path, kind: 'file' }) })
+      expect(readRepoDrag(dt, 's1')).toBeNull()
+    }
+  })
+
+  test('an absolute path is refused', () => {
+    for (const path of ['/etc/passwd', '\\Windows\\System32']) {
+      const dt = fakeDataTransfer({ [REPO_DRAG_MIME]: JSON.stringify({ sessionId: 's1', path, kind: 'file' }) })
+      expect(readRepoDrag(dt, 's1')).toBeNull()
+    }
+  })
+
+  test('a path far longer than any real repository path is refused', () => {
+    const huge = `${'a/'.repeat(600_000)}x.ts` // well past 1 MB before this check existed
+    const dt = fakeDataTransfer({ [REPO_DRAG_MIME]: JSON.stringify({ sessionId: 's1', path: huge, kind: 'file' }) })
+    expect(readRepoDrag(dt, 's1')).toBeNull()
+  })
+
+  test('a `.` segment is refused too — this tree only ever joins listed names, never a normalised path', () => {
+    const dt = fakeDataTransfer({
+      [REPO_DRAG_MIME]: JSON.stringify({ sessionId: 's1', path: 'src/./a.ts', kind: 'file' }),
+    })
+    expect(readRepoDrag(dt, 's1')).toBeNull()
+  })
+})
+
+describe('isSafeRelativePath', () => {
+  test('ordinary relative paths, nested or not, are safe', () => {
+    expect(isSafeRelativePath('a.ts')).toBe(true)
+    expect(isSafeRelativePath('src/components/Foo.tsx')).toBe(true)
+  })
+
+  test('empty, absolute, traversal and overlong paths are all unsafe', () => {
+    expect(isSafeRelativePath('')).toBe(false)
+    expect(isSafeRelativePath('/a.ts')).toBe(false)
+    expect(isSafeRelativePath('\\a.ts')).toBe(false)
+    expect(isSafeRelativePath('../a.ts')).toBe(false)
+    expect(isSafeRelativePath('a/./b')).toBe(false)
+    expect(isSafeRelativePath('a'.repeat(MAX_DRAG_PATH_LENGTH + 1))).toBe(false)
+  })
+
+  test('exactly at the length ceiling is still safe; one past it is not', () => {
+    expect(isSafeRelativePath('a'.repeat(MAX_DRAG_PATH_LENGTH))).toBe(true)
+    expect(isSafeRelativePath('a'.repeat(MAX_DRAG_PATH_LENGTH + 1))).toBe(false)
+  })
+
+  test('a doubled separator is an empty segment, and is refused', () => {
+    expect(isSafeRelativePath('src//a.ts')).toBe(false)
   })
 })

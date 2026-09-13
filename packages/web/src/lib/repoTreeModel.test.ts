@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   applyChildren, applyError, baseNameOf, canMoveInto, closeTab, destinationPath, flattenVisible,
   isSelfOrDescendant, makeRootNode, markDirty, openTab, parentOf, retargetOpenPaths, retargetPath,
-  setLoading, toggleExpanded, type OpenTab, type TreeChild,
+  setLoading, toggleExpanded, type OpenTab, type TreeChild, type TreeNode,
 } from './repoTreeModel'
 
 describe('the tree model', () => {
@@ -44,6 +44,66 @@ describe('the tree model', () => {
     expect(flattenVisible(root).map(r => r.path)).toEqual(['src', 'src/a.ts'])
   })
 
+  describe('I3 — a refresh merges into the listing rather than rebuilding it', () => {
+    test('a sibling directory expanded before the refresh stays expanded, cached children and all', () => {
+      // The exact repro: refresh the ROOT (a rename/drag-move/undo elsewhere at the root all do
+      // this) while `docs` was expanded and already held its own children — the refresh must not
+      // collapse it, and must not force it to re-fetch on the next expand.
+      let root = applyChildren(makeRootNode(), '', [
+        { name: 'docs', kind: 'dir' }, { name: 'src', kind: 'dir' },
+      ])
+      root = applyChildren(root, 'docs', [{ name: 'readme.md', kind: 'file' }])
+      root = toggleExpanded(root, 'docs')
+      expect(flattenVisible(root).map(r => r.path)).toEqual(['docs', 'docs/readme.md', 'src'])
+
+      // Refresh the root again — as `refreshDirs('')` does after any root-level tree operation.
+      root = applyChildren(root, '', [{ name: 'docs', kind: 'dir' }, { name: 'src', kind: 'dir' }])
+      expect(flattenVisible(root).map(r => r.path)).toEqual(['docs', 'docs/readme.md', 'src'])
+      const docsRow = flattenVisible(root).find(r => r.path === 'docs')!
+      expect(docsRow.expanded).toBe(true)
+    })
+
+    test('a NEW child in the listing starts collapsed, unrelated to any survivor', () => {
+      let root = applyChildren(makeRootNode(), '', [{ name: 'docs', kind: 'dir' }])
+      root = applyChildren(root, 'docs', [{ name: 'readme.md', kind: 'file' }])
+      root = toggleExpanded(root, 'docs')
+      root = applyChildren(root, '', [{ name: 'docs', kind: 'dir' }, { name: 'src', kind: 'dir' }])
+      const rows = flattenVisible(root)
+      expect(rows.find(r => r.path === 'docs')?.expanded).toBe(true)
+      expect(rows.find(r => r.path === 'src')?.expanded).toBe(false)
+    })
+
+    test('a name reused by a DIFFERENT kind starts fresh rather than reusing stale children', () => {
+      let root = applyChildren(makeRootNode(), '', [{ name: 'x', kind: 'dir' }])
+      root = applyChildren(root, 'x', [{ name: 'a.ts', kind: 'file' }])
+      root = toggleExpanded(root, 'x')
+      // `x` the directory is deleted and `x` is recreated as a plain file.
+      root = applyChildren(root, '', [{ name: 'x', kind: 'file' }])
+      const row = flattenVisible(root).find(r => r.path === 'x')!
+      expect(row.kind).toBe('file')
+      expect(row.expanded).toBe(false)
+    })
+
+    test('THE PLANTED DEFECT: rebuilding every child fresh collapses a surviving sibling', () => {
+      // Reproduces the naive `applyChildren` this replaced, to prove I3 by construction.
+      function applyChildrenRebuild(node: TreeNode, kids: readonly TreeChild[]): TreeNode {
+        return {
+          ...node,
+          children: kids.map(c => ({
+            path: c.name, name: c.name, kind: c.kind, expanded: false, loading: false, children: null,
+          })),
+        }
+      }
+      let root = applyChildren(makeRootNode(), '', [{ name: 'docs', kind: 'dir' }])
+      root = applyChildren(root, 'docs', [{ name: 'readme.md', kind: 'file' }])
+      root = toggleExpanded(root, 'docs')
+      expect(flattenVisible(root).some(r => r.path === 'docs/readme.md')).toBe(true)
+
+      root = applyChildrenRebuild(root, [{ name: 'docs', kind: 'dir' }])
+      expect(flattenVisible(root).some(r => r.path === 'docs/readme.md')).toBe(false) // collapsed
+    })
+  })
+
   test('setLoading marks one node without disturbing its siblings', () => {
     let root = applyChildren(makeRootNode(), '', [{ name: 'src', kind: 'dir' }, { name: 'b.ts', kind: 'file' }])
     root = setLoading(root, 'src', true)
@@ -72,8 +132,13 @@ describe('the tree model', () => {
 })
 
 describe('the open-tabs model', () => {
-  test('opening a new path appends it', () => {
-    expect(openTab([], 'a.ts')).toEqual([{ id: 'a.ts', path: 'a.ts', dirty: false }])
+  test('opening a new path appends it, with a NON-EMPTY id that is not the path itself', () => {
+    // I2 (`session-w1c-tree-ops-review.md`): the id used to BE the path, which is unique only until
+    // that path is freed — see the dedicated describe block below.
+    const tabs = openTab([], 'a.ts')
+    expect(tabs).toEqual([{ id: expect.any(String), path: 'a.ts', dirty: false }])
+    expect(tabs[0]!.id.length).toBeGreaterThan(0)
+    expect(tabs[0]!.id).not.toBe('a.ts')
   })
   test('opening an already-open path is a no-op — the caller just activates it', () => {
     const tabs = openTab([], 'a.ts')
@@ -81,20 +146,49 @@ describe('the open-tabs model', () => {
   })
   test('closeTab removes exactly the named tab', () => {
     const tabs = openTab(openTab([], 'a.ts'), 'b.ts')
-    expect(closeTab(tabs, 'a.ts')).toEqual([{ id: 'b.ts', path: 'b.ts', dirty: false }])
+    const bId = tabs.find(t => t.path === 'b.ts')!.id
+    expect(closeTab(tabs, 'a.ts')).toEqual([{ id: bId, path: 'b.ts', dirty: false }])
   })
   test('markDirty flips one tab without touching the others', () => {
     const tabs = openTab(openTab([], 'a.ts'), 'b.ts')
+    const aId = tabs[0]!.id
+    const bId = tabs[1]!.id
     const out = markDirty(tabs, 'a.ts', true)
     expect(out).toEqual([
-      { id: 'a.ts', path: 'a.ts', dirty: true },
-      { id: 'b.ts', path: 'b.ts', dirty: false },
+      { id: aId, path: 'a.ts', dirty: true },
+      { id: bId, path: 'b.ts', dirty: false },
     ])
   })
-  test('a tab keeps the path it was FIRST opened at as its id, across a rename', () => {
+  test('a tab keeps its minted id across a rename — only `path` moves', () => {
     const tabs = openTab([], 'old.ts')
+    const id = tabs[0]!.id
     const renamed = retargetOpenPaths(tabs, 'old.ts', 'new.ts')
-    expect(renamed).toEqual([{ id: 'old.ts', path: 'new.ts', dirty: false }])
+    expect(renamed).toEqual([{ id, path: 'new.ts', dirty: false }])
+  })
+
+  describe('I2 — a path-derived id collides once the path is freed and reused', () => {
+    test('THE PLANTED DEFECT: minting `id: path` produces a duplicate key after rename + recreate', () => {
+      // Reproduces the naive `{ id: path, path, dirty: false }` this replaced, to prove the failure
+      // mode by construction rather than merely asserting the fix's output looks different.
+      function openTabPathAsId(tabs: readonly { id: string; path: string; dirty: boolean }[], path: string) {
+        if (tabs.some(t => t.path === path)) return [...tabs]
+        return [...tabs, { id: path, path, dirty: false }]
+      }
+      let tabs = openTabPathAsId([], 'src/a.ts')
+      tabs = retargetOpenPaths(tabs, 'src/a.ts', 'src/a2.ts') as typeof tabs
+      tabs = openTabPathAsId(tabs, 'src/a.ts') // a NEW file, recreated at the freed old name
+      const ids = tabs.map(t => t.id)
+      expect(new Set(ids).size).toBeLessThan(ids.length) // the collision: two tabs, one id
+    })
+
+    test('the real openTab mints a fresh, distinct id even when a path is reused after a rename', () => {
+      let tabs = openTab([], 'src/a.ts')
+      tabs = retargetOpenPaths(tabs, 'src/a.ts', 'src/a2.ts')
+      tabs = openTab(tabs, 'src/a.ts')
+      expect(tabs).toHaveLength(2)
+      const ids = tabs.map(t => t.id)
+      expect(new Set(ids).size).toBe(ids.length)
+    })
   })
 })
 

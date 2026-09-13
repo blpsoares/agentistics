@@ -49,20 +49,44 @@ export function setLoading(root: TreeNode, path: string, loading: boolean): Tree
   return updateNode(root, path, n => ({ ...n, loading }))
 }
 
+/**
+ * Refreshes ONE directory's own listing, and MERGES it into what was there — never a full rebuild
+ * (I3, `session-w1c-tree-ops-review.md`). A tree operation elsewhere (a rename, a drag-move, an
+ * undo) refreshes the affected parent's children so its own listing catches up, but every SIBLING
+ * that survives the refresh untouched is not the thing that changed: rebuilding every child fresh
+ * (`expanded: false, children: null`) collapsed every open folder under whichever parent got
+ * refreshed, including a drag to the root collapsing `docs`, an undo collapsing `src`, and a rename
+ * at the root collapsing every open top-level folder — the exact thing §5.2 promises a refresh will
+ * not do ("reloads only the affected parents").
+ *
+ * A child SURVIVES (keeps its `expanded` state and its own cached `children`) when its path and kind
+ * are unchanged from before; a child new to the listing, or one whose kind changed at the same name
+ * (file replaced by a directory or vice versa — its old `children`/`expanded` describe a different
+ * kind of thing and cannot be reused), starts fresh. A child no longer in the listing is simply
+ * absent from the result, same as before.
+ */
 export function applyChildren(root: TreeNode, path: string, children: readonly TreeChild[]): TreeNode {
-  return updateNode(root, path, n => ({
-    ...n,
-    loading: false,
-    error: undefined,
-    children: children.map(c => ({
-      path: path === '' ? c.name : `${path}/${c.name}`,
-      name: c.name,
-      kind: c.kind,
-      expanded: false,
+  return updateNode(root, path, n => {
+    const prevByPath = new Map((n.children ?? []).map(c => [c.path, c]))
+    return {
+      ...n,
       loading: false,
-      children: null,
-    })),
-  }))
+      error: undefined,
+      children: children.map(c => {
+        const childPath = path === '' ? c.name : `${path}/${c.name}`
+        const prev = prevByPath.get(childPath)
+        if (prev !== undefined && prev.kind === c.kind) return { ...prev, name: c.name }
+        return {
+          path: childPath,
+          name: c.name,
+          kind: c.kind,
+          expanded: false,
+          loading: false,
+          children: null,
+        }
+      }),
+    }
+  })
 }
 
 export function applyError(root: TreeNode, path: string, error: string): TreeNode {
@@ -103,21 +127,40 @@ export function flattenVisible(root: TreeNode): FlatRow[] {
 
 export interface OpenTab {
   /**
-   * STABLE across a rename or a move — the path this tab was opened AT, fixed forever after. Never
-   * shown and never sent to the server; `path` is both of those. It exists for exactly one reason:
-   * the host keys its Monaco instances by it (see `retargetOpenPaths`'s own header) so that renaming
-   * an open file changes what the tab is CALLED without tearing down the editor underneath it — a
-   * rename is not a new file, so it must not look like one to the one thing that cannot survive
-   * being remounted, the undo stack.
+   * STABLE across a rename or a move, and NEVER the path — minted once, when the tab is opened, and
+   * carried unchanged by `retargetOpenPaths` for as long as the tab stays open. Never shown and never
+   * sent to the server. It exists for exactly one reason: the host keys its Monaco instances by it
+   * (see `retargetOpenPaths`'s own header) so that renaming an open file changes what the tab is
+   * CALLED without tearing down the editor underneath it — a rename is not a new file, so it must not
+   * look like one to the one thing that cannot survive being remounted, the undo stack.
+   *
+   * **It is not `path` (I2, `session-w1c-tree-ops-review.md`).** An id derived from the path a tab
+   * was first opened at is unique only until that path is FREED — rename `src/a.ts` to `src/a2.ts`
+   * (the tab keeps id `src/a.ts`), then create a new file back at `src/a.ts`: `openTab` used to mint
+   * that same id again, so `EditorStack` rendered two tabs sharing one React key, whose reconciliation
+   * is undefined, and once C1 is fixed a reused instance could show one file's buffer under the
+   * other's path.
    */
   id: string
   path: string
   dirty: boolean
 }
 
+/**
+ * A fresh id, unique for the life of the tab. `crypto.randomUUID` when it exists; the fallback is
+ * good enough for a value that is never shown, never sent to the server and only ever compared
+ * against other ids minted in this same browser tab.
+ */
+function newTabId(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  } catch { /* fall through */ }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 export function openTab(tabs: readonly OpenTab[], path: string): OpenTab[] {
   if (tabs.some(t => t.path === path)) return [...tabs]
-  return [...tabs, { id: path, path, dirty: false }]
+  return [...tabs, { id: newTabId(), path, dirty: false }]
 }
 
 export function closeTab(tabs: readonly OpenTab[], path: string): OpenTab[] {
