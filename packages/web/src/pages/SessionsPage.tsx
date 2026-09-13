@@ -84,6 +84,21 @@ export interface StudioHostMountParams {
   turns: readonly LiveTurn[]
   onExit: () => void
   target: HTMLElement | null
+  /**
+   * NEVER A REAL FIELD (I4, fix wave 3) — declared `never` so a stray `key` on this params object is
+   * a TYPE ERROR at every route a value can reach `mountStudioHostPanel` through, not only a literal
+   * written directly at the call site. Before this field existed, `tsc`'s excess-property check only
+   * ever caught a `key` on a FRESH object literal passed straight into the call or a directly-typed
+   * variable declaration; a value routed through an intermediate `const params: StudioHostMountParams
+   * = {...}` first, or merged in later via `{ ...base, ...{ key } }`, is no longer "fresh" by the time
+   * it reaches the parameter, and excess-property checking does not follow it there. Naming `key` in
+   * this interface closes that: it turns the check from "is this property excess" (freshness-gated)
+   * into "is this property's type compatible" (`never`, so anything but absence fails), which TS
+   * enforces on every structural comparison regardless of literal freshness. See
+   * `studioHostMountParams.types.test.ts` for the three shapes this closes, each pinned with
+   * `// @ts-expect-error`.
+   */
+  key?: never
 }
 
 /**
@@ -105,6 +120,14 @@ export interface StudioHostMountParams {
  *    `createElement`, so that half of the old gap is closed by construction, not merely detected;
  *  - a `key` added directly to the object literal INSIDE this function (the equivalent regression,
  *    moved one level in) is exactly what `studioHostMount.test.ts` calls this function to catch.
+ *
+ * **Neither of those made a stray `key` on the object literal AT THE CALL SITE below fail anything
+ * by itself** (fix wave 3's re-review finding) — this function's explicit field-picking absorbs it
+ * silently at runtime, so the only things that could ever notice were the source scan below
+ * (`sessionsPage.lint.test.ts`, and only for a `key` inside the LITERAL, not one routed through a
+ * variable) and a human reading the diff. `StudioHostMountParams.key: never` (its own doc comment,
+ * above) is what makes the call site itself fail to type-check for every shape measured, including
+ * the two a source scan structurally cannot see.
  */
 export function mountStudioHostPanel(params: StudioHostMountParams): ReactElement<StudioHostProps> | null {
   return mountPanel(params.shown, StudioHost, {
@@ -1647,11 +1670,16 @@ export default function SessionsPage() {
           changing WHETHER this is shown, and `mountPanel` (`lib/panelSlots.ts`) inside that function
           is what makes "no `key=` of its own, exactly one call site" a fact about a function every
           caller shares rather than a rule this page has to keep re-observing. `sessionsPage.lint.
-          test.ts`'s own I4 block still pins this call SITE, `panelSlots.mountPanel.test.ts` pins
-          `mountPanel` itself, and `studioHostMount.test.ts` (I4) calls `mountStudioHostPanel`
-          DIRECTLY — the same function this line calls — and inspects the real `React.ReactElement`
-          it returns, which is the genuine structural coverage of THIS call site the source scan
-          alone could not provide. */}
+          test.ts`'s own I4 block pins this call SITE's literal (a `key` at ANY field position fails
+          it — fix wave 3 restored the whole-literal scan a prior fix wave had narrowed to an
+          occurrence count), `panelSlots.mountPanel.test.ts` pins `mountPanel` itself, and
+          `studioHostMount.test.ts` (I4) calls `mountStudioHostPanel` DIRECTLY and inspects the real
+          `React.ReactElement` it returns. **None of those three is what makes a stray `key` on the
+          object literal below impossible to compile** — a source scan and a call through the real
+          function both stay green for a `key` reached only via an intermediate typed variable, which
+          neither one ever executes or reads. `StudioHostMountParams.key: never` (its own doc comment)
+          is the one guarantee that closes that: it fails `tsc` for the literal below AND for that
+          routed shape, pinned in `studioHostMountParams.types.test.ts`. */}
       {selected && mountStudioHostPanel({
         shown: editorEnabled === true && isPanelShown(slotLayout, 'studio'),
         sessionId: selected.id,

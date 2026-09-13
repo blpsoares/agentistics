@@ -202,29 +202,45 @@ test('the scan still sees either of those going dead', () => {
 /**
  * I4 — THE STUDIO'S MOVE-NEVER-REMOUNTS GUARANTEE HAS A MOUNT SITE, AND THE MOUNT SITE CAN BREAK IT
  * ALL BY ITSELF. `StudioHost.lint.test.ts` pins the re-parenting MECHANISM inside `StudioHost.tsx`;
- * it says nothing about how this page MOUNTS that component, and a reviewer proved the gap twice.
- * First: adding `key={rightIsStudio ? 'right' : 'bottom'}` to a hand-written `cond && (<StudioHost
- * .../>)` — every test in the suite at the time stayed green, because `StudioHost.lint.test.ts` only
- * reads `StudioHost.tsx` and `panelSlots.test.ts` never renders anything. THE FIX for that was
- * moving the mount through `lib/panelSlots.ts`'s `mountPanel`, pinned against REAL
- * `React.ReactElement` objects in `panelSlots.mountPanel.test.ts`. Second, in the RE-REVIEW: adding
- * `key: rightIsStudio ? 'right' : 'bottom',` into the literal PROPS object at that call, still inside
- * this page — `panelSlots.mountPanel.test.ts` only ever called `mountPanel` with a `Dummy` component
- * and hand-built props, so it never touched THIS call site and stayed green; only this file's own
- * source scan (below) caught it, which the fixer's own brief said was not enough on its own.
+ * it says nothing about how this page MOUNTS that component, and a reviewer proved the gap three
+ * times over. First: adding `key={rightIsStudio ? 'right' : 'bottom'}` to a hand-written
+ * `cond && (<StudioHost .../>)` — every test in the suite at the time stayed green, because
+ * `StudioHost.lint.test.ts` only reads `StudioHost.tsx` and `panelSlots.test.ts` never renders
+ * anything. THE FIX for that was moving the mount through `lib/panelSlots.ts`'s `mountPanel`, pinned
+ * against REAL `React.ReactElement` objects in `panelSlots.mountPanel.test.ts`. Second, in the
+ * RE-REVIEW: adding `key: rightIsStudio ? 'right' : 'bottom',` into the literal PROPS object at that
+ * call, still inside this page — `panelSlots.mountPanel.test.ts` only ever called `mountPanel` with a
+ * `Dummy` component and hand-built props, so it never touched THIS call site and stayed green; only
+ * this file's own source scan (a full scan of the literal, back then) caught it.
  *
- * THE FIX FOR THAT is `mountStudioHostPanel` — a MODULE-LEVEL function this page exports (see its
- * own doc comment, above the component) that wraps the one `mountPanel(shown, StudioHost, {…})`
- * call and picks its fields EXPLICITLY rather than spreading its params. `studioHostMount.test.ts`
- * imports that exact function — not a stand-in — and calls it directly: genuine structural coverage
- * of the real call site, with no jsdom needed, the same way `panelSlots.mountPanel.test.ts` already
- * covers `mountPanel` in isolation.
+ * THAT SCAN WAS THEN WEAKENED, and a THIRD re-review caught it: the fix that introduced
+ * `mountStudioHostPanel` (the module-level function above) replaced the working "scan the whole
+ * literal for a `key:` field, anywhere" test with one that only checks how many times the fixed
+ * `CALL_GUARD` PREFIX string occurs. A `key` planted as the object's FIRST field still broke that
+ * prefix string and was still (coincidentally) caught; a `key` planted as its LAST field, after
+ * `target: studioTarget,`, left the prefix untouched and passed every `bun test` in the suite
+ * — only `bun tsc --noEmit` caught it, and only because a directly-passed object literal still
+ * triggers excess-property checking regardless of field order. The whole-literal scan below is that
+ * protection RESTORED, not a new one — see `SRC.slice(start, close)` rather than a fixed-string
+ * `.split(...).length`.
  *
- * What THIS file still owns is the SHAPE of the JSX call: that there is exactly one of them, passing
- * the same `shown` condition every gate on this page uses rather than a slot-dependent ternary.
+ * `mountStudioHostPanel` also carries `studioHostMount.test.ts` (genuine structural coverage of the
+ * function's own contract, calling it directly with real `React.ReactElement` objects) and
+ * `studioHostMountParams.types.test.ts` (`StudioHostMountParams.key: never`, a TYPE-level guarantee
+ * that reaches shapes NEITHER a source scan nor a call through the real function can see — a `key`
+ * routed through an intermediate typed variable, or merged in via a later spread, since neither one
+ * puts `key:` as literal text near this call, and neither one calls `mountStudioHostPanel` with a
+ * bare `key` field for `studioHostMount.test.ts` to catch either).
+ *
+ * So THIS file owns two things: the SHAPE of the JSX call (exactly one, passing the same `shown`
+ * condition every gate on this page uses rather than a slot-dependent ternary), and the CONTENT of
+ * its literal (no `key:` field, at any position).
  */
 describe('StudioHost is mounted once, through mountStudioHostPanel (I4)', () => {
   const CALL_GUARD = "mountStudioHostPanel({\n        shown: editorEnabled === true && isPanelShown(slotLayout, 'studio'),"
+  // The literal's own closing tokens: `}` closes the object, `)` closes the call, `}` closes the
+  // JSX expression container — `{selected && mountStudioHostPanel({ ... })}`.
+  const CALL_CLOSE = '\n      })}'
 
   test('the bare identifier appears exactly three times: twice on the import line, once in mountStudioHostPanel\'s own call to mountPanel', () => {
     expect([...SRC.matchAll(/\bStudioHost\b/g)]).toHaveLength(3)
@@ -237,6 +253,8 @@ describe('StudioHost is mounted once, through mountStudioHostPanel (I4)', () => 
   })
 
   test('the call-site guard appears exactly once — a second, byte-identical mount call would be caught', () => {
+    // This pins a DIFFERENT invariant than the key scan below (a second mount SITE, not a stray
+    // field on this one) — it is deliberately not relied on for I4's own guarantee any more.
     const occurrences = SRC.split(CALL_GUARD).length - 1
     expect(occurrences).toBe(1)
     const secondMount = `${SRC}\n${CALL_GUARD} sessionId: 'x' })`
@@ -247,5 +265,35 @@ describe('StudioHost is mounted once, through mountStudioHostPanel (I4)', () => 
     expect(has(CALL_GUARD)).toBe(true) // sanity: the needle exists in the real file
     const guardMovedAway = SRC.replace(CALL_GUARD, "editorEnabled === true && isPanelShown(slotLayout, 'studio') && (\n        <div />")
     expect(guardMovedAway.includes(CALL_GUARD)).toBe(false)
+  })
+
+  test('the props object handed to mountStudioHostPanel carries no `key` field, at ANY position in the literal', () => {
+    const start = SRC.indexOf(CALL_GUARD)
+    const close = SRC.indexOf(CALL_CLOSE, start)
+    expect(start).toBeGreaterThan(-1)
+    expect(close).toBeGreaterThan(start)
+    expect(SRC.slice(start, close)).not.toMatch(/(^|[,{])\s*key\s*:/)
+  })
+
+  test('the scan still sees a `key` field slipped into the props object, whichever position it is added at', () => {
+    // FIRST field — the shape the original review planted, and the shape the occurrence-count test
+    // above (coincidentally) still catches because it breaks the CALL_GUARD prefix string.
+    const first = SRC.replace(
+      CALL_GUARD,
+      "mountStudioHostPanel({\n        key: rightIsStudio ? 'right' : 'bottom',\n        shown: editorEnabled === true && isPanelShown(slotLayout, 'studio'),",
+    )
+    const firstStart = first.indexOf('mountStudioHostPanel({')
+    const firstClose = first.indexOf(CALL_CLOSE, firstStart)
+    expect(first.slice(firstStart, firstClose)).toMatch(/(^|[,{])\s*key\s*:/)
+
+    // LAST field, appended right before the closing `})}` — the shape the re-review found that the
+    // occurrence-count test cannot see at all, because it never touches the fixed prefix string.
+    const last = SRC.replace(
+      'target: studioTarget,' + CALL_CLOSE,
+      "target: studioTarget,\n        key: rightIsStudio ? 'right' : 'bottom'," + CALL_CLOSE,
+    )
+    const lastStart = last.indexOf(CALL_GUARD)
+    const lastClose = last.indexOf(CALL_CLOSE, lastStart)
+    expect(last.slice(lastStart, lastClose)).toMatch(/(^|[,{])\s*key\s*:/)
   })
 })
