@@ -58,6 +58,26 @@ async function call(req: Request, host: StartHost, lang: 'en' | 'pt' = 'en') {
 }
 
 describe('handleEditorTreeRoute', () => {
+  test('an unexpected exception is a 500 with a code and a ref, never the raw message', async () => {
+    const throwing = { ...noHost, sessions: async () => { throw new Error('EACCES: /home/secret/path/leak') } } as StartHost
+    const { status, body } = await call(new Request('http://x/api/fleet/tree?id=s1&path='), throwing)
+    expect(status).toBe(500)
+    expect(body.error).toBe('internal_error')
+    expect(typeof body.ref).toBe('string')
+    expect(JSON.stringify(body)).not.toContain('/home/secret')
+  })
+
+  test('PATCH moving a folder into its own child is a 409 into-itself, with a sentence', async () => {
+    const mk = new Request('http://x/api/fleet/tree/entry', { method: 'POST', body: JSON.stringify({ id: 's1', path: 'movedir', kind: 'dir' }) })
+    await call(mk, hostWith('s1', repo))
+    const mv = await call(new Request('http://x/api/fleet/tree/entry', {
+      method: 'PATCH', body: JSON.stringify({ id: 's1', from: 'movedir', to: 'movedir/inner' }),
+    }), hostWith('s1', repo), 'pt')
+    expect(mv.status).toBe(409)
+    expect(mv.body).toMatchObject({ ok: false, reason: 'into-itself' })
+    expect(String(mv.body.message)).toContain('pasta')
+  })
+
   test('an unknown route under the prefix falls through as null, so index.ts can keep looking', async () => {
     const req = new Request('http://x/api/fleet/tree/not-a-real-subroute')
     const res = await handleEditorTreeRoute(req, new URL(req.url), noHost, 'en')

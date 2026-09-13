@@ -332,7 +332,7 @@ async function realContainedParent(root: string, abs: string): Promise<string | 
   return `${realParent}/${abs.slice(parent.length + 1)}`
 }
 
-export type CreateRefusal = 'escaped' | 'not-found' | 'already-exists'
+export type CreateRefusal = 'escaped' | 'not-found' | 'already-exists' | 'not-a-directory'
 export type CreatePlan = { ok: true } | { ok: false; reason: CreateRefusal }
 
 export async function createTreeEntry(
@@ -352,9 +352,35 @@ export async function createTreeEntry(
     // Good — it must not exist yet.
   }
 
-  if (kind === 'dir') await mkdir(target)
-  else await writeFile(target, '', 'utf8')
+  try {
+    // `wx`: the name was free a moment ago, and a file that appears in between is not overwritten.
+    if (kind === 'dir') await mkdir(target)
+    else await writeFile(target, '', { encoding: 'utf8', flag: 'wx' })
+  } catch (err) {
+    const reason = fsRefusal(err)
+    if (reason === 'already-exists' || reason === 'not-found' || reason === 'not-a-directory') return { ok: false, reason }
+    throw err
+  }
   return { ok: true }
+}
+
+/**
+ * The filesystem's own refusal, as one of this module's codes — or `null`, and the caller rethrows.
+ *
+ * The checks above run BEFORE the call, so the call can still refuse on its own: a folder moved into
+ * its own descendant (EINVAL — including through a symlink, which no lexical check can see), a path
+ * whose middle segment is a FILE (ENOTDIR), something created at the name in between (EEXIST). Those
+ * used to escape as a thrown `Error` whose message carries the ABSOLUTE host path, straight out of a
+ * route with no catch. Only codes with a true sentence are mapped; anything else stays an exception.
+ */
+function fsRefusal(err: unknown): 'into-itself' | 'not-a-directory' | 'already-exists' | 'not-found' | 'not-empty' | null {
+  const code = (err as { code?: unknown } | null)?.code
+  if (code === 'EINVAL') return 'into-itself'
+  if (code === 'ENOTDIR') return 'not-a-directory'
+  if (code === 'EEXIST') return 'already-exists'
+  if (code === 'ENOENT') return 'not-found'
+  if (code === 'ENOTEMPTY') return 'not-empty'
+  return null
 }
 
 /**
@@ -391,7 +417,7 @@ function namesRoot(root: string, abs: string): boolean {
   return resolve(abs) === resolve(root)
 }
 
-export type RenameRefusal = 'escaped' | 'not-found' | 'already-exists' | 'is-root'
+export type RenameRefusal = 'escaped' | 'not-found' | 'already-exists' | 'is-root' | 'into-itself' | 'not-a-directory'
 export type RenamePlan = { ok: true } | { ok: false; reason: RenameRefusal }
 
 export async function renameTreeEntry(root: string, fromPath: string, toPath: string): Promise<RenamePlan> {
@@ -415,7 +441,14 @@ export async function renameTreeEntry(root: string, fromPath: string, toPath: st
     // Good — the destination must be free.
   }
 
-  await rename(realFrom, realToTarget)
+  try {
+    await rename(realFrom, realToTarget)
+  } catch (err) {
+    const reason = fsRefusal(err)
+    if (reason === 'not-empty') return { ok: false, reason: 'already-exists' }
+    if (reason) return { ok: false, reason }
+    throw err
+  }
   return { ok: true }
 }
 
@@ -445,7 +478,13 @@ export async function deleteTreeEntry(
     if (entries.length > 0) return { ok: false, reason: 'not-empty' }
   }
 
-  await rm(real, { recursive: true, force: false })
+  try {
+    await rm(real, { recursive: true, force: false })
+  } catch (err) {
+    const reason = fsRefusal(err)
+    if (reason === 'not-found' || reason === 'not-empty') return { ok: false, reason }
+    throw err
+  }
   return { ok: true }
 }
 

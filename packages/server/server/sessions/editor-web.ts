@@ -16,6 +16,7 @@ import {
   type ReadMediaRefusal, type RenameRefusal, type TextRefusal, type WriteFileRefusal,
 } from './editor-fs'
 import { planRange } from './editor-media'
+import { safeError } from '../errors'
 import { OPAQUE_MEDIA_CSP } from '../response-policy'
 import type { SessionDirRefusal } from './editor-directory'
 
@@ -70,6 +71,10 @@ const GENERIC_REFUSAL: Record<GenericRefusal, { en: string; pt: string }> = {
     en: 'Something is already there.',
     pt: 'Já existe algo nesse caminho.',
   },
+  'into-itself': {
+    en: 'A folder cannot be moved into itself or into a folder inside it.',
+    pt: 'Uma pasta não pode ser movida para dentro dela mesma nem de uma pasta dentro dela.',
+  },
   'is-root': {
     en: 'That is this session’s folder itself. It cannot be renamed or deleted from here.',
     pt: 'Essa é a própria pasta desta sessão. Ela não pode ser renomeada nem apagada por aqui.',
@@ -115,7 +120,7 @@ const GENERIC_REFUSAL: Record<GenericRefusal, { en: string; pt: string }> = {
  * is the wrong kind of entry), which is true regardless of which route asked. Decided once, from
  * the REASON CODE, so the same code can never mean 404 through one door and 409 through another.
  */
-const CONFLICT_SHAPED: ReadonlySet<GenericRefusal> = new Set(['already-exists', 'not-empty', 'conflict', 'is-root'])
+const CONFLICT_SHAPED: ReadonlySet<GenericRefusal> = new Set(['already-exists', 'not-empty', 'conflict', 'is-root', 'into-itself'])
 /**
  * The one CONTENT-shaped refusal the text routes have: the path resolved perfectly well and the
  * answer is about what is in the file, which is what 415 says (the bytes route's `not-media` below
@@ -161,7 +166,25 @@ const badRequest = (kind: BadRequestKind, lang: CliLang): Response =>
   json({ ok: false, reason: 'bad_request', message: BAD_REQUEST[kind][lang] }, 400)
 
 /** `null` when the path is not ours, so `index.ts` falls through to its next route. */
+/**
+ * The routes, behind ONE catch. `index.ts` has no try/catch around this call and the server no
+ * `error` handler, so anything a filesystem call threw that `editor-fs.ts` does not map to a refusal
+ * code reached the client as the raw exception — whose message carries the absolute host path. Now it
+ * is `safeError`'s code plus a correlation ref, and the message goes to the log.
+ */
 export async function handleEditorTreeRoute(
+  req: Request, url: URL, host: StartHost, lang: CliLang,
+): Promise<Response | null> {
+  try {
+    return await routeEditorTree(req, url, host, lang)
+  } catch (err) {
+    const { body, logLine } = safeError(err, { verbose: false })
+    console.error(logLine)
+    return json({ ok: false, ...body }, 500)
+  }
+}
+
+async function routeEditorTree(
   req: Request, url: URL, host: StartHost, lang: CliLang,
 ): Promise<Response | null> {
   const { pathname } = url
