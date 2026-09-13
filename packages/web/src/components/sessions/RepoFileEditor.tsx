@@ -101,6 +101,8 @@ import { repoFailureText } from '../../lib/repoErrorText'
 import { formatBytes } from '../../lib/gallery'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { RepoNote } from './repoNote'
+import { insertMention, mentionTargetForSelection } from '../../lib/mentionInsert'
+import type { HarnessId } from '@agentistics/core'
 
 // What `loadMonaco()` RESOLVES — `monacoEntry`, not the barrel. The barrel's type promised
 // `typescript` and `lsp`, which that module does not have; see `monacoSetup.ts`'s `Monaco`.
@@ -121,6 +123,25 @@ export interface RepoFileEditorProps {
    * see the host's `nextGoTo`, which is the only place this is produced.
    */
   gotoSeq?: number
+  /**
+   * The session's own harness — picks the mention FORMAT for "Mencionar seleção" (`mentionSpec.ts`).
+   * Omitted (or unverified) falls back to the plain, harness-agnostic form — never a guessed `@`.
+   */
+  harness?: HarnessId
+  /**
+   * Whether the message composer is on screen for this session RIGHT NOW. This component has no
+   * visibility into which slot shows what — see `insertMention`'s `needsSwitch` — so the caller
+   * passes it in; omitted defaults to `true` (no forced switch) rather than surprising a caller
+   * that has not wired this yet.
+   */
+  composerMounted?: boolean
+  /**
+   * Fired after "Mencionar seleção" queues a reference into the draft store. The reference is
+   * queued either way (`composerStore.ts` survives the composer not being mounted yet); this is
+   * only for `needsSwitch` — see `mentionInsert.ts` — which tells the caller when to switch the
+   * centre to the conversation and show the "Adicionado à mensagem" toast (`MENTION_ADDED_TOAST`).
+   */
+  onMention?: (result: { text: string; needsSwitch: boolean }) => void
 }
 
 // --- loading one file ----------------------------------------------------------------------------
@@ -656,6 +677,7 @@ function readThemeAttr(): string | null {
 
 export function RepoFileEditor({
   sessionId, path, autosave, onDirtyChange, lang, gotoLine, gotoSeq,
+  harness, composerMounted = true, onMention,
 }: RepoFileEditorProps) {
   const isMobile = useIsMobile()
   const pt = lang === 'pt'
@@ -710,6 +732,14 @@ export function RepoFileEditor({
   optionsRef.current = options
   const mobileRef = useRef(isMobile)
   mobileRef.current = isMobile
+  /**
+   * "Mencionar seleção"'s own inputs, kept fresh through a ref for the same reason `argsRef` is:
+   * the Monaco mount effect below only re-runs on `[load.kind, path]`, so an action registered
+   * once inside it would otherwise close over the harness/session/language this file happened to
+   * mount with.
+   */
+  const mentionCtxRef = useRef({ sessionId, harness, composerMounted, onMention, pt })
+  mentionCtxRef.current = { sessionId, harness, composerMounted, onMention, pt }
 
   // --- read the file ---------------------------------------------------------
   // `lang` is NOT a dependency on purpose. It changes only the wording of a refusal, while
@@ -772,6 +802,87 @@ export function RepoFileEditor({
           monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
           () => requestSaveRef.current('explicit'),
         )
+
+        /**
+         * "Mencionar seleção" (§6.1, gesture 3) — a Monaco ACTION (context menu + keybinding) so
+         * `run` always reads the CURRENT selection off the editor rather than one captured at
+         * registration time. The mention itself never carries the selected code: the file is on
+         * disk and a pasted copy goes stale — only the path and the line range travel.
+         */
+        const mentionSelection = (): void => {
+          const sel = editor?.getSelection()
+          if (!sel) return
+          const target = mentionTargetForSelection(
+            argsRef.current.path, sel.startLineNumber, sel.endLineNumber, sel.isEmpty(),
+          )
+          if (target === null) return
+          const ctx = mentionCtxRef.current
+          const result = insertMention(ctx.sessionId, ctx.harness, target, ctx.composerMounted)
+          ctx.onMention?.(result)
+        }
+        editor.addAction({
+          id: 'agentistics.mentionSelection',
+          label: mentionCtxRef.current.pt ? 'Mencionar seleção' : 'Mention selection',
+          keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyM],
+          contextMenuGroupId: 'agentistics',
+          contextMenuOrder: 1,
+          run: mentionSelection,
+        })
+
+        /**
+         * The floating chip at the end of a non-empty selection (desktop only — §1.6/§6.1 leave the
+         * mobile trigger to an editor-bar button the coordinator adds after merge; see the report).
+         * A CONTENT WIDGET rather than a plain absolutely-positioned `<div>`: Monaco owns the
+         * scroll/zoom transform for anything anchored to buffer coordinates, and re-deriving that
+         * by hand is exactly the kind of thing that drifts one line off after a resize.
+         *
+         * `getPosition` returning `null` for an empty selection is how it HIDES — Monaco simply
+         * does not render a widget with nowhere to go, so there is no separate show/hide state to
+         * keep in sync with the selection.
+         */
+        let mentionChipDom: HTMLButtonElement | null = null
+        let mentionWidget: Monaco.editor.IContentWidget | null = null
+        if (!mobileRef.current) {
+          const chip = document.createElement('button')
+          chip.type = 'button'
+          chip.textContent = mentionCtxRef.current.pt ? 'Mencionar' : 'Mention'
+          chip.title = mentionCtxRef.current.pt
+            ? 'Mencionar a seleção na conversa (Ctrl/Cmd+Alt+M)'
+            : 'Mention the selection in the conversation (Ctrl/Cmd+Alt+M)'
+          Object.assign(chip.style, {
+            font: '11px/1.4 inherit',
+            padding: '2px 8px',
+            borderRadius: '999px',
+            border: '1px solid var(--anthropic-orange)',
+            background: 'rgba(232,105,11,0.10)',
+            color: 'var(--anthropic-orange)',
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+            zIndex: '10',
+          } satisfies Partial<CSSStyleDeclaration>)
+          chip.addEventListener('mousedown', e => e.preventDefault()) // never steals the selection
+          chip.addEventListener('click', mentionSelection)
+          mentionChipDom = chip
+
+          mentionWidget = {
+            getId: () => 'agentistics.mentionSelectionChip',
+            getDomNode: () => chip,
+            getPosition: () => {
+              const sel = editor?.getSelection()
+              if (!sel || sel.isEmpty()) return null
+              return {
+                position: { lineNumber: sel.endLineNumber, column: sel.endColumn },
+                preference: [monaco.editor.ContentWidgetPositionPreference.EXACT],
+              }
+            },
+            suppressMouseDown: true,
+          }
+          editor.addContentWidget(mentionWidget)
+          editor.onDidChangeCursorSelection(() => {
+            if (mentionWidget) editor?.layoutContentWidget(mentionWidget)
+          })
+        }
+
         // Opening a file is a request to edit it — but not on a phone, where stealing focus opens
         // the soft keyboard over the file you have just asked to look at.
         if (!mobileRef.current) editor.focus()

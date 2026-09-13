@@ -77,8 +77,9 @@ import { attachmentName, isImageAttachment, splitMessage } from '../../lib/messa
 import { overlayPadding } from '../../lib/mobileOverlay'
 import { HARNESS_LABELS } from '../../lib/harness'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { handleComposerDrop } from '../../lib/mentionInsert'
 
-import type { AttachmentSend } from '@agentistics/core'
+import type { AttachmentSend, HarnessId } from '@agentistics/core'
 
 interface ChatPayload {
   turns: ChatTurn[]
@@ -161,6 +162,27 @@ const REFRESH_NOTICE_MS = 400
  * exactly the thing this whole mechanism exists to prevent.
  */
 const TAIL_SLACK = 24
+
+/**
+ * PROVISIONAL — `lib/repoDrag.ts` (the tree's drag MIME and its reader `readRepoDrag`) is owned by
+ * a work package landing in parallel with this one and does not exist in this tree yet.
+ * `handleComposerDrop` is written against an injected reader for exactly this reason (see
+ * `mentionInsert.ts`), so the seam is ready and these two spots are the only things that need to
+ * change once it merges — see this package's report for the exact lines:
+ *
+ *   1. Delete `REPO_ENTRY_DRAG_MIME` below and read `onDragOver`'s check off the constant
+ *      `lib/repoDrag.ts` exports instead (kept as a literal here only because that file does not
+ *      exist yet — it MUST be defined once, not duplicated, the moment it does).
+ *   2. Replace `readRepoEntry: readRepoEntryStub` with
+ *      `readRepoEntry: dt => readRepoDrag(dt, session.id)`, imported from `'../../lib/repoDrag'`.
+ *
+ * Until then `readRepoEntryStub` always reports "not a repo entry", so `onDrop` falls through to
+ * the existing OS-file handling unchanged — no regression, nothing silently swallowed.
+ */
+const REPO_ENTRY_DRAG_MIME = 'application/x-agentistics-repo-entry'
+function readRepoEntryStub(_dt: DataTransfer): { path: string } | null {
+  return null
+}
 
 interface Attachment { name: string; path: string }
 
@@ -1339,6 +1361,14 @@ export function SessionChat({ session, row, lang, act, onArtifacts, onReopened }
 
   function onDrop(e: React.DragEvent<HTMLDivElement>): void {
     if (!canPrompt) return
+    // A tree row dragged onto the composer (§6.1, gesture 1) — checked FIRST, and never a case of
+    // "nothing was dropped": `handled: false` means "not a repo entry", so the OS-file path below
+    // still runs for an ordinary file dropped from outside the browser.
+    const mention = handleComposerDrop(session.id, e.dataTransfer, {
+      readRepoEntry: readRepoEntryStub,
+      harness: session.harness as HarnessId,
+    })
+    if (mention.handled) { e.preventDefault(); return }
     if (e.dataTransfer.files.length === 0) return
     e.preventDefault()
     pick(e.dataTransfer.files)
@@ -1466,7 +1496,12 @@ export function SessionChat({ session, row, lang, act, onArtifacts, onReopened }
   return (
     <div
       style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
-      onDragOver={e => { if (canPrompt && e.dataTransfer.types.includes('Files')) e.preventDefault() }}
+      onDragOver={e => {
+        if (!canPrompt) return
+        if (e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes(REPO_ENTRY_DRAG_MIME)) {
+          e.preventDefault()
+        }
+      }}
       onDrop={onDrop}
     >
       <div
