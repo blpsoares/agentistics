@@ -60,6 +60,8 @@ export type FileIconId =
 /** Whole basenames. Checked FIRST, so `.env` beats every extension rule. */
 const BY_NAME: Record<string, FileIconId> = {
   'dockerfile': 'docker',
+  // The OCI-neutral spelling — same whale, `monacoLanguage.ts` gives it the same grammar too.
+  'containerfile': 'docker',
   '.dockerignore': 'docker',
   '.env': 'env',
   '.gitignore': 'git',
@@ -71,9 +73,16 @@ const BY_NAME: Record<string, FileIconId> = {
   // A Makefile is a file of COMMANDS, so it wears the terminal rather than the sliders: `config` is
   // for a file that is read as settings, and a near-miss is the one thing this module must not do.
   'makefile': 'shell',
+  // Same shape as a Makefile — a Justfile's body is shell recipes, so it earns the same terminal.
+  'justfile': 'shell',
+  // `name: command` — closer to a settings file than to a script, so it wears the sliders instead.
+  'procfile': 'config',
   '.editorconfig': 'config',
   '.npmrc': 'config',
   '.nvmrc': 'config',
+  // M4: a reverse-proxy config file with no extension to key on — `nginx.conf` already lands on
+  // `config` through the ordinary `.conf` extension rule below, and this is Caddy's equivalent.
+  'caddyfile': 'config',
   // `LICENSE` is deliberately ABSENT. It has no extension and it is not a `.txt`; a TXT badge on it
   // would be a claim about a format nobody declared, and the neutral glyph is the honest answer.
 }
@@ -101,6 +110,16 @@ const BY_EXT: Record<string, FileIconId> = {
   cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', hh: 'cpp', hxx: 'cpp',
   cs: 'csharp', sql: 'sql',
   txt: 'text', log: 'text', csv: 'text',
+  // `*.dockerfile` (named by extension rather than `Dockerfile` outright) and Terraform/HCL — both
+  // audited alongside `monacoLanguage.ts`'s own niche-file pass.
+  dockerfile: 'docker',
+  tf: 'config', tfvars: 'config', hcl: 'config',
+  // A Makefile FRAGMENT, included by a top-level one — same glyph as `makefile` above.
+  mk: 'shell',
+  // M4: no dedicated diagram glyph exists in this set, so a mermaid source file is grouped with
+  // plain text rather than drawing the generic file glyph — the same honest-subset choice
+  // `monacoLanguage.ts` makes when a real grammar is missing, not a claim that this is a good fit.
+  mmd: 'text', mermaid: 'text',
 }
 
 /**
@@ -123,13 +142,15 @@ const BY_EXT: Record<string, FileIconId> = {
  * the extensions those formats actually use, which is what closes the hole.
  */
 const LOCK_DATA = /-lock\.(json|ya?ml)$/
-const COMPOSE = /^docker-compose\.(.+\.)?ya?ml$/
+// `docker-compose.yml`, `docker-compose.prod.yml`, `compose.yaml`, `compose.override.yml` — anchored
+// at BOTH ends for the same reason `-lock\.` is: `composer.yml` (a PHP composer file that happens to
+// be YAML) must not take the whale, and `^compose\.` alone would have let it.
+const COMPOSE = /^(docker-)?compose\.(.+\.)?ya?ml$/
 
 function compoundIconId(base: string): FileIconId | null {
   if (base.startsWith('.env.')) return 'env'
   if (base.startsWith('dockerfile.')) return 'docker'
   if (COMPOSE.test(base)) return 'docker'
-  if (base === 'compose.yml' || base === 'compose.yaml') return 'docker'
   // `package-lock.json`, `pnpm-lock.yaml`. `Cargo.lock`, `Gemfile.lock`, `poetry.lock`, `uv.lock`
   // and `bun.lockb` need no rule here at all — `.lock`/`.lockb` are ordinary extensions and `BY_EXT`
   // answers them, which is one fewer unanchored test to get wrong.

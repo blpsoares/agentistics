@@ -89,14 +89,16 @@ import {
 } from 'react'
 import { AlertTriangle, Check, Eye, File, Loader, RotateCcw, Save } from 'lucide-react'
 import type * as Monaco from 'monaco-editor'
-import { languageForPath } from '../../lib/monacoLanguage'
-import { codeThemeName, defineAgentisticsThemes } from '../../lib/monacoTheme'
+import { languageForPath, JSON_DIAGNOSTICS_OVERRIDE } from '../../lib/monacoLanguage'
+import { codeThemeName, defineAgentisticsThemes, type CodeThemeVariant } from '../../lib/monacoTheme'
 import {
   isWriteConflict, readRepoFile, writeRepoFile,
   type ReadFileResult, type RepoLang, type RepoMediaKind, type WriteFileResult,
 } from '../../lib/repoApi'
 import { repoMediaUrl } from '../../lib/attachmentUrl'
 import { editorSaveText } from '../../lib/editorSaveText'
+import { MarkdownPreview } from './MarkdownPreview'
+import { MermaidDiagram } from './MermaidDiagram'
 import { repoFailureText } from '../../lib/repoErrorText'
 import { formatBytes } from '../../lib/gallery'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -107,6 +109,18 @@ import type { HarnessId } from '@agentistics/core'
 // What `loadMonaco()` RESOLVES — `monacoEntry`, not the barrel. The barrel's type promised
 // `typescript` and `lsp`, which that module does not have; see `monacoSetup.ts`'s `Monaco`.
 type MonacoModule = typeof import('../../lib/monacoEntry')
+
+// I3: applied exactly once, idempotently — see `JSON_DIAGNOSTICS_OVERRIDE`'s own header
+// (`monacoLanguage.ts`) for why this is a GLOBAL relaxation rather than a second language id.
+let jsonDiagnosticsConfigured = false
+function configureJsonDiagnostics(monaco: MonacoModule): void {
+  if (jsonDiagnosticsConfigured) return
+  jsonDiagnosticsConfigured = true
+  monaco.json.jsonDefaults.setDiagnosticsOptions({
+    ...monaco.json.jsonDefaults.diagnosticsOptions,
+    ...JSON_DIAGNOSTICS_OVERRIDE,
+  })
+}
 
 export interface RepoFileEditorProps {
   sessionId: string
@@ -142,6 +156,12 @@ export interface RepoFileEditorProps {
    * centre to the conversation and show the "Adicionado à mensagem" toast (`MENTION_ADDED_TOAST`).
    */
   onMention?: (result: { text: string; needsSwitch: boolean }) => void
+  /**
+   * Opens another repository file in the Studio, for a relative link the markdown preview renders.
+   * Absent leaves such a link clickable but INERT (see `MarkdownPreview`'s own header) — wired by
+   * `Studio.tsx`'s `EditorStack` to the same `openFile` a tree click already calls.
+   */
+  onOpenPath?: (path: string) => void
 }
 
 // --- loading one file ----------------------------------------------------------------------------
@@ -708,9 +728,121 @@ function readThemeAttr(): string | null {
   return typeof document === 'undefined' ? null : document.documentElement.getAttribute('data-theme')
 }
 
+// --- Código | Visualizar --------------------------------------------------------------------------
+//
+// The toggle lives on THIS component's own bar (`RepoSaveStrip` below) because that is the strip the
+// design names — "the editor bar" — and because the preference the toggle remembers is scoped to
+// this same file: whether the buffer under it renders as markdown/mermaid or as code.
+
+/** The two renderable previews the Studio can show. `null` (not part of this union) means neither —
+ * the toggle itself is then absent rather than offered and doing nothing. */
+export type DocKind = 'markdown' | 'mermaid'
+
+const MARKDOWN_EXTENSIONS = new Set(['md', 'mdx', 'markdown'])
+// `CLAUDE.md`/`AGENTS.md`/`SKILL.md` already carry the `.md` extension above; only the two common
+// EXTENSIONLESS names need a rule of their own.
+const MARKDOWN_BASENAMES = new Set(['readme', 'changelog'])
+const MERMAID_EXTENSIONS = new Set(['mmd', 'mermaid'])
+
+/** Which preview a file can show — from its name alone, never its content. */
+export function renderableDocKind(path: string): DocKind | null {
+  const base = (path.split('/').pop() ?? path).toLowerCase()
+  if (MARKDOWN_BASENAMES.has(base)) return 'markdown'
+  const dot = base.lastIndexOf('.')
+  if (dot <= 0) return null
+  const ext = base.slice(dot + 1)
+  if (MARKDOWN_EXTENSIONS.has(ext)) return 'markdown'
+  if (MERMAID_EXTENSIONS.has(ext)) return 'mermaid'
+  return null
+}
+
+export type PreviewMode = 'code' | 'preview'
+
+const PREVIEW_PREF_KEY = 'agentistics.editor.previewMode'
+
+/**
+ * Remembered PER DOC KIND, guarded exactly like `readBandPrefs`/`writeBandPrefs`
+ * (`lib/shellBand.ts`): a browser that blocks site data, or a value nothing wrote, costs the memory
+ * and never the toggle — it still works, just starting from `'code'` again.
+ */
+function readPreviewPrefs(storage?: Storage): Partial<Record<DocKind, PreviewMode>> {
+  try {
+    const raw = (storage ?? globalThis.localStorage)?.getItem(PREVIEW_PREF_KEY)
+    if (!raw) return {}
+    const v = JSON.parse(raw) as unknown
+    if (typeof v !== 'object' || v === null) return {}
+    const r = v as Record<string, unknown>
+    const out: Partial<Record<DocKind, PreviewMode>> = {}
+    for (const kind of ['markdown', 'mermaid'] as const) {
+      if (r[kind] === 'code' || r[kind] === 'preview') out[kind] = r[kind]
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+export function readPreviewMode(kind: DocKind, storage?: Storage): PreviewMode {
+  return readPreviewPrefs(storage)[kind] ?? 'code'
+}
+
+export function writePreviewMode(kind: DocKind, mode: PreviewMode, storage?: Storage): void {
+  try {
+    const s = storage ?? globalThis.localStorage
+    s?.setItem(PREVIEW_PREF_KEY, JSON.stringify({ ...readPreviewPrefs(s), [kind]: mode }))
+  } catch { /* the memory is a convenience; the toggle works without it */ }
+}
+
+/** `Código | Visualizar` — a real `role="tablist"`, per the design's keyboard rule (§1.3). */
+export function ViewModeToggle({ mode, isMobile, lang, onChange }: {
+  mode: PreviewMode
+  isMobile: boolean
+  lang: 'pt' | 'en'
+  onChange: (mode: PreviewMode) => void
+}) {
+  const pt = lang === 'pt'
+  const items: { key: PreviewMode; label: string }[] = [
+    { key: 'code', label: pt ? 'Código' : 'Code' },
+    { key: 'preview', label: pt ? 'Visualizar' : 'Preview' },
+  ]
+  return (
+    <div
+      role="tablist"
+      aria-label={pt ? 'Modo de exibição' : 'View mode'}
+      style={{
+        display: 'flex', flexShrink: 0, borderRadius: 6, overflow: 'hidden',
+        border: '1px solid var(--border-subtle)',
+      }}
+    >
+      {items.map(item => {
+        const active = item.key === mode
+        return (
+          <button
+            key={item.key}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(item.key)}
+            style={{
+              minHeight: isMobile ? 44 : undefined,
+              padding: isMobile ? '0 10px' : '2px 8px',
+              border: 'none', fontFamily: 'inherit', cursor: 'pointer',
+              fontSize: isMobile ? 12.5 : 11, fontWeight: active ? 700 : 500,
+              background: active ? 'var(--bg-elevated)' : 'transparent',
+              color: active ? 'var(--text-primary)' : 'var(--text-tertiary)',
+            }}
+          >
+            {item.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 export function RepoFileEditor({
   sessionId, path, autosave, onDirtyChange, lang, gotoLine, gotoSeq,
-  harness, composerMounted = true, onMention,
+  harness, composerMounted = true, onMention, onOpenPath,
 }: RepoFileEditorProps) {
   const isMobile = useIsMobile()
   const pt = lang === 'pt'
@@ -741,6 +873,12 @@ export function RepoFileEditor({
   const [mounted, setMounted] = useState(0)
 
   const hostRef = useRef<HTMLDivElement | null>(null)
+  // M6: Monaco's own Ctrl+S command only fires while MONACO is focused, and Monaco is `inert` (never
+  // focusable) throughout preview mode — so a reader sitting in "Visualizar" and pressing Ctrl+S had
+  // focus living NOWHERE, and the keystroke went nowhere with it. This is the preview's own focus
+  // target, given the same command directly (`onKeyDown` below) and focused whenever the toggle
+  // switches TO preview.
+  const previewHostRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null)
   const contentRef = useRef('')
   /**
@@ -792,6 +930,8 @@ export function RepoFileEditor({
   const dirtyRef = useRef(false)
   const requestSaveRef = useRef<(trigger: SaveTrigger) => void>(() => {})
   const options = monacoOptions({ isMobile, theme: monacoThemeFor(themeAttr) })
+  /** The preview's own palette follows the same `<html data-theme>` read, never re-derived. */
+  const codeVariant: CodeThemeVariant = themeAttr === 'light' ? 'light' : 'dark'
   const optionsRef = useRef(options)
   optionsRef.current = options
   const mobileRef = useRef(isMobile)
@@ -816,6 +956,29 @@ export function RepoFileEditor({
    */
   const [hasSelection, setHasSelection] = useState(false)
   const mentionSelectionRef = useRef<() => void>(() => {})
+
+  /**
+   * `docKind` is a property of the PATH alone, so it is computed fresh every render rather than
+   * memoized — cheap, and it never needs to survive past the instance's own lifetime anyway: this
+   * component is keyed by path (see the header), so a file whose kind would change is a remount, not
+   * a re-render.
+   */
+  const docKind = renderableDocKind(path)
+  const [viewMode, setViewMode] = useState<PreviewMode>(
+    () => (docKind === null ? 'code' : readPreviewMode(docKind)),
+  )
+  /**
+   * The live buffer, for the preview alone — `contentRef` already holds it for OTHER reasons
+   * (the initial Monaco model, the value a save reads), but reading a `ref` cannot re-render the
+   * preview when it changes. Seeded on mount and refreshed by the debounced listener below; toggling
+   * TO preview also refreshes it immediately, so flipping the tab does not wait out a stale window.
+   */
+  const [previewText, setPreviewText] = useState('')
+  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (docKind !== null) writePreviewMode(docKind, viewMode)
+  }, [docKind, viewMode])
 
   // --- read the file ---------------------------------------------------------
   // `lang` is NOT a dependency on purpose. It changes only the wording of a refusal, while
@@ -902,13 +1065,25 @@ export function RepoFileEditor({
         // BEFORE `create`, always: a theme name monaco does not know yet resolves to plain `vs` and
         // says nothing about it. Idempotent, so paying for it on every mount costs nothing.
         defineAgentisticsThemes(monaco)
+        configureJsonDiagnostics(monaco)
         model = monaco.editor.createModel(contentRef.current, languageForPath(argsRef.current.path))
         editor = monaco.editor.create(host, { ...optionsRef.current, model })
         editorRef.current = editor
+        // Seeded immediately rather than waiting out the debounce below — a file opened straight
+        // into "Visualizar" (the toggle remembers the last choice PER KIND) must not show blank.
+        setPreviewText(contentRef.current)
 
         editor.onDidChangeModelContent(() => {
           if (applyingDiskRef.current) return
           dispatch({ kind: 'edited' })
+          // The preview re-renders from the live buffer, debounced — a keystroke that restarts a
+          // 250ms timer on every character is what keeps "unsaved edits show" from re-running
+          // `react-markdown`/mermaid on every letter typed.
+          if (previewTimerRef.current !== null) clearTimeout(previewTimerRef.current)
+          previewTimerRef.current = setTimeout(() => {
+            const current = editorRef.current
+            if (current !== null) setPreviewText(editorSaveText(current))
+          }, 250)
         })
         editor.addCommand(
           monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
@@ -1019,6 +1194,10 @@ export function RepoFileEditor({
       editorRef.current = null
       mentionSelectionRef.current = () => {}
       setHasSelection(false)
+      if (previewTimerRef.current !== null) {
+        clearTimeout(previewTimerRef.current)
+        previewTimerRef.current = null
+      }
       editor?.dispose()
       model?.dispose()
     }
@@ -1142,7 +1321,18 @@ export function RepoFileEditor({
     void writeNow(disk.diskMtimeMs, { kind: 'keep-mine' })
   }
 
-  /** "Discard and reload" — their edit goes, the disk version takes its place. */
+  /**
+   * "Discard and reload" — their edit goes, the disk version takes its place.
+   *
+   * **M2 — the preview used to keep showing the DISCARDED buffer.** `onDidChangeModelContent`'s own
+   * preview debounce is deliberately skipped here (`if (applyingDiskRef.current) return`, above) —
+   * this is a PROGRAMMATIC `setValue`, not a keystroke, and the debounce exists to coalesce typing,
+   * not to also cover a conflict resolution. Nothing else refreshed `previewText` for this path, so
+   * a reader sitting in "Visualizar" watched their own (soon-to-be-gone) edit for as long as it took
+   * a further keystroke or a toggle to notice the disk version had replaced it. Same immediate
+   * refresh `handleViewModeChange` already does for the OTHER moment the buffer changes out from
+   * under the debounce — switching INTO preview right after typing.
+   */
   const discardAndReload = () => {
     const disk = diskVersionOf(saveRef.current.phase)
     const editor = editorRef.current
@@ -1150,7 +1340,23 @@ export function RepoFileEditor({
     applyingDiskRef.current = true
     try { editor.setValue(disk.diskContent) } finally { applyingDiskRef.current = false }
     contentRef.current = disk.diskContent
+    setPreviewText(disk.diskContent)
     dispatch({ kind: 'take-disk' })
+  }
+
+  /**
+   * Switching TO preview refreshes the buffer immediately rather than waiting out the 250ms debounce
+   * — a reader pressing "Visualizar" right after typing must not see the text from a moment ago.
+   */
+  const handleViewModeChange = (mode: PreviewMode) => {
+    setViewMode(mode)
+    if (mode === 'preview' && editorRef.current !== null) {
+      setPreviewText(editorSaveText(editorRef.current))
+      // M6: give focus somewhere to live — see `previewHostRef`'s own comment. Deferred a tick so it
+      // runs after the preview region's `inert`/`pointerEvents` flip (driven by the `viewMode` state
+      // update above) actually lands; focusing an inert element is a no-op.
+      setTimeout(() => previewHostRef.current?.focus(), 0)
+    }
   }
 
   if (load.kind === 'loading') {
@@ -1220,6 +1426,9 @@ export function RepoFileEditor({
         onSave={() => requestSave('explicit')}
         hasSelection={hasSelection}
         onMentionSelection={() => mentionSelectionRef.current()}
+        toggle={docKind === null ? undefined : (
+          <ViewModeToggle mode={viewMode} isMobile={isMobile} lang={lang} onChange={handleViewModeChange} />
+        )}
       />
 
       {save.phase.kind === 'stale' && (
@@ -1232,19 +1441,67 @@ export function RepoFileEditor({
         />
       )}
 
-      {/* Monaco does not scroll natively — it intercepts the wheel and moves its own content — so
-          there is no scroll chain to break out of here. `contain` is set anyway, because this is the
-          panel's new scrolling region as far as the rest of the layout is concerned, and the rule
-          this workspace keeps is about the region, not about who implements its scrolling. */}
-      {/* `inert` while the question is open is the other half of the prompt's `aria-modal`: Monaco is
-          a keyboard-reachable region sitting behind it, and a dialog that claims to be modal while
-          Tab walks into the editor underneath is claiming something untrue. The prompt contains Tab
-          among its own controls; this is what makes "nothing behind it" a fact. */}
-      <div
-        ref={hostRef}
-        inert={save.phase.kind === 'conflict'}
-        style={{ flex: 1, minHeight: 0, minWidth: 0, overscrollBehavior: 'contain' }}
-      />
+      {/* BOTH regions stay MOUNTED regardless of which is showing — never a conditional unmount of
+          the Monaco host, which would orphan the editor instance created above. Hidden with opacity +
+          `inert` + no pointer events, matching the rule this codebase already keeps for a component
+          that must survive being hidden (`Layer`'s own header, §1.4 of the design): `display: none`
+          would collapse the host to 0×0, and Monaco's `automaticLayout` measuring a 0×0 box on the
+          way back is exactly the kind of layout race this sidesteps entirely by never doing it. */}
+      <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0 }}>
+        {/* Monaco does not scroll natively — it intercepts the wheel and moves its own content — so
+            there is no scroll chain to break out of here. `contain` is set anyway, because this is
+            the panel's new scrolling region as far as the rest of the layout is concerned, and the
+            rule this workspace keeps is about the region, not about who implements its scrolling. */}
+        {/* `inert` while the question is open is the other half of the prompt's `aria-modal`: Monaco
+            is a keyboard-reachable region sitting behind it, and a dialog that claims to be modal
+            while Tab walks into the editor underneath is claiming something untrue. The prompt
+            contains Tab among its own controls; this is what makes "nothing behind it" a fact. */}
+        <div
+          ref={hostRef}
+          inert={save.phase.kind === 'conflict' || viewMode === 'preview'}
+          style={{
+            position: 'absolute', inset: 0, overscrollBehavior: 'contain',
+            opacity: viewMode === 'preview' ? 0 : 1,
+            pointerEvents: viewMode === 'preview' ? 'none' : 'auto',
+          }}
+        />
+        {docKind !== null && viewMode === 'preview' && (
+          // M6: `inert` while the conflict prompt is open — the preview was the ONE region left out
+          // of the `aria-modal` guarantee the Monaco host already keeps (see that div's own comment):
+          // its links and its scroll stayed keyboard-reachable behind a dialog claiming nothing was.
+          // `tabIndex={-1}` + `onKeyDown` are M6's other half: this is what Ctrl+S has to focus in
+          // preview mode, since Monaco itself is `inert` throughout it — see `previewHostRef`.
+          <div
+            ref={previewHostRef}
+            tabIndex={-1}
+            inert={save.phase.kind === 'conflict'}
+            onKeyDown={ev => {
+              if (!(ev.ctrlKey || ev.metaKey) || ev.key.toLowerCase() !== 's') return
+              ev.preventDefault()
+              requestSaveRef.current('explicit')
+            }}
+            style={{
+              position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden',
+              overscrollBehavior: 'contain', boxSizing: 'border-box',
+              padding: isMobile ? '10px 12px' : '10px 14px',
+              background: 'var(--bg-card)', outline: 'none',
+            }}
+          >
+            {docKind === 'markdown' ? (
+              <MarkdownPreview
+                text={previewText}
+                sessionId={sessionId}
+                docPath={path}
+                lang={lang}
+                theme={codeVariant}
+                onOpenPath={onOpenPath}
+              />
+            ) : (
+              <MermaidDiagram source={previewText} theme={codeVariant} lang={lang} />
+            )}
+          </div>
+        )}
+      </div>
 
       {save.phase.kind === 'conflict' && (
         <RepoConflictPrompt
@@ -1423,7 +1680,7 @@ const TONE_COLOR: Record<SaveTone, string> = {
 }
 
 export function RepoSaveStrip({
-  state, lang, isMobile, autosave, onSave, hasSelection, onMentionSelection,
+  state, lang, isMobile, autosave, onSave, hasSelection, onMentionSelection, toggle,
 }: {
   state: SaveState
   lang: 'pt' | 'en'
@@ -1439,6 +1696,13 @@ export function RepoSaveStrip({
    */
   hasSelection?: boolean
   onMentionSelection?: () => void
+  /**
+   * The `Código | Visualizar` switcher, for a file that has one — `undefined` for every other file,
+   * which is what keeps the strip's own markup (and every existing test against it) unchanged for a
+   * plain code file. Passed as an already-built element rather than a `docKind` prop: the STRIP does
+   * not need to know what renders a preview, only that this component has a control to show.
+   */
+  toggle?: ReactNode
 }) {
   const pt = lang === 'pt'
   const status = saveStatus(state, lang, autosave)
@@ -1472,6 +1736,7 @@ export function RepoSaveStrip({
       >
         {status.text}
       </span>
+      {toggle}
       {showMention && (
         <button
           type="button"

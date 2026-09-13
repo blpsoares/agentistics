@@ -28,9 +28,9 @@ import {
   AUTOSAVE_FAILURE_LIMIT, autosaveStopped, binaryText, diskVersionOf, focusTrapTarget,
   initialSaveState, isDirty, isMidRetarget, loadStateFor, loadStateForRender,
   mediaFailedText, mediaTooBigText,
-  monacoOptions, monacoThemeFor, nextSaveState,
+  monacoOptions, monacoThemeFor, nextSaveState, readPreviewMode, renderableDocKind,
   RepoConflictPrompt, RepoMediaView, RepoSaveStrip, RepoStaleBanner,
-  saveButtonState, saveEventFor, saveGate, saveStatus,
+  saveButtonState, saveEventFor, saveGate, saveStatus, ViewModeToggle, writePreviewMode,
   type LoadState, type SaveEvent, type SaveState,
 } from './RepoFileEditor'
 import type { ReadFileResult, WriteFileResult } from '../../lib/repoApi'
@@ -950,6 +950,83 @@ describe('the save strip', () => {
     // With autosave off there is nothing to say: it was never running.
     expect(strip(typed, 'en', false, false)).not.toContain('Autosave')
   })
+
+  test('the strip carries no toggle for a plain code file', () => {
+    // `toggle` is `undefined` by default — every assertion above already renders without it, which
+    // is the point: this is what proves the toggle is additive rather than a rewritten strip.
+    expect(strip(DIRTY)).not.toContain('role="tablist"')
+  })
+
+  test('a toggle handed to the strip renders alongside the existing controls', () => {
+    const html = renderToStaticMarkup(
+      <RepoSaveStrip
+        state={DIRTY} lang="en" isMobile={false} autosave={false} onSave={noop}
+        toggle={<ViewModeToggle mode="code" isMobile={false} lang="en" onChange={noop} />}
+      />,
+    )
+    expect(html).toContain('role="tablist"')
+    expect(html).toContain('Ctrl+S')
+  })
+})
+
+describe('renderableDocKind — which files the toggle appears on', () => {
+  test('markdown, by extension', () => {
+    for (const p of ['README.md', 'docs/guide.mdx', 'notes.markdown', 'AGENTS.md', 'SKILL.md']) {
+      expect(renderableDocKind(p), p).toBe('markdown')
+    }
+  })
+  test('markdown, by the two common extensionless names', () => {
+    expect(renderableDocKind('README')).toBe('markdown')
+    expect(renderableDocKind('CHANGELOG')).toBe('markdown')
+    expect(renderableDocKind('readme')).toBe('markdown')
+  })
+  test('mermaid, by extension', () => {
+    expect(renderableDocKind('diagram.mmd')).toBe('mermaid')
+    expect(renderableDocKind('flow.mermaid')).toBe('mermaid')
+  })
+  test('everything else has no preview at all', () => {
+    for (const p of ['index.ts', 'Dockerfile', 'notes.txt', 'LICENSE', 'package.json']) {
+      expect(renderableDocKind(p), p).toBeNull()
+    }
+  })
+})
+
+describe('the preview mode is remembered per doc kind, and survives a hostile localStorage', () => {
+  function memory(): Storage {
+    const map = new Map<string, string>()
+    return {
+      getItem: (k: string) => map.get(k) ?? null,
+      setItem: (k: string, v: string) => { map.set(k, v) },
+      removeItem: (k: string) => { map.delete(k) },
+      clear: () => map.clear(),
+      key: () => null,
+      get length() { return map.size },
+    } as unknown as Storage
+  }
+
+  test('absent reads as code', () => {
+    expect(readPreviewMode('markdown', memory())).toBe('code')
+  })
+
+  test('round-trips, and the two kinds do not share a slot', () => {
+    const s = memory()
+    writePreviewMode('markdown', 'preview', s)
+    expect(readPreviewMode('markdown', s)).toBe('preview')
+    expect(readPreviewMode('mermaid', s)).toBe('code')
+    writePreviewMode('mermaid', 'preview', s)
+    expect(readPreviewMode('markdown', s)).toBe('preview')
+    expect(readPreviewMode('mermaid', s)).toBe('preview')
+  })
+
+  test('a browser blocking site data costs the memory, never the toggle', () => {
+    const hostile = {
+      getItem() { throw new Error('blocked') },
+      setItem() { throw new Error('blocked') },
+    } as unknown as Storage
+    expect(() => readPreviewMode('markdown', hostile)).not.toThrow()
+    expect(readPreviewMode('markdown', hostile)).toBe('code')
+    expect(() => writePreviewMode('markdown', 'preview', hostile)).not.toThrow()
+  })
 })
 
 describe('the stale banner', () => {
@@ -1551,6 +1628,43 @@ describe('the save wiring, asserted over the source', () => {
     expect(onKey).toContain('Escape')
     expect(onKey).toContain('ev.stopPropagation()')
     // `includes` again, for its neighbour's reason: a failure here prints `false`, not 40 KB of module.
+    // The condition grew a second clause (the preview toggle also hides Monaco with `inert`), so this
+    // now matches the WHOLE expression rather than the old exact string — still real code, not a
+    // comment: `inert=` is a JSX attribute, and this module's comments never write JSX.
+    expect(src.includes("inert={save.phase.kind === 'conflict' || viewMode === 'preview'}")).toBe(true)
+  })
+
+  // M6: the preview region used to carry NO `inert` of its own — reachable behind the conflict
+  // prompt exactly when the Monaco host (correctly `inert` in that same state) was not showing.
+  test('the preview region is inert while the conflict prompt is open too (M6)', () => {
     expect(src.includes("inert={save.phase.kind === 'conflict'}")).toBe(true)
+  })
+
+  // M6: Ctrl+S in preview mode used to have nowhere to land — Monaco's own command only fires while
+  // MONACO is focused, and Monaco is `inert` throughout preview mode.
+  test('the preview region has its own Ctrl+S, since Monaco cannot be focused to receive one (M6)', () => {
+    expect(src).toContain("ev.key.toLowerCase() !== 's'")
+    expect(src.includes("requestSaveRef.current('explicit')")).toBe(true)
+  })
+
+  // M2: `discardAndReload` used to leave the preview showing the DISCARDED buffer — the debounce
+  // that would otherwise refresh it is deliberately skipped for this programmatic `setValue`
+  // (`applyingDiskRef`), so nothing else updated `previewText` for this one path.
+  test('discarding and reloading refreshes the preview immediately, not just the model (M2)', () => {
+    const fn = src.slice(src.indexOf('const discardAndReload ='), src.indexOf('const handleViewModeChange ='))
+    expect(fn).toContain('setPreviewText(disk.diskContent)')
+    // Ordered after the model is actually replaced — a preview refreshed from the STALE
+    // `contentRef`/model would show the buffer this discard is meant to replace.
+    expect(fn.indexOf('editor.setValue(disk.diskContent)')).toBeLessThan(fn.indexOf('setPreviewText(disk.diskContent)'))
+  })
+
+  // I3: the JSON diagnostics relaxation has to run before the FIRST model is ever created, or the
+  // very first tsconfig.json/*.jsonc opened this session still shows the old squiggles until a
+  // second file triggers it.
+  test('JSON diagnostics are configured before the first model is created (I3)', () => {
+    const mount = src.slice(src.indexOf("void import('../../lib/monacoSetup')"), src.indexOf('setMounted(n => n + 1)'))
+    expect(mount).toContain('configureJsonDiagnostics(monaco)')
+    expect(mount.indexOf('configureJsonDiagnostics(monaco)'))
+      .toBeLessThan(mount.indexOf('monaco.editor.createModel('))
   })
 })
