@@ -40,7 +40,6 @@ import { ProjectsList } from './components/ProjectsList'
 import { FiltersBar } from './components/FiltersBar'
 import { NotificationToasts } from './components/NotificationToasts'
 import { BetaTag } from './components/BetaTag'
-import { NewTag } from './components/NewTag'
 import { KeyboardProbe, keyboardProbeOn } from './components/KeyboardProbe'
 import { shouldResetDocumentScroll } from './lib/viewportReset'
 import { MagnifierLayer } from './components/a11y/MagnifierLayer'
@@ -72,7 +71,7 @@ import { Login } from './components/Login'
 import { ModeSwitch } from './components/nav/ModeSwitch'
 import { TopBar } from './components/nav/TopBar'
 import { COST_BASIS_W, FULL_BAR_W, MIN_BAR_W, headerFit, stripPadding } from './lib/headerFit'
-import { openArtifacts, toggleArtifacts, useArtifacts } from './lib/artifactsStore'
+import { openArtifacts, toggleArtifacts, useArtifacts, useStudioShown } from './lib/artifactsStore'
 import { SessionsAside } from './components/nav/SessionsAside'
 import { SessionsRail } from './components/nav/SessionsRail'
 import { getPinnedIds } from './lib/pinnedSessions'
@@ -1883,6 +1882,26 @@ export default function AppLayout() {
   // The compensating padding is not space the bar may draw in, so it is taken off first.
   /** The artifacts panel's open flag and count — see `artifactsStore` for why it is not a prop. */
   const artifacts = useArtifacts()
+  /**
+   * THE STUDIO BUTTON'S OWN STATE (§2 of the slots/references design). `studioOn` is
+   * "on screen in ANY slot", published by `ArtifactsAside` — see `artifactsStore.ts`'s comment on
+   * `useStudioShown` for why this reads from a flag rather than from `artifacts` above (the Studio is
+   * a MODE of that same panel today, not a value this store already carried).
+   *
+   * `studioSeen` replaces the button's old `NewTag`: a corner DOT rather than a word, so the button
+   * is the same width whether or not it has been pressed yet, cleared for good the first time it
+   * opens. Guarded like every other `localStorage` flag in this file — a private window or a wiped
+   * store just shows the dot every time, which is the safer of the two wrong answers.
+   */
+  const studioOn = useStudioShown()
+  const [studioSeen, setStudioSeen] = useState(() => {
+    try { return localStorage.getItem('agentistics.studio.seen') === '1' } catch { return false }
+  })
+  const markStudioSeen = () => {
+    if (studioSeen) return
+    setStudioSeen(true)
+    try { localStorage.setItem('agentistics.studio.seen', '1') } catch { /* private mode */ }
+  }
 
   /**
    * Active sessions only — the fleet's own dimension (see `FiltersBar`'s doc comment on
@@ -3276,30 +3295,53 @@ export default function AppLayout() {
           narrowed by one where it is published, because the whole `/api/fleet` prefix is refused on
           a central and a term each surface has to remember is a term the next one forgets.
 
-          It carries BOTH marks. `beta` is the caveat every other entry to this feature wears, and
-          `new` is why a reader should look at a button that was not on this row yesterday — two
-          different statements, so two marks (see `NewTag`). The same pair is on the mobile entry in
-          `SessionsPage`'s session menu: a feature marked on one nav and not the other teaches the
-          reader that the unmarked one is something else. */}
+          IT IS "ONLY BETTER" NOW, PER THE BRIEF: no `BetaTag`/`NewTag` riding inside the button
+          itself. `beta` moved into the `title` tooltip — it still says so, just not in a badge that
+          cost width on every render — and stays on the Studio's own bar where it already was (see
+          `StudioBar` in `Studio.tsx`). `new` became a DOT on the icon's corner rather than a word, so
+          the button is the same width whether or not it has fired yet, and it clears FOR GOOD the
+          first time the Studio opens (`studioSeen`). The same pair of cuts is on the mobile entry in
+          `SessionsPage`'s session menu — a feature marked on one nav and not the other teaches the
+          reader that the unmarked one is something else.
+
+          PRESSED means the Studio is ON SCREEN, in whichever slot is showing it — not merely that
+          this button was the one that opened it. `studioOn` (`useStudioShown`) is what makes that
+          true even when the aside's own back control put the Studio away again; see
+          `artifactsStore.ts` for why that flag exists at all before W2-A's slots land. The orange
+          treatment on `true` is the "Reabrir N sessões que caíram" button's own tokens
+          (`SessionsAside.tsx`), reused rather than re-invented. */}
       {selectedFleetSession && appCtx.editorEnabled && (
         <button
-          onClick={() => openArtifacts('studio')}
+          onClick={() => { openArtifacts('studio'); markStudioSeen() }}
+          aria-pressed={studioOn}
           title={lang === 'pt'
-            ? 'Agentistics Studio — os arquivos desta sessão em árvore, com busca e editor'
-            : 'Agentistics Studio — this session’s files as a tree, with search and an editor'}
+            ? 'Agentistics Studio (beta) — os arquivos desta sessão em árvore, com busca e editor'
+            : 'Agentistics Studio (beta) — this session’s files as a tree, with search and an editor'}
           style={{
             display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
             height: 30, padding: '0 9px', borderRadius: 9, cursor: 'pointer',
-            border: '1px solid var(--border-subtle)',
-            background: 'var(--bg-elevated)', color: 'var(--text-secondary)',
+            border: '1px solid ' + (studioOn ? 'var(--anthropic-orange)' : 'var(--border-subtle)'),
+            background: studioOn ? 'rgba(232,146,90,0.08)' : 'var(--bg-elevated)',
+            color: studioOn ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
             fontFamily: 'inherit', fontSize: 12,
           }}
         >
-          {/* `FolderTree`, the glyph the strip entry already wears — one feature, one icon. */}
-          <FolderTree size={14} />
+          {/* `FolderTree`, the glyph the strip entry already wears — one feature, one icon. The dot
+              sits on ITS corner rather than the button's, so it reads as "this is new" and not as an
+              unrelated notification badge on the label beside it. */}
+          <span style={{ position: 'relative', display: 'flex' }}>
+            <FolderTree size={14} />
+            {!studioSeen && (
+              <span
+                aria-hidden="true"
+                style={{
+                  position: 'absolute', top: -2, right: -2, width: 6, height: 6,
+                  borderRadius: '50%', background: 'var(--anthropic-orange)',
+                }}
+              />
+            )}
+          </span>
           <span>Studio</span>
-          <BetaTag what={lang === 'pt' ? 'O Studio' : 'The Studio'} />
-          <NewTag lang={lang === 'pt' ? 'pt' : 'en'} />
         </button>
       )}
 

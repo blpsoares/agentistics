@@ -14,7 +14,8 @@ import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MIN_UI_CONTRAST, contrastRatio } from '../../lib/monacoTheme'
 import {
-  FILE_ICON_IDS, FileIcon, ICON_GROUNDS, ICON_HUES, fileIconId, type FileIconId,
+  FILE_ICON_IDS, FileIcon, ICON_GROUNDS, ICON_GROUNDS_ELEVATED, ICON_HUES, fileIconHueOnActiveTab,
+  fileIconId, type FileIconId,
 } from './fileIcon'
 
 describe('fileIconId', () => {
@@ -221,5 +222,34 @@ describe('every id draws something', () => {
           .toBeGreaterThanOrEqual(MIN_UI_CONTRAST)
       }
     }
+  })
+
+  /**
+   * **`TabStrip`'s ACTIVE tab sits on `--bg-elevated`, and `ICON_HUES` was never proven readable
+   * there.** Planting the defect this guards — reverting `fileIconHueOnActiveTab('react')` to
+   * `ICON_HUES.react` (`#2699b3`) — drops the light-elevated ratio to 2.96:1 and fails this test;
+   * restoring the lifted `#2492ab` passes it again.
+   */
+  test('the active-tab hue clears the shape floor on every ground, base and elevated alike', () => {
+    for (const id of FILE_ICON_IDS) {
+      const hue = fileIconHueOnActiveTab(id)
+      if (hue === undefined) continue // the two folder states and the fallback draw in currentColor
+      for (const ground of [...ICON_GROUNDS, ...ICON_GROUNDS_ELEVATED]) {
+        expect(contrastRatio(hue, ground), `${id} ${hue} on ${ground}`)
+          .toBeGreaterThanOrEqual(MIN_UI_CONTRAST)
+      }
+    }
+  })
+
+  test('a tab icon can be drawn in the active-tab hue without disturbing the tree default', () => {
+    const active = renderToStaticMarkup(
+      <FileIcon name=".env" kind="file" size={14} hue={fileIconHueOnActiveTab('env')} />,
+    )
+    expect(active).toContain('#a77f21')
+    // The tree (and an inactive tab) still gets the ORIGINAL hue when no override is passed —
+    // this refactor threading `hue` through every drawn glyph must not change a single default.
+    const inactive = renderToStaticMarkup(<FileIcon name=".env" kind="file" size={14} />)
+    expect(inactive).toContain(ICON_HUES.env!)
+    expect(inactive).not.toContain('#a77f21')
   })
 })

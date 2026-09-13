@@ -1,10 +1,11 @@
 import { test, expect, beforeEach } from 'bun:test'
 import {
-  closeArtifacts, getArtifacts, openArtifacts, resetArtifacts, setArtifactCount, toggleArtifacts,
+  closeArtifacts, getArtifacts, getStudioShown, openArtifacts, resetArtifacts, resetStudioShown,
+  setArtifactCount, setStudioShown, toggleArtifacts,
 } from './artifactsStore'
 import { answerUnsaved, getUnsaved, reportUnsaved, resetUnsaved } from './unsavedBuffers'
 
-beforeEach(() => { resetArtifacts(); resetUnsaved() })
+beforeEach(() => { resetArtifacts(); resetUnsaved(); resetStudioShown() })
 
 test('it starts knowing nothing — no session, no count, shut', () => {
   expect(getArtifacts()).toEqual({ sessionId: null, open: false, count: 0, dismissed: false, tabRequest: null })
@@ -130,4 +131,28 @@ test('with nothing unsaved a close is immediate and asks nothing', () => {
   closeArtifacts()
   expect(getArtifacts().open).toBe(false)
   expect(getUnsaved().question).toBeNull()
+})
+
+/**
+ * `studioShown` — the header button's on-state (App.tsx §2 of the slots/references design), until
+ * W2-A's slots replace this whole mechanism. It is deliberately a SEPARATE pair of primitives from
+ * `ArtifactsState` above — see `artifactsStore.ts`'s own comment on why.
+ */
+test('it starts off, and setting it to what it already is changes nothing', () => {
+  expect(getStudioShown()).toBe(false)
+  setStudioShown(false)
+  expect(getStudioShown()).toBe(false)
+})
+
+test('the aside publishes it on, and off again once the Studio is no longer shown', () => {
+  setStudioShown(true)
+  expect(getStudioShown()).toBe(true)
+  setStudioShown(false)
+  expect(getStudioShown()).toBe(false)
+})
+
+test('resetting is what a fresh test (and an unmounted aside) both need', () => {
+  setStudioShown(true)
+  resetStudioShown()
+  expect(getStudioShown()).toBe(false)
 })

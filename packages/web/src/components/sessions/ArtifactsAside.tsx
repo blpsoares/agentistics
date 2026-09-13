@@ -42,6 +42,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { setStudioShown } from '../../lib/artifactsStore'
 import { asideCache, asideKey } from '../../lib/asideCache'
 import { focusMissNotice, isFocusedRow, rowsCarry, ROW_FLASH } from '../../lib/noteFocus'
 import { Activity, BarChart3, Bot, Brain, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, ExternalLink, Eye, FileEdit, FileText, FolderTree, GitBranch, GitPullRequest, Image, LayoutGrid, Loader, PanelRightClose, Pencil, Plug, Plus, Send, Sparkles, Terminal, Trash2, Workflow, X } from 'lucide-react'
@@ -456,6 +457,16 @@ export function ArtifactsAside({
    * panel falls back to its own chrome rather than drawing a frame with nothing behind it.
    */
   const inStudio = studio && editorEnabled === true
+  /**
+   * PUBLISHED for the header's Studio button (`App.tsx`) — see `artifactsStore.ts`'s own comment on
+   * why this pair exists at all and what replaces it once W2-A's slots land. Two effects rather than
+   * one: syncing on every `inStudio` change is what keeps the button's pressed state live, and the
+   * unmount-only cleanup is what stops it reading "on" forever once this panel (and the Studio inside
+   * it) is gone — closing the aside, or navigating away, unmounts this component without `inStudio`
+   * ever having a chance to become `false` on its own.
+   */
+  useEffect(() => { setStudioShown(inStudio) }, [inStudio])
+  useEffect(() => () => setStudioShown(false), [])
 
   /**
    * Honour a requested tab, once per request.
