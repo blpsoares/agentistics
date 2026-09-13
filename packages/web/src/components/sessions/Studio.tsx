@@ -95,15 +95,20 @@
 
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
-  AlertTriangle, ArrowLeft, Check, FilePlus, Loader, PanelLeftClose, PanelLeftOpen,
-  Plus, Search, X,
+  AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, FilePlus, FolderPlus,
+  Loader, PanelLeftClose, PanelLeftOpen, Plus, Search, Undo2, X,
 } from 'lucide-react'
 import {
-  applyChildren, applyError, closeTab, makeRootNode, markDirty, openTab,
+  applyChildren, applyError, baseNameOf, canMoveInto, closeTab, destinationPath, flattenVisible,
+  isSelfOrDescendant, makeRootNode, markDirty, openTab, parentOf, retargetOpenPaths, retargetPath,
   type OpenTab, type TreeNode,
 } from '../../lib/repoTreeModel'
-import { createRepoEntry, fetchTree, type RepoLang, type TreeListResult } from '../../lib/repoApi'
+import {
+  createRepoEntry, deleteRepoEntry, fetchTree, renameRepoEntry, type RepoLang, type TreeListResult,
+} from '../../lib/repoApi'
 import { repoFailureText } from '../../lib/repoErrorText'
+import { copyText } from '../../lib/clipboard'
+import { overlayPadding } from '../../lib/mobileOverlay'
 import { liveEvents, type LiveEvent, type LiveTurn } from '../../lib/artifactTabs'
 import { clearUnsaved, reportUnsaved } from '../../lib/unsavedBuffers'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -112,7 +117,7 @@ import { BetaTag } from '../BetaTag'
 import { FileIcon, fileIconHueOnActiveTab, fileIconId } from './fileIcon'
 import { RepoFileEditor } from './RepoFileEditor'
 import { RepoSearchView } from './RepoSearchView'
-import { RepoTreeView, treeViewState } from './RepoTreeView'
+import { RepoTreeView, toggleDirectory, treeViewState, type TreeOps } from './RepoTreeView'
 import { RepoNote } from './repoNote'
 
 export interface StudioProps {
@@ -150,8 +155,28 @@ type View = 'tree' | 'search'
  */
 interface GoTo { path: string; line: number; seq: number }
 
-/** The "new file" row: what has been typed, whether a request is out, and the last refusal. */
-interface Creating { name: string; busy: boolean; error: string | null }
+/**
+ * The "new entry" row: what has been typed, whether a request is out, and the last refusal.
+ *
+ * `parentPath` and `kind` are what let ONE inline row serve every create, not only the toolbar's
+ * root-level one: the context menu's "Novo arquivo"/"Nova pasta" on a deep folder set these to that
+ * folder and `'file'`/`'dir'`, and `NewFileRow` shows the destination in its own label rather than
+ * this panel growing a second create slot positioned at that folder's row — a cheaper, equally
+ * honest answer given there is already exactly one place on screen this question is asked from.
+ */
+interface Creating { parentPath: string; kind: 'file' | 'dir'; name: string; busy: boolean; error: string | null }
+
+/** The row mid-rename: its current text, whether a request is out, and the last refusal. */
+interface Renaming { path: string; kind: 'file' | 'dir'; name: string; busy: boolean; error: string | null }
+
+/** The entry pending a delete confirmation. */
+interface PendingDelete { path: string; kind: 'file' | 'dir' }
+
+/** The entry the "Mover para…" picker is choosing a destination for. */
+interface Moving { path: string; kind: 'file' | 'dir' }
+
+/** One ephemeral, auto-dismissing message — a move's undo offer, or a copy's quiet confirmation. */
+interface ToastState { id: number; text: string; action?: { label: string; onClick: () => void } }
 
 // --- the rules, as functions ---------------------------------------------------------------------
 //
@@ -375,9 +400,36 @@ function storeTreeWidth(width: number): void {
  * path that used to drop the refusal silently now cannot drift from the one that never did.
  */
 export function applyRootRefresh(prev: TreeNode, res: TreeListResult, lang: RepoLang): TreeNode {
+  return applyDirRefresh(prev, '', res, lang)
+}
+
+/**
+ * `applyRootRefresh`, generalized to a directory other than the root.
+ *
+ * A rename, a move or a delete can touch TWO directories at once — a move's old parent and its new
+ * one — and each is re-read and applied through this exact function, so a refusal on either one
+ * renders through the SAME error state `RepoTreeView` already draws, never a second wording table.
+ * It only ever UPDATES a node that is already in the tree: `applyChildren`/`applyError` walk from
+ * the root looking for `path` and leave the tree untouched when they do not find it, which is
+ * harmless here because every caller only ever refreshes a directory that was already visible — the
+ * parent a moved/renamed/deleted entry was filed under, or a destination the picker listed, both of
+ * which can only appear in the tree once they have already been read at least once.
+ */
+export function applyDirRefresh(prev: TreeNode, path: string, res: TreeListResult, lang: RepoLang): TreeNode {
   return res.ok
-    ? applyChildren(prev, '', res.children)
-    : applyError(prev, '', repoFailureText(res, lang))
+    ? applyChildren(prev, path, res.children)
+    : applyError(prev, path, repoFailureText(res, lang))
+}
+
+/**
+ * Does ANY open tab under `path` (the entry itself, or something inside it) carry unsaved text?
+ *
+ * Read BEFORE a delete is confirmed, so the confirmation can say so — deleting a file is not the
+ * one place this feature is allowed to drop an edit silently; asking once, with the fact stated, is
+ * the same posture `pendingClose`'s own dialog already takes for a single tab.
+ */
+export function hasDirtyUnder(tabs: readonly OpenTab[], path: string): boolean {
+  return tabs.some(t => t.dirty && isSelfOrDescendant(t.path, path))
 }
 
 /**
@@ -443,6 +495,10 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
   const currentSession = useRef(sessionId)
   const [pendingClose, setPendingClose] = useState<string | null>(null)
   const [creating, setCreating] = useState<Creating | null>(null)
+  const [renaming, setRenaming] = useState<Renaming | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
+  const [moving, setMoving] = useState<Moving | null>(null)
+  const [toast, setToast] = useState<ToastState | null>(null)
   const [treeWidth, setTreeWidth] = useState<number>(readTreeWidth)
   const [treeCollapsed, setTreeCollapsed] = useState(false)
 
@@ -493,6 +549,10 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
     setGoTo(null)
     setPendingClose(null)
     setCreating(null)
+    setRenaming(null)
+    setPendingDelete(null)
+    setMoving(null)
+    setToast(null)
     setView('tree')
     void fetchTree(sessionId, '', lang).then(res => {
       if (cancelled) return
@@ -530,31 +590,165 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
   }
 
   const submitCreate = async (name: string) => {
-    const path = name.trim()
-    if (path === '') return
+    if (creating === null) return
+    const base = name.trim()
+    if (base === '') return
+    const { parentPath, kind } = creating
+    const path = parentPath === '' ? base : `${parentPath}/${base}`
     const forSession = sessionId
-    setCreating({ name, busy: true, error: null })
-    const out = await createRepoEntry(sessionId, path, 'file', lang)
+    setCreating({ parentPath, kind, name, busy: true, error: null })
+    const out = await createRepoEntry(sessionId, path, kind, lang)
     // The reader may have left this session while the request was out — see `sessionMovedOn`. A late
     // answer from a session nobody is looking at any more touches nothing: not the create row (which
     // the reset effect already put back to `null`), not the tree, and no tab is opened under a root
     // that is no longer on screen.
     if (sessionMovedOn(forSession, currentSession.current)) return
     if (!out.ok) {
-      setCreating({ name, busy: false, error: repoFailureText(out, lang) })
+      setCreating({ parentPath, kind, name, busy: false, error: repoFailureText(out, lang) })
       return
     }
     setCreating(null)
-    // Re-read the root rather than inserting the row here: the real listing is gitignore-aware and
+    // Re-read the PARENT rather than inserting the row here: the real listing is gitignore-aware and
     // sorted by the server, and a second implementation of that is a second thing to disagree with
     // what was actually created.
-    const res = await fetchTree(forSession, '', lang)
+    const res = await fetchTree(forSession, parentPath, lang)
     if (sessionMovedOn(forSession, currentSession.current)) return
-    // The create itself already succeeded, so the file is opened either way — what the re-read
+    // The create itself already succeeded, so a new FILE is opened either way — what the re-read
     // decides is whether the TREE shows the fresh listing or a visible refusal. Leaving it silently
     // stale (the old defect) would mean the new file exists on disk and nowhere on screen.
-    setTree(prev => applyRootRefresh(prev, res, lang))
-    openFile(path)
+    setTree(prev => applyDirRefresh(prev, parentPath, res, lang))
+    if (kind === 'file') openFile(path)
+  }
+
+  // --- rename --------------------------------------------------------------------------------------
+
+  const startRename = (path: string, kind: 'file' | 'dir') => {
+    setRenaming({ path, kind, name: baseNameOf(path), busy: false, error: null })
+  }
+  const changeRename = (name: string) => {
+    setRenaming(r => (r === null ? r : { ...r, name }))
+  }
+  const cancelRename = () => setRenaming(null)
+
+  const commitRename = async () => {
+    if (renaming === null) return
+    const fromPath = renaming.path
+    const newBase = renaming.name.trim()
+    // Nothing typed, or the SAME name back — a no-op rather than an `already-exists` round trip.
+    if (newBase === '' || newBase === baseNameOf(fromPath)) { setRenaming(null); return }
+    const dir = parentOf(fromPath)
+    const toPath = dir === '' ? newBase : `${dir}/${newBase}`
+    const forSession = sessionId
+    setRenaming({ ...renaming, busy: true, error: null })
+    const out = await renameRepoEntry(forSession, fromPath, toPath, lang)
+    if (sessionMovedOn(forSession, currentSession.current)) return
+    if (!out.ok) {
+      setRenaming({ ...renaming, busy: false, error: repoFailureText(out, lang) })
+      return
+    }
+    setRenaming(null)
+    retarget(fromPath, toPath)
+    await refreshDirs([dir])
+  }
+
+  // --- delete --------------------------------------------------------------------------------------
+
+  const requestDelete = (path: string, kind: 'file' | 'dir') => setPendingDelete({ path, kind })
+  const cancelDelete = () => setPendingDelete(null)
+
+  const confirmDelete = async () => {
+    if (pendingDelete === null) return
+    const { path, kind } = pendingDelete
+    setPendingDelete(null)
+    const forSession = sessionId
+    const out = await deleteRepoEntry(forSession, path, kind === 'dir', lang)
+    if (sessionMovedOn(forSession, currentSession.current)) return
+    if (!out.ok) { showToast(repoFailureText(out, lang)); return }
+    // Every open tab the deleted entry was carrying — itself, or anything under it — is gone on
+    // disk, so it closes here too: a dirty one has already been warned about in the confirm dialog's
+    // own message (see `hasDirtyUnder`), not asked about a second time.
+    setTabs(prev => prev.filter(t => !isSelfOrDescendant(t.path, path)))
+    setActivePath(prev => (prev !== null && isSelfOrDescendant(prev, path) ? null : prev))
+    await refreshDirs([parentOf(path)])
+  }
+
+  // --- move (drag, or the "Mover para…" picker) -----------------------------------------------------
+
+  const openMovePicker = (path: string, kind: 'file' | 'dir') => setMoving({ path, kind })
+  const closeMovePicker = () => setMoving(null)
+
+  /** One rename under the hood, shared by a drag-drop and the picker's own "Mover aqui". */
+  const performMove = async (itemPath: string, itemKind: 'file' | 'dir', targetDir: string) => {
+    if (!canMoveInto(itemPath, targetDir)) return
+    const fromPath = itemPath
+    const toPath = destinationPath(itemPath, targetDir)
+    const forSession = sessionId
+    const out = await renameRepoEntry(forSession, fromPath, toPath, lang)
+    if (sessionMovedOn(forSession, currentSession.current)) return
+    if (!out.ok) { showToast(repoFailureText(out, lang)); return }
+    retarget(fromPath, toPath)
+    await refreshDirs([parentOf(fromPath), targetDir])
+    const destLabel = toPath.slice(0, toPath.length - baseNameOf(toPath).length)
+    showToast(
+      pt ? `Movido para ${destLabel === '' ? '/' : destLabel}` : `Moved to ${destLabel === '' ? '/' : destLabel}`,
+      { label: pt ? 'Desfazer' : 'Undo', onClick: () => { void undoMove(fromPath, toPath, itemKind) } },
+    )
+  }
+
+  const undoMove = async (originalPath: string, currentPath: string, kind: 'file' | 'dir') => {
+    const forSession = sessionId
+    const out = await renameRepoEntry(forSession, currentPath, originalPath, lang)
+    if (sessionMovedOn(forSession, currentSession.current)) return
+    if (!out.ok) {
+      showToast(pt ? `Não foi possível desfazer: ${repoFailureText(out, lang)}` : `Could not undo: ${repoFailureText(out, lang)}`)
+      return
+    }
+    retarget(currentPath, originalPath)
+    await refreshDirs([parentOf(currentPath), parentOf(originalPath)])
+    void kind // kept for symmetry with performMove's signature; nothing here reads it
+  }
+
+  // --- copy ------------------------------------------------------------------------------------------
+
+  const copyRelativePath = (path: string) => {
+    void copyText(path).then(ok => {
+      showToast(ok ? (pt ? 'Caminho copiado' : 'Path copied') : (pt ? 'Não foi possível copiar' : 'Could not copy'))
+    })
+  }
+  const copyPath = (path: string) => {
+    // No absolute filesystem path reaches this panel (the server never exposes the session's real
+    // directory to the client — see `repoApi.ts`'s own header), so this is the same relative path
+    // in a form meant to be pasted somewhere that reads a LITERAL relative reference (a shell, an
+    // import statement) rather than the bare name this product's own tree already shows.
+    void copyText(`./${path}`).then(ok => {
+      showToast(ok ? (pt ? 'Caminho copiado' : 'Path copied') : (pt ? 'Não foi possível copiar' : 'Could not copy'))
+    })
+  }
+
+  // --- the tree-operations toast ----------------------------------------------------------------------
+
+  const toastSeq = useRef(0)
+  const showToast = (text: string, action?: { label: string; onClick: () => void }) => {
+    const id = ++toastSeq.current
+    setToast({ id, text, action })
+    setTimeout(() => setToast(t => (t?.id === id ? null : t)), action !== undefined ? 6000 : 2500)
+  }
+
+  // --- refreshing exactly the directories a tree operation could have changed ------------------------
+
+  const refreshDirs = async (dirs: readonly string[]) => {
+    const forSession = sessionId
+    for (const dir of new Set(dirs)) {
+      const res = await fetchTree(forSession, dir, lang)
+      if (sessionMovedOn(forSession, currentSession.current)) return
+      setTree(prev => applyDirRefresh(prev, dir, res, lang))
+    }
+  }
+
+  /** Re-key the open tabs and the active path the same way the entry on disk was just re-keyed. */
+  const retarget = (from: string, to: string) => {
+    setTabs(prev => retargetOpenPaths(prev, from, to))
+    setActivePath(prev => (prev === null ? null : retargetPath(prev, from, to) ?? prev))
   }
 
   const agent = agentActivity(liveEvents(turns), activePath)
@@ -643,7 +837,7 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
               isMobile={isMobile}
               lang={lang}
               onSearch={() => setView('search')}
-              onNew={() => setCreating({ name: '', busy: false, error: null })}
+              onNew={kind => setCreating({ parentPath: '', kind, name: '', busy: false, error: null })}
             />
           )}
 
@@ -683,6 +877,22 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
                 onTreeChange={setTree}
                 onOpenFile={openFile}
                 lang={lang}
+                ops={{
+                  renaming,
+                  onRenameStart: startRename,
+                  onRenameChange: changeRename,
+                  onRenameCommit: () => { void commitRename() },
+                  onRenameCancel: cancelRename,
+                  onNewAt: (parentPath, kind) => setCreating({ parentPath, kind, name: '', busy: false, error: null }),
+                  onDelete: requestDelete,
+                  onMovePicker: openMovePicker,
+                  onCopyRelativePath: copyRelativePath,
+                  onCopyPath: copyPath,
+                  onDropMove: (itemPath, itemKind, targetDir) => { void performMove(itemPath, itemKind, targetDir) },
+                  // `onMention` is intentionally absent — §6 (Mencionar na conversa) belongs to a
+                  // later package; see `TreeContextMenu.tsx`'s own header for why absence removes
+                  // the row rather than greying it.
+                }}
               />
             </div>
           )}
@@ -691,6 +901,7 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
           <EditorStack
             sessionId={sessionId}
             paths={mounted}
+            keys={mounted.map(p => tabs.find(t => t.path === p)?.id ?? p)}
             activePath={activePath}
             autosave={autosave}
             lang={lang}
@@ -711,8 +922,47 @@ export function Studio({ sessionId, lang, autosave, turns, onExit }: StudioProps
         onConfirm={() => { if (pendingClose !== null) doClose(pendingClose) }}
         onCancel={() => setPendingClose(null)}
       />
+
+      <ConfirmModal
+        open={pendingDelete !== null}
+        title={pt ? 'Excluir?' : 'Delete?'}
+        message={pendingDelete === null ? '' : deleteMessage(pendingDelete, hasDirtyUnder(tabs, pendingDelete.path), pt)}
+        confirmLabel={pt ? 'Excluir' : 'Delete'}
+        cancelLabel={pt ? 'Cancelar' : 'Cancel'}
+        onConfirm={() => { void confirmDelete() }}
+        onCancel={cancelDelete}
+      />
+
+      {moving !== null && (
+        <MoveToPicker
+          sessionId={sessionId}
+          item={moving}
+          tree={tree}
+          isMobile={isMobile}
+          lang={lang}
+          onPick={targetDir => { closeMovePicker(); void performMove(moving.path, moving.kind, targetDir) }}
+          onClose={closeMovePicker}
+        />
+      )}
+
+      {toast !== null && <StudioToast toast={toast} isMobile={isMobile} onDismiss={() => setToast(null)} />}
     </div>
   )
+}
+
+/** The delete confirmation's own sentence — naming what is about to go, and what else goes with it. */
+export function deleteMessage(entry: PendingDelete, hasDirty: boolean, pt: boolean): string {
+  const base = entry.kind === 'dir'
+    ? (pt
+      ? `A pasta "${entry.path}" e tudo dentro dela serão apagados. Esta ação não pode ser desfeita.`
+      : `The folder "${entry.path}" and everything inside it will be deleted. This cannot be undone.`)
+    : (pt
+      ? `O arquivo "${entry.path}" será apagado. Esta ação não pode ser desfeita.`
+      : `The file "${entry.path}" will be deleted. This cannot be undone.`)
+  if (!hasDirty) return base
+  return pt
+    ? `${base} Há mudanças não salvas nele — elas serão perdidas.`
+    : `${base} It has unsaved changes — they will be lost.`
 }
 
 /**
@@ -1164,10 +1414,27 @@ export function TreeDivider({ width, available, lang, onResize, onCommit, onColl
  *
  * `data-editor-path` stays on a wrapper of its own: it is what the tests count mounted buffers by,
  * and `Layer` carries no identity.
+ *
+ * **`keys` IS WHAT LETS A RENAME SURVIVE.** The `React.key` here used to be `path` itself, which is
+ * exactly right for every ORDINARY case — a path only ever changes by the host swapping in a
+ * different file, which must remount — and exactly wrong for the one case that is not that: a
+ * rename or a move changes an open tab's `path` while it stays the SAME logical file. Keying by
+ * `path` there would unmount `RepoFileEditor` and remount a fresh one, which disposes the live
+ * Monaco model and re-reads the new name from disk — the unsaved text and the undo stack the rename
+ * was never meant to touch, gone. `keys[i]` is each path's STABLE identity (`OpenTab.id`, minted once
+ * when the tab is opened and never the path itself — see `repoTreeModel.ts`'s own header for why a
+ * path-derived id collided with a freshly created file reusing a renamed tab's old name), so a
+ * renamed tab keeps the SAME React instance and only its `path` PROP changes; `RepoFileEditor` detects that on its own
+ * (comparing the prop against the path it saw last render) and treats it as a retarget rather than
+ * a new file — see its own header. `keys` is OPTIONAL and defaults to `path` itself, which is
+ * today's exact behaviour, so every caller that never renames anything (every test below, and every
+ * caller before this task) is unaffected.
  */
-export function EditorStack({ sessionId, paths, activePath, autosave, lang, goTo, onDirtyChange }: {
+export function EditorStack({ sessionId, paths, keys, activePath, autosave, lang, goTo, onDirtyChange }: {
   sessionId: string
   paths: readonly string[]
+  /** Same length and order as `paths` — see the note above. Absent falls back to `path` itself. */
+  keys?: readonly string[]
   activePath: string | null
   autosave: boolean
   lang: 'pt' | 'en'
@@ -1176,10 +1443,10 @@ export function EditorStack({ sessionId, paths, activePath, autosave, lang, goTo
 }) {
   return (
     <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0 }}>
-      {paths.map(path => {
+      {paths.map((path, i) => {
         const active = path === activePath
         return (
-          <Layer key={path} shown={active}>
+          <Layer key={keys?.[i] ?? path} shown={active}>
             <div data-editor-path={path} style={{
               flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column',
             }}>
@@ -1265,7 +1532,7 @@ export function Toolbar({ working, isMobile, lang, onSearch, onNew }: {
   isMobile: boolean
   lang: 'pt' | 'en'
   onSearch: () => void
-  onNew: () => void
+  onNew: (kind: 'file' | 'dir') => void
 }) {
   const pt = lang === 'pt'
   return (
@@ -1282,10 +1549,16 @@ export function Toolbar({ working, isMobile, lang, onSearch, onNew }: {
         onClick={onSearch}
       />
       <BarButton
-        label={pt ? 'Novo' : 'New'}
+        label={pt ? 'Novo arquivo' : 'New file'}
         icon={<Plus size={12} />}
         isMobile={isMobile}
-        onClick={onNew}
+        onClick={() => onNew('file')}
+      />
+      <BarButton
+        label={pt ? 'Nova pasta' : 'New folder'}
+        icon={<FolderPlus size={12} />}
+        isMobile={isMobile}
+        onClick={() => onNew('dir')}
       />
       {working && (
         <span
@@ -1322,6 +1595,14 @@ export function NewFileRow({ state, isMobile, lang, onChange, onSubmit, onCancel
 }) {
   const pt = lang === 'pt'
   const ready = state.name.trim() !== '' && !state.busy
+  const isFile = state.kind === 'file'
+  // A nested create has nowhere of its own to sit — this is the one create slot this panel has —
+  // so the DESTINATION is said in the field's own label instead of moving the input to that
+  // folder's row.
+  const destLabel = state.parentPath === '' ? '' : (pt ? ` em ${state.parentPath}/` : ` in ${state.parentPath}/`)
+  const ariaLabel = isFile
+    ? (pt ? `Nome do novo arquivo${destLabel}` : `New file name${destLabel}`)
+    : (pt ? `Nome da nova pasta${destLabel}` : `New folder name${destLabel}`)
   return (
     <div style={{
       flexShrink: 0, minWidth: 0, boxSizing: 'border-box',
@@ -1331,7 +1612,17 @@ export function NewFileRow({ state, isMobile, lang, onChange, onSubmit, onCancel
         display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
         padding: isMobile ? '5px 8px' : '4px 8px',
       }}>
-        <FilePlus size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+        {isFile
+          ? <FilePlus size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+          : <FolderPlus size={13} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />}
+        {state.parentPath !== '' && (
+          <span style={{
+            flexShrink: 0, fontSize: isMobile ? 13.5 : 12, color: 'var(--text-tertiary)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '35%',
+          }}>
+            {state.parentPath}/
+          </span>
+        )}
         <input
           value={state.name}
           autoFocus
@@ -1343,8 +1634,8 @@ export function NewFileRow({ state, isMobile, lang, onChange, onSubmit, onCancel
             if (ev.key === 'Enter') { ev.preventDefault(); if (ready) onSubmit() }
             if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); onCancel() }
           }}
-          aria-label={pt ? 'Nome do novo arquivo' : 'New file name'}
-          placeholder={pt ? 'pasta/arquivo.ts' : 'folder/file.ts'}
+          aria-label={ariaLabel}
+          placeholder={isFile ? (pt ? 'arquivo.ts' : 'file.ts') : (pt ? 'pasta' : 'folder')}
           style={{
             flex: 1, minWidth: 0, boxSizing: 'border-box',
             background: 'transparent', border: 'none', outline: 'none',
@@ -1390,7 +1681,9 @@ export function NewFileRow({ state, isMobile, lang, onChange, onSubmit, onCancel
         ) : (
           <>
             <IconButton
-              label={pt ? 'Criar o arquivo' : 'Create the file'}
+              label={isFile
+                ? (pt ? 'Criar o arquivo' : 'Create the file')
+                : (pt ? 'Criar a pasta' : 'Create the folder')}
               disabled={!ready}
               onClick={onSubmit}
             >
@@ -1413,6 +1706,228 @@ export function NewFileRow({ state, isMobile, lang, onChange, onSubmit, onCancel
           <AlertTriangle size={12} style={{ flexShrink: 0, marginTop: 2 }} />
           <span style={{ minWidth: 0 }}>{state.error}</span>
         </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * "Mover para…" — the ONLY move gesture on a phone, and a second way in on desktop.
+ *
+ * SEEDED from the SAME `tree` the tree view already maintains rather than fetching its own from
+ * scratch: a folder only appears here once it has already been read at least once, exactly the
+ * condition `applyDirRefresh`'s own header states for refreshing it after the move — so every
+ * destination this picker can offer is already a real node the move's own refresh can land on.
+ *
+ * **It is a COPY from that point on, not a shared reference (a review minor,
+ * `session-w1c-tree-ops-review.md` — an earlier draft of this comment claimed otherwise).**
+ * `liveTree` is this component's OWN state, re-seeded from `tree` only when the PROP changes;
+ * expanding a folder here calls `toggleDirectory` against `liveTree`/`setLiveTree`, never against
+ * the tree view's own `onTreeChange`, so a folder opened from inside this picker does NOT stay open
+ * in the tree behind it once the picker closes. That is the right behaviour (a destination browsed
+ * while choosing where to move something is not a request to change what the tree itself has
+ * expanded) — the earlier comment simply described the wrong mechanism for it.
+ *
+ * Illegal targets are not merely refused on click — they are ABSENT from the list, the same rule
+ * this product applies to a control that cannot act at all (`ControlService.startOptions`'s own
+ * "the offer is unreachable rather than refused after the fact"): a folder that is the item itself,
+ * one of its own descendants, or the folder the item is already in, offers nothing a click here
+ * could do.
+ */
+export function MoveToPicker({ sessionId, item, tree, isMobile, lang, onPick, onClose }: {
+  sessionId: string
+  item: Moving
+  tree: TreeNode
+  isMobile: boolean
+  lang: 'pt' | 'en'
+  onPick: (targetDir: string) => void
+  onClose: () => void
+}) {
+  const pt = lang === 'pt'
+  const [liveTree, setLiveTree] = useState(tree)
+  useEffect(() => { setLiveTree(tree) }, [tree])
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', h)
+    return () => document.removeEventListener('keydown', h)
+  }, [onClose])
+
+  const folders = flattenVisible(liveTree).filter(r => r.kind === 'dir')
+  const rootOk = canMoveInto(item.path, '')
+
+  const onToggleFolder = (path: string) => {
+    void toggleDirectory(liveTree, path, lang, setLiveTree, p => fetchTree(sessionId, p, lang))
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(3px)',
+        padding: overlayPadding(isMobile, 16),
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width: '100%', maxWidth: isMobile ? undefined : 420,
+          height: isMobile ? '100%' : undefined, maxHeight: isMobile ? undefined : '70vh',
+          background: 'var(--bg-card)', border: isMobile ? 'none' : '1px solid var(--border)',
+          borderRadius: isMobile ? 0 : 12,
+          display: 'flex', flexDirection: 'column', minHeight: 0,
+          boxShadow: isMobile ? undefined : '0 12px 48px rgba(0,0,0,0.5)',
+        }}
+      >
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
+          padding: isMobile ? '12px 12px' : '14px 16px 10px',
+          borderBottom: '1px solid var(--border-subtle)',
+        }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', flex: 1, minWidth: 0 }}>
+            {pt ? `Mover "${item.path}" para…` : `Move "${item.path}" to…`}
+          </span>
+          <IconButton label={pt ? 'Fechar' : 'Close'} onClick={onClose}>
+            <X size={16} />
+          </IconButton>
+        </div>
+
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 0' }}>
+          {rootOk && (
+            <MoveTargetRow
+              label={pt ? '/ (raiz)' : '/ (root)'}
+              depth={0}
+              isMobile={isMobile}
+              onPick={() => onPick('')}
+            />
+          )}
+          {folders.map(row => {
+            const legal = canMoveInto(item.path, row.path)
+            return (
+              <div key={row.path}>
+                <div style={{ display: 'flex', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    className="ag-tap-icon"
+                    aria-label={row.expanded
+                      ? (pt ? `Recolher ${row.name}` : `Collapse ${row.name}`)
+                      : (pt ? `Expandir ${row.name}` : `Expand ${row.name}`)}
+                    onClick={() => onToggleFolder(row.path)}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                      // PAINTED small on every width; `.ag-tap-icon` projects the 44px a phone
+                      // needs without the box itself becoming three times the chevron inside it.
+                      width: 28, height: 28, flexShrink: 0,
+                      marginLeft: row.depth * (isMobile ? 14 : 16),
+                      background: 'transparent', border: 'none', borderRadius: 6, cursor: 'pointer',
+                      color: 'var(--text-tertiary)',
+                    }}
+                  >
+                    {row.loading
+                      ? <Loader size={13} className="ag-working-spin" />
+                      : row.expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                  </button>
+                  {legal
+                    ? <MoveTargetRow label={row.name} depth={0} isMobile={isMobile} onPick={() => onPick(row.path)} grow />
+                    : (
+                      <span style={{
+                        flex: 1, minWidth: 0, padding: isMobile ? '6px 12px' : '5px 10px',
+                        fontSize: isMobile ? 13.5 : 12.5, color: 'var(--text-tertiary)',
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}>
+                        {row.name}
+                      </span>
+                    )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** One clickable destination row in the picker. */
+function MoveTargetRow({ label, depth, isMobile, onPick, grow }: {
+  label: string
+  depth: number
+  isMobile: boolean
+  onPick: () => void
+  grow?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onPick}
+      style={{
+        display: 'flex', alignItems: 'center', textAlign: 'left',
+        width: grow === true ? undefined : '100%', flex: grow === true ? 1 : undefined, minWidth: 0,
+        boxSizing: 'border-box',
+        minHeight: isMobile ? 44 : undefined,
+        padding: isMobile ? '6px 12px' : '5px 10px',
+        paddingLeft: grow === true ? 0 : 12 + depth * (isMobile ? 14 : 16),
+        background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+        fontSize: isMobile ? 13.5 : 12.5, color: 'var(--text-primary)',
+      }}
+      onMouseEnter={ev => { ev.currentTarget.style.background = 'var(--bg-elevated)' }}
+      onMouseLeave={ev => { ev.currentTarget.style.background = 'transparent' }}
+    >
+      {label}
+    </button>
+  )
+}
+
+/**
+ * A move's own toast: "Movido para `dir/`" with **Desfazer** for 6s, or a quiet copy confirmation
+ * with no action at all. `role="status"` — the same ephemeral-announcement role this product uses
+ * everywhere else a sentence appears and disappears on its own.
+ *
+ * **The action button DISMISSES ON CLICK (a review minor, `session-w1c-tree-ops-review.md`)** —
+ * pressing Desfazer used to leave the toast standing, live, for the rest of its 6s window, so a
+ * second, impatient press sent a SECOND undo request against a rename the first had already
+ * reversed, which the server correctly refused ("Não foi possível desfazer: Já existe algo nesse
+ * caminho.") — a refusal about nothing, caused only by the toast outliving the action it offered.
+ */
+export function StudioToast({ toast, isMobile, onDismiss }: {
+  toast: ToastState
+  isMobile: boolean
+  onDismiss: () => void
+}) {
+  return (
+    <div
+      role="status"
+      style={{
+        position: 'absolute', left: '50%', bottom: 14, transform: 'translateX(-50%)',
+        zIndex: 50, maxWidth: 'calc(100% - 24px)',
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: isMobile ? '8px 10px 8px 14px' : '7px 8px 7px 14px',
+        borderRadius: 10, background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+        boxShadow: 'var(--ag-shadow-pop)',
+      }}
+    >
+      <span style={{
+        fontSize: 12.5, color: 'var(--text-primary)',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {toast.text}
+      </span>
+      {toast.action !== undefined && (
+        <button
+          type="button"
+          onClick={() => { toast.action?.onClick(); onDismiss() }}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0,
+            minHeight: isMobile ? 44 : undefined,
+            padding: isMobile ? '0 10px' : '3px 9px',
+            borderRadius: 7, border: '1px solid var(--border-subtle)', background: 'transparent',
+            color: 'var(--anthropic-orange)', fontFamily: 'inherit', fontWeight: 600,
+            fontSize: isMobile ? 13 : 11.5, cursor: 'pointer',
+          }}
+        >
+          <Undo2 size={12} />
+          {toast.action.label}
+        </button>
       )}
     </div>
   )
@@ -1607,6 +2122,12 @@ function BarButton({ label, icon, isMobile, disabled, onClick }: {
 /**
  * An icon-only control: PAINTED small, TARGETED at 44px by `.ag-tap-icon`'s invisible box — the
  * repo's rule, and the reason a 13px glyph here is not a 44x44 square on a phone.
+ *
+ * A review minor (`session-w1c-tree-ops-review.md`): the CLASS was there, but `.ag-tap-icon`'s
+ * DEFAULT grow (7px a side) around a 22px button only reaches 36px, 8px short of the floor this
+ * doc comment already claimed. `--ag-tap-grow: 11px` is what a 22px control actually needs to clear
+ * 44 (`22 + 2×11`) — set here, on this one control, rather than raised for every `.ag-tap-icon` in
+ * the app, most of which sit on a larger painted button and do not need it.
  */
 function IconButton({ label, onClick, disabled, pressed, children }: {
   label: string
@@ -1631,6 +2152,7 @@ function IconButton({ label, onClick, disabled, pressed, children }: {
         padding: 0, background: 'transparent', border: 'none', borderRadius: 6,
         cursor: disabled === true ? 'not-allowed' : 'pointer',
         color: 'var(--text-tertiary)', opacity: disabled === true ? 0.45 : 1,
+        ['--ag-tap-grow' as string]: '11px',
       }}
     >
       {children}

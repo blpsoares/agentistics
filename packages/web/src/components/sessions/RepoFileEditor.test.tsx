@@ -26,11 +26,12 @@ import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   AUTOSAVE_FAILURE_LIMIT, autosaveStopped, binaryText, diskVersionOf, focusTrapTarget,
-  initialSaveState, isDirty, loadStateFor, mediaFailedText, mediaTooBigText,
+  initialSaveState, isDirty, isMidRetarget, loadStateFor, loadStateForRender,
+  mediaFailedText, mediaTooBigText,
   monacoOptions, monacoThemeFor, nextSaveState,
   RepoConflictPrompt, RepoMediaView, RepoSaveStrip, RepoStaleBanner,
   saveButtonState, saveEventFor, saveGate, saveStatus,
-  type SaveEvent, type SaveState,
+  type LoadState, type SaveEvent, type SaveState,
 } from './RepoFileEditor'
 import type { ReadFileResult, WriteFileResult } from '../../lib/repoApi'
 import { AGENTISTICS_THEME_NAME } from '../../lib/monacoTheme'
@@ -83,6 +84,71 @@ describe('loadStateFor', () => {
     const state = loadStateFor({ ok: false, failure: 'unreachable', cause: 'timeout' }, 'en')
     expect(state.kind).toBe('failed')
     expect(state.kind === 'failed' && state.text.length > 0).toBe(true)
+  })
+})
+
+/**
+ * C1 (2026-09-12, `session-w1c-tree-ops-review.md`): renaming or moving an open file with unsaved
+ * changes discarded the buffer and the undo stack. The two functions below are the whole fix, pulled
+ * out of the component so the failure — and the repair — can be asserted directly rather than
+ * believed from a comment. The bug was a naive `read.key === fileKey ? read.state : {kind:'loading'}`
+ * flipping to `loading` for exactly the render between a retarget being detected and the read effect
+ * catching `read.key` up — long enough for the mount effect's `[load.kind]` dependency to see 'ready'
+ * become 'loading' and dispose the live editor, so the NEXT flip back to 'ready' recreated one from
+ * `contentRef.current` (the file's original disk text, not the dirty buffer).
+ */
+describe('isMidRetarget', () => {
+  test('a path change with a live editor IS a retarget', () => {
+    expect(isMidRetarget('src/a.ts', true)).toBe(true)
+  })
+
+  test('no path change is never a retarget, editor or not', () => {
+    expect(isMidRetarget(undefined, true)).toBe(false)
+    expect(isMidRetarget(undefined, false)).toBe(false)
+  })
+
+  test('a path change with NO live editor yet is an ordinary read — nothing to preserve', () => {
+    // The race the component's own header names: a retarget landing before the first read resolved.
+    expect(isMidRetarget('src/a.ts', false)).toBe(false)
+  })
+})
+
+describe('loadStateForRender — the exact line C1 lived in', () => {
+  const READY: LoadState = { kind: 'ready', content: '// DIRTY-LINE\nexport const a = 1\n', mtimeMs: 5 }
+  const read = { key: 'sess\nsrc/a.ts', state: READY }
+  const newFileKey = 'sess\nsrc/a2.ts'
+
+  test('the key already matches: the state is returned untouched, retarget or not', () => {
+    expect(loadStateForRender(read, read.key, undefined, true)).toBe(READY)
+    expect(loadStateForRender(read, read.key, 'src/a.ts', true)).toBe(READY)
+  })
+
+  test('mid-retarget, a mismatched key still returns the live state — never `loading`', () => {
+    // This is the render between the retarget being detected and the read effect patching
+    // `read.key`: exactly where C1 lost the buffer. `isMidRetarget` is what the real render
+    // computes as its third argument; passed here explicitly so the two can never drift apart.
+    expect(loadStateForRender(read, newFileKey, 'src/a.ts', true)).toBe(READY)
+  })
+
+  test('THE PLANTED DEFECT: a bare key-equality check loses the buffer on the very render C1 reported', () => {
+    // The exact shape of the line this replaced (`read.key === fileKey ? read.state : {kind:'loading'}`).
+    // Restated here as an assertion so the regression is pinned in the test file, not only in a
+    // comment above the real function: if `loadStateForRender` above ever regresses to this, this
+    // expectation fails, but `read.key === fileKey ? read.state : {kind:'loading'} as LoadState`
+    // itself proves the point — it drops the buffer whenever the key has not yet caught up, which is
+    // exactly the render a retarget is detected on.
+    const naive = (r: typeof read, key: string): LoadState => (r.key === key ? r.state : { kind: 'loading' })
+    expect(naive(read, newFileKey)).toEqual({ kind: 'loading' })
+    // ...while the real function, given the SAME inputs plus the retarget signal, keeps the buffer.
+    expect(loadStateForRender(read, newFileKey, 'src/a.ts', true)).toBe(READY)
+  })
+
+  test('mid-retarget with NO live editor yet: nothing to preserve, so it reads loading', () => {
+    expect(loadStateForRender(read, newFileKey, 'src/a.ts', false)).toEqual({ kind: 'loading' })
+  })
+
+  test('an ordinary file swap (no retarget signal) with a mismatched key reads loading', () => {
+    expect(loadStateForRender(read, newFileKey, undefined, true)).toEqual({ kind: 'loading' })
   })
 })
 
@@ -1402,6 +1468,11 @@ function withoutComments(source: string): string {
  * The read effect's own body, comments stripped. Anchored on its DEPENDENCY LIST rather than on the
  * section comment above it, so the slice survives a comment being reworded — and on the `useEffect`
  * that opens it, so nothing from the effects around it can be read as part of this one.
+ *
+ * The dependency list is deliberately `[sessionId, path]` alone — `retargetFrom` is EXCLUDED on
+ * purpose (see `RepoFileEditor.tsx`'s own note by `priorPathRef`): including it is exactly what made
+ * C1 possible, since a later render where `retargetFrom` alone flips back to `undefined` would
+ * re-trigger this effect down the ordinary reset-and-reread branch.
  */
 function readFileEffect(source: string): string {
   const end = source.indexOf('}, [sessionId, path])')
@@ -1434,6 +1505,40 @@ describe('the save wiring, asserted over the source', () => {
     const read = effect.indexOf('readRepoFile(')
     expect(reset).toBeGreaterThanOrEqual(0)
     expect(read).toBeGreaterThan(reset)
+  })
+
+  test('a RETARGET (a rename of an already-open file) skips the re-read and re-reset, before either runs', () => {
+    // A STRUCTURAL companion to the `loadStateForRender`/`isMidRetarget` behavioural tests above —
+    // it is not, on its own, proof that the buffer survives (that was exactly the two tests the
+    // review found satisfied by a comment: C1 shipped with this ordering intact and the bug anyway,
+    // because the loss happened in `load`'s derivation, not in this effect's branch order). Kept as a
+    // regression guard on the branch itself: matched BY INDEX against the same two calls the previous
+    // test anchors on, so a refactor that moved the guard clause BELOW the reset (silently re-reading
+    // every retarget from disk) fails this test even though the guard clause still exists somewhere
+    // in the function — and on the actual predicate, so inlining the check back by hand instead of
+    // calling `isMidRetarget` is caught too.
+    const effect = readFileEffect(src)
+    const guard = effect.indexOf('isMidRetarget(retargetFrom, editorRef.current !== null)')
+    const reset = effect.indexOf("dispatch({ kind: 'reset' })")
+    const read = effect.indexOf('readRepoFile(')
+    expect(guard).toBeGreaterThanOrEqual(0)
+    expect(guard).toBeLessThan(reset)
+    expect(reset).toBeLessThan(read)
+  })
+
+  test('the MOUNT effect depends on load.kind alone — `path` is absent, which is the whole reason a retarget does not tear down the model', () => {
+    // The mount effect is the one whose cleanup DISPOSES the live Monaco model and editor. Were
+    // `path` back in its dependency array, a rename would re-trigger it (React runs the OUTGOING
+    // cleanup unconditionally on any dependency change, before the new effect body gets a say) and
+    // dispose the very instance the retarget skip above exists to keep alive. THIS ALONE is not the
+    // proof C1's fix works — `load.kind` staying 'ready' throughout a retarget is what
+    // `loadStateForRender`'s behavioural tests above pin — but it is a real, independent invariant:
+    // even with `load.kind` correctly staying 'ready', re-adding `path` here would tear the editor
+    // down on every retarget regardless.
+    expect(src).toContain('}, [load.kind])')
+    // And the model itself is created from the LATEST path via the ref, never the closed-over
+    // `path` — the one a removed dependency would otherwise leave stale forever.
+    expect(src).toContain('languageForPath(argsRef.current.path)')
   })
 
   test('the conflict prompt keeps Escape to itself, and nothing behind it is reachable', () => {

@@ -115,7 +115,8 @@ const GENERIC_REFUSAL: Record<GenericRefusal, { en: string; pt: string }> = {
 
 /**
  * A genuine STATE conflict — something already there, a non-empty folder, a write that lost the
- * race with a change already on disk, a mutation aimed at the session folder itself — is 409. Everything else here is 404: the path this request
+ * race with a change already on disk, a mutation aimed at the session folder itself, a move asked
+ * to make a folder its own ancestor — is 409. Everything else here is 404: the path this request
  * named could not be resolved to anything at all (it escaped the tree, or nothing is there, or it
  * is the wrong kind of entry), which is true regardless of which route asked. Decided once, from
  * the REASON CODE, so the same code can never mean 404 through one door and 409 through another.

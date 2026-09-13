@@ -450,6 +450,38 @@ describe('renameTreeEntry', () => {
     expect(await renameTreeEntry(plainDir, 'src-c.txt', '../out.txt')).toEqual({ ok: false, reason: 'escaped' })
     expect(await renameTreeEntry(plainDir, '../out.txt', 'src-c.txt')).toEqual({ ok: false, reason: 'escaped' })
   })
+
+  describe('into-itself — a drop a plain rename() would surface as an unhandled EINVAL', () => {
+    test('a folder dropped onto itself (the drag computes `into/<own name>`) is refused lexically', async () => {
+      mkdirSync(join(plainDir, 'into-self'))
+      const out = await renameTreeEntry(plainDir, 'into-self', 'into-self/into-self')
+      expect(out).toEqual({ ok: false, reason: 'into-itself' })
+      // Lexical — nothing was touched on disk.
+      expect(existsSync(join(plainDir, 'into-self'))).toBe(true)
+    })
+
+    test('a folder moved into its own descendant is refused the same way', async () => {
+      mkdirSync(join(plainDir, 'into-desc'))
+      mkdirSync(join(plainDir, 'into-desc', 'child'))
+      const out = await renameTreeEntry(plainDir, 'into-desc', 'into-desc/child/into-desc')
+      expect(out).toEqual({ ok: false, reason: 'into-itself' })
+    })
+
+    test('a SIBLING whose name merely starts the same is not caught by the descendant check', async () => {
+      mkdirSync(join(plainDir, 'twin'))
+      mkdirSync(join(plainDir, 'twin2'))
+      // twin2 is not inside twin, so renaming twin into twin2 is an ordinary, legal move.
+      const out = await renameTreeEntry(plainDir, 'twin', 'twin2/twin')
+      expect(out).toEqual({ ok: true })
+      expect(existsSync(join(plainDir, 'twin2', 'twin'))).toBe(true)
+    })
+
+    test('renaming a path onto ITSELF (the current-parent no-op) still answers already-exists, not into-itself', async () => {
+      writeFileSync(join(plainDir, 'same-path.txt'), 'x')
+      const out = await renameTreeEntry(plainDir, 'same-path.txt', 'same-path.txt')
+      expect(out).toEqual({ ok: false, reason: 'already-exists' })
+    })
+  })
 })
 
 describe('rename and delete act on the ENTRY, never on a symlink\'s target', () => {
