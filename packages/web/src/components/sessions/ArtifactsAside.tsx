@@ -83,7 +83,7 @@ import { splitAsideTabs } from '../../lib/asideTabs'
 import { mcpCheckText } from '../../lib/mcpCheckText'
 import { fmt, fmtCost } from '@agentistics/core'
 import {
-  galleryFileCount, galleryGroups, parseGalleryScope, parseGalleryView, producedGroups,
+  galleryFileCount, galleryGroups, parseGalleryScope, parseGalleryView, producedGroups, viewedGroups,
   type GalleryScope, type GalleryTurn, type GalleryView,
 } from '../../lib/gallery'
 import { prCaption } from '../../lib/prCaption'
@@ -521,15 +521,18 @@ export function ArtifactsAside({
    */
   const feed = useMemo(() => liveEvents(turns ?? []), [turns])
   /**
-   * The gallery: what the PERSON sent, grouped by message, PLUS what the SESSION produced.
+   * The gallery: what the PERSON sent, grouped by message, what the SESSION produced, and what the
+   * SESSION viewed with `Read` and never sent or wrote.
    *
-   * Two sources, one list, because a reader looking for a picture is not asking who made it. The
-   * produced block goes LAST: the sent groups carry the messages they came with and read as the
-   * conversation, while the produced one is a single block with no message of its own.
+   * Three sources, one list, because a reader looking for a picture is not asking who made it. The
+   * sent groups carry the messages they came with and read as the conversation; produced and viewed
+   * each go last, as a single block with no message of their own — viewed after produced, since a
+   * screenshot the session WROTE is closer to the conversation than one it merely looked at.
    */
   const gallery = useMemo(() => [
     ...galleryGroups((turns ?? []) as readonly GalleryTurn[]),
     ...producedGroups(artifacts),
+    ...viewedGroups(turns ?? []),
   ], [turns, artifacts])
   const galleryFiles = useMemo(() => galleryFileCount(gallery), [gallery])
   /** LIST or GRID, remembered. A private window that refuses storage simply keeps the default. */
@@ -1723,16 +1726,34 @@ export function ArtifactsAside({
       )
     }
     return (
-      <GalleryTab
-        sessionId={sessionId}
-        groups={gallery}
-        lang={lang}
-        view={galleryView}
-        onViewChange={chooseGalleryView}
-        scope={galleryScope}
-        onScopeChange={chooseGalleryScope}
-        {...(older ? { older } : {})}
-      />
+      <>
+        {/*
+         * A REFERENCE NO ROW CARRIES IS SAID, never swallowed — the same rule the skills tab
+         * follows. It happens for real: a "the assistant viewed an image" chip whose companion
+         * chain could not be traced carries no reference at all (see `viewed-image.ts`), so its
+         * click opens the Gallery with nothing to point at.
+         */}
+        {focusStep !== undefined && !rowsCarry(gallery.flatMap(g => g.files.map(f => f.path)), focusStep) && (
+          <p style={{
+            margin: 0, padding: '7px 10px', flexShrink: 0,
+            fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary)',
+            background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-subtle)',
+          }}>
+            {focusMissNotice(focusStep, pt)}
+          </p>
+        )}
+        <GalleryTab
+          sessionId={sessionId}
+          groups={gallery}
+          lang={lang}
+          view={galleryView}
+          onViewChange={chooseGalleryView}
+          scope={galleryScope}
+          onScopeChange={chooseGalleryScope}
+          {...(focusStep !== undefined ? { focusStep } : {})}
+          {...(older ? { older } : {})}
+        />
+      </>
     )
   }
 
