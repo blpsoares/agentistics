@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -504,6 +507,23 @@ describe('createTreeEntry', () => {
     const out = await createTreeEntry(plainDir, 'nosuch/child.txt', 'file')
     expect(out).toEqual({ ok: false, reason: 'not-found' })
   })
+
+  test('a name over the filesystem limit is refused as name-too-long, not a generic 500', async () => {
+    const out = await createTreeEntry(plainDir, `${'a'.repeat(300)}.txt`, 'file')
+    expect(out).toEqual({ ok: false, reason: 'name-too-long' })
+  })
+
+  test('creating inside a directory this process may not write to is refused as no-permission, not a generic 500', async () => {
+    const locked = join(plainDir, 'locked-for-create')
+    mkdirSync(locked)
+    chmodSync(locked, 0o500)
+    try {
+      const out = await createTreeEntry(plainDir, 'locked-for-create/child.txt', 'file')
+      expect(out).toEqual({ ok: false, reason: 'no-permission' })
+    } finally {
+      chmodSync(locked, 0o700)
+    }
+  })
 })
 
 describe('renameTreeEntry', () => {
@@ -562,6 +582,24 @@ describe('renameTreeEntry', () => {
       writeFileSync(join(plainDir, 'same-path.txt'), 'x')
       const out = await renameTreeEntry(plainDir, 'same-path.txt', 'same-path.txt')
       expect(out).toEqual({ ok: false, reason: 'already-exists' })
+    })
+  })
+
+  describe('a destination folder that does not exist is not-found, not escaped', () => {
+    test('a destination parent that simply is not there answers not-found', async () => {
+      writeFileSync(join(plainDir, 'dst-parent-missing-src.txt'), 'x')
+      const out = await renameTreeEntry(plainDir, 'dst-parent-missing-src.txt', 'no-such-parent/dst.txt')
+      expect(out).toEqual({ ok: false, reason: 'not-found' })
+    })
+
+    test('a destination parent that EXISTS but escapes containment (a symlink out of the tree) still answers escaped', async () => {
+      const outside = mkdtempSync(join(tmpdir(), 'agentistics-outside-rename-dst-parent-'))
+      symlinkSync(outside, join(plainDir, 'evil-dst-parent'))
+      writeFileSync(join(plainDir, 'dst-parent-escape-src.txt'), 'x')
+      const out = await renameTreeEntry(plainDir, 'dst-parent-escape-src.txt', 'evil-dst-parent/dst.txt')
+      expect(out).toEqual({ ok: false, reason: 'escaped' })
+      expect(existsSync(join(outside, 'dst.txt'))).toBe(false)
+      rmSync(outside, { recursive: true, force: true })
     })
   })
 })
@@ -751,6 +789,40 @@ describe('deleteTreeEntry', () => {
     // (`'../escaped.txt'`, `'../out.txt'`, `'../../etc'`).
     const out = await deleteTreeEntry(plainDir, '../secret.txt', false)
     expect(out).toEqual({ ok: false, reason: 'escaped' })
+  })
+
+  test('rm refusing with EACCES is answered as no-permission, not a generic 500', async () => {
+    // `createTreeEntry`'s own test drives a REAL EACCES through `chmod`; delete's `fsRefusal`
+    // mapping is the same function, so the injectable `rmFn` seam is enough to prove this branch
+    // without needing a second real-filesystem permission fixture.
+    mkdirSync(join(plainDir, 'no-permission-target'))
+    const racedRm = async () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }) }
+    const out = await deleteTreeEntry(plainDir, 'no-permission-target', true, racedRm)
+    expect(out).toEqual({ ok: false, reason: 'no-permission' })
+  })
+
+  describe('a concurrently-shrinking folder is never reported not-found while it is still there', () => {
+    test('rm throwing ENOENT for a raced child does not read back as not-found when the entry survives', async () => {
+      mkdirSync(join(plainDir, 'race-enoent'))
+      writeFileSync(join(plainDir, 'race-enoent', 'still-here.txt'), 'x')
+      const racedRm = async () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) }
+      const out = await deleteTreeEntry(plainDir, 'race-enoent', true, racedRm)
+      expect(out).toEqual({ ok: false, reason: 'not-empty' })
+      expect(existsSync(join(plainDir, 'race-enoent'))).toBe(true)
+    })
+
+    test('rm throwing ENOTEMPTY when the entry genuinely finished being removed still answers not-found', async () => {
+      mkdirSync(join(plainDir, 'race-gone'))
+      // The injected `rm` stands in for a concurrent actor that finished removing the whole entry
+      // and only then reported ENOTEMPTY — so the recheck's own `lstat` must find nothing real.
+      const racedRm = async (target: string) => {
+        rmSync(target, { recursive: true, force: true })
+        throw Object.assign(new Error('ENOTEMPTY'), { code: 'ENOTEMPTY' })
+      }
+      const out = await deleteTreeEntry(plainDir, 'race-gone', true, racedRm as never)
+      expect(out).toEqual({ ok: false, reason: 'not-found' })
+      expect(existsSync(join(plainDir, 'race-gone'))).toBe(false)
+    })
   })
 })
 
