@@ -93,3 +93,40 @@ export function filtrosPanelBounds(
   const width = Math.max(FILTROS_PANEL_MIN_WIDTH, Math.min(FILTROS_PANEL_PREFERRED_WIDTH, available))
   return { left, width }
 }
+
+/** The metrics tab's own dropdown floor — narrower than this and the figures inside it (money,
+ *  token counts) start wrapping mid-line. Same reasoning as `FILTROS_PANEL_MIN_WIDTH`, a smaller
+ *  number because this card's own rows are narrower than a filter dimension's chips. */
+export const METRICS_PANEL_MIN_WIDTH = 200
+
+/** The metrics dropdown's preferred width — `SessionStatsMenu`'s own hardcoded card width, restated
+ *  here so this module can clamp against it without importing a component. */
+export const METRICS_PANEL_PREFERRED_WIDTH = 300
+
+/**
+ * WHERE THE SECOND HANGING TAB SITS, AND HOW WIDE ITS DROPDOWN MAY OPEN (design item 4, screenshot
+ * 7) — the session-metrics tab beside "Filtros", sharing the exact room `filtrosPanelBounds` already
+ * keeps clear of both asides.
+ *
+ * The metrics tab's own trigger sits immediately after the Filtros tab (`gap` apart) — `filtrosTabW`
+ * is that button's OWN measured width, since a `min-content` pill has no width this module can
+ * compute from the filter count alone (the Portuguese/English label, plus a badge that changes
+ * digits, both shift it). ITS DROPDOWN THEN OPENS TOWARD THE CONTENT, never back toward the left
+ * aside: a 300px card anchored to expand LEFTWARD from a trigger sitting barely a hundred pixels
+ * clear of that aside would swallow it whole, which is exactly the shape of overlap
+ * `filtrosPanelBounds`'s own header describes for the panel it protects. So the available width is
+ * measured to the RIGHT of the tab, against the same right edge (clear of the artifacts aside)
+ * `filtrosPanelBounds` already computed — never re-derived, or the two panels could disagree about
+ * where that edge is.
+ */
+export function metricsTabBounds(
+  filtros: { left: number; width: number },
+  filtrosTabW: number,
+  gap: number,
+): { left: number; panelMaxWidth: number } {
+  const left = filtros.left + filtrosTabW + gap
+  const rightEdge = filtros.left + filtros.width
+  const available = Math.max(0, rightEdge - left)
+  const panelMaxWidth = Math.max(METRICS_PANEL_MIN_WIDTH, Math.min(METRICS_PANEL_PREFERRED_WIDTH, available))
+  return { left, panelMaxWidth }
+}

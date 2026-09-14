@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import { join } from 'node:path'
 import {
   ATTACHMENT_DIR, attachmentImageType, attachmentMediaType, attachmentMessageOf, attachmentPathByName,
-  parseAttachmentLog, resolveAttachmentRead,
+  parseAttachmentLog, resolveAttachmentRead, resolveAttachmentReadReal,
 } from './attachment-web'
 
 describe('attachmentMessageOf — what one delivered message carried', () => {
@@ -82,6 +82,25 @@ describe('resolveAttachmentRead', () => {
 
   it('refuses an empty path', () => {
     expect(resolveAttachmentRead('')).toBeNull()
+  })
+})
+
+describe('resolveAttachmentReadReal — the REAL (symlink-resolved) recheck the reading route applies', () => {
+  // The full symlink-escape guarantee (a link INSIDE the attachments directory pointing OUTSIDE it
+  // is refused, one pointing at another file inside it resolves to that file) is `realContained`'s
+  // own logic, tested against a disposable tmpdir in `real-contained.test.ts` — this machine's REAL
+  // `ATTACHMENT_DIR` already holds live attachments and must never be written to by a test (see
+  // `sdd/scratch/sessions/00-shared-rules.md`). What is tested here, read-only, is the WIRING: the
+  // lexical refusal short-circuits before any disk access, and a lexically-valid path that simply
+  // is not there answers the same `null` the lexical check already promised.
+  it('refuses a lexically-invalid path without any disk access', async () => {
+    expect(await resolveAttachmentReadReal('/etc/passwd')).toBeNull()
+    expect(await resolveAttachmentReadReal('')).toBeNull()
+    expect(await resolveAttachmentReadReal(join(ATTACHMENT_DIR, '..', '..', '.ssh', 'id_rsa'))).toBeNull()
+  })
+
+  it('refuses a lexically-valid path that does not exist on disk', async () => {
+    expect(await resolveAttachmentReadReal(join(ATTACHMENT_DIR, 'nonexistent-2f8e9a-file.png'))).toBeNull()
   })
 })
 

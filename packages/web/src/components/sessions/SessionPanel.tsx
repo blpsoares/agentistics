@@ -21,7 +21,7 @@
  * branch passes neither prop, and the header below returns.
  */
 
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, FolderTree, MessagesSquare, PanelRightOpen, TerminalSquare, X } from 'lucide-react'
 import { getCentralMachine } from '../../lib/centralMachinePick'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -34,6 +34,7 @@ import { SessionChat, type SessionChatProps } from './SessionChat'
 import { SessionActions } from './SessionActions'
 import { ShellBand } from './ShellBand'
 import { targetLabel } from '../../lib/terminalTarget'
+import { BAND_MIN_PX, readBandPrefs, resolveBandHeight, writeBandPrefs } from '../../lib/shellBand'
 
 export type SessionView = 'chat' | 'terminal'
 
@@ -149,6 +150,33 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
   const slotLayout = resolveForViewport(rawSlotLayout, isMobile)
   const bottomIsStudio = !isMobile && editorEnabled === true && slotLayout.bottom === 'studio'
 
+  /**
+   * THE CENTRE COLUMN'S OWN HEIGHT, MEASURED (design item 7) — what "full" means for the bottom
+   * band. `window.innerHeight` was the wrong number even before this: it is the WHOLE viewport,
+   * mobile status-bar insets and all, while the band must never cover more than the column it
+   * actually docks inside (the mobile header above it, on the branch that has one; never the left
+   * or right aside, which are beside this column, not above or below it). A `ResizeObserver` on
+   * this component's own outer box is the same pattern `Studio.tsx`'s `measure` uses for the
+   * tree/editor split, for the same reason: the box can change size for causes with no event of
+   * their own (a sidebar drag, a window resize, an aside opening).
+   */
+  const [columnHeight, setColumnHeight] = useState(0)
+  const columnObserver = useRef<ResizeObserver | null>(null)
+  const measureColumn = useCallback((el: HTMLDivElement | null) => {
+    columnObserver.current?.disconnect()
+    columnObserver.current = null
+    if (el === null) return
+    setColumnHeight(el.getBoundingClientRect().height)
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(entries => {
+      const h = entries[0]?.contentRect.height
+      if (h !== undefined) setColumnHeight(h)
+    })
+    ro.observe(el)
+    columnObserver.current = ro
+  }, [])
+  useEffect(() => () => { columnObserver.current?.disconnect() }, [])
+
   return (
     // `flex: 1` + `minHeight: 0`, NOT `height: 100%`. In a column flex container a percentage
     // height on an item that is itself being flexed does not reliably resolve, and when it does not
@@ -156,7 +184,7 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
     // cause of two reported bugs: the conversation opening at the top (scrollTop on a non-scrolling
     // element does nothing) and the jump-to-latest arrow never appearing (`scrollHeight` equals
     // `clientHeight`, so the reader always measures as "at the tail").
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+    <div ref={measureColumn} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       {/* MOBILE ONLY now — see the module header. PINNED exactly as before: `flexShrink: 0` plus
           `position: sticky` as the second, independent guarantee. */}
       {!controlled && (
@@ -272,6 +300,7 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
           key={session.id}
           lang={lang}
           open={slotLayout.bottomOpen}
+          columnHeight={columnHeight}
           onToggleOpen={() => setBottomOpen(!slotLayout.bottomOpen)}
           onMoveToRight={() => moveSlotPanel('studio', 'right')}
           onClose={() => closeSlotPanel('studio')}
@@ -292,6 +321,7 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
           {...(session.harness ? { harness: session.harness } : {})}
           lang={lang}
           theme={theme}
+          columnHeight={columnHeight}
           studioEnabled={editorEnabled === true}
           onSelectStudio={() => openSlotPanel('studio', 'bottom')}
           onSelectTerminal={id => openSlotPanel(id, 'bottom')}
@@ -318,12 +348,24 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
  * terminal-target machinery. Collapsing NEVER drops the Studio: `contentRef`'s box is rendered only
  * while `open`, and the caller (`SessionsPage`) reads that same fact as "park it" rather than
  * "unmount it" — see `StudioHost.tsx`.
+ *
+ * FREE-RESIZING, WITH THE SAME SNAP-TO-FULL `ShellBand` HAS (design item 7) — the two bands share
+ * ONE persisted height/full record (`shellBand.ts`'s `readBandPrefs`/`writeBandPrefs`, the same
+ * `agentistics-shell-band` storage key), so a reader who has learned "drag this near the top to
+ * fill the column" gets the identical feel switching between the Studio and the assistant's own
+ * pane in the same band — two implementations of one gesture, sharing one memory, is the point.
+ * `open` and `target` are untouched here: THIS band's open/closed state comes from `panelSlots.ts`
+ * (`slotLayout.bottomOpen`, passed in as `open`), not from the shared record's own `open` field,
+ * which is `ShellBand`'s alone — only `height`/`full` are read and written from here.
  */
 function StudioBand({
-  lang, open, onToggleOpen, onMoveToRight, onClose, onSelectCli, onSelectShell, harness, contentRef,
+  lang, open, columnHeight, onToggleOpen, onMoveToRight, onClose, onSelectCli, onSelectShell, harness, contentRef,
 }: {
   lang: 'pt' | 'en'
   open: boolean
+  /** The centre column's own measured height — what "full" resolves against. `0` = not measured
+   *  yet, and `resolveBandHeight` already reads that as "never snap". */
+  columnHeight: number
   onToggleOpen: () => void
   onMoveToRight: () => void
   onClose: () => void
@@ -337,9 +379,53 @@ function StudioBand({
   contentRef?: (el: HTMLDivElement | null) => void
 }) {
   const pt = lang === 'pt'
+  const [heightPrefs, setHeightPrefs] = useState(() => {
+    const p = readBandPrefs()
+    return { height: p.height, full: p.full === true }
+  })
+  const applyHeight = useCallback((next: { height: number; full: boolean }) => {
+    setHeightPrefs(next)
+    // `full: false` is written by OMISSION (never as a literal `false`) — matching how
+    // `readBandPrefs` treats the two the same way, and what stops a stale `full: true` from a
+    // PREVIOUS session surviving an ordinary resize that no longer asks for it.
+    const { full: _previousFull, ...rest } = readBandPrefs()
+    void _previousFull
+    writeBandPrefs({ ...rest, height: next.height, ...(next.full ? { full: true } : {}) })
+  }, [])
+  const renderedHeight = heightPrefs.full && columnHeight > 0 ? columnHeight : heightPrefs.height
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null)
+  const onDragStart = (clientY: number) => { dragRef.current = { startY: clientY, startH: renderedHeight } }
+  useEffect(() => {
+    const move = (clientY: number) => {
+      const d = dragRef.current
+      if (!d) return
+      // Grows UPWARD, exactly like `ShellBand`'s own handle: docked at the bottom, so dragging up
+      // must make it taller.
+      applyHeight(resolveBandHeight(d.startH + (d.startY - clientY), columnHeight))
+    }
+    const onMouse = (e: MouseEvent) => move(e.clientY)
+    const onTouch = (e: TouchEvent) => { const p = e.touches[0]; if (p) move(p.clientY) }
+    const end = () => { dragRef.current = null }
+    window.addEventListener('mousemove', onMouse)
+    window.addEventListener('mouseup', end)
+    window.addEventListener('touchmove', onTouch)
+    window.addEventListener('touchend', end)
+    return () => {
+      window.removeEventListener('mousemove', onMouse)
+      window.removeEventListener('mouseup', end)
+      window.removeEventListener('touchmove', onTouch)
+      window.removeEventListener('touchend', end)
+    }
+  }, [applyHeight, columnHeight])
   return (
     <div style={{
-      flexShrink: 0, display: 'flex', flexDirection: 'column',
+      // FULL (design item 7) makes THIS ROOT flex-stretch within `SessionPanel`'s own column,
+      // competing with the chat area's own `flex: 1, minHeight: 0` for the same space — which is
+      // what lets the band reach the column's actual height without ever measuring a pixel figure
+      // that has to subtract the chat area's chrome by hand. Not full: sized by its own content
+      // (the bar plus whatever explicit height the content box below asks for), same as always.
+      ...(heightPrefs.full ? { flex: '1 1 auto', minHeight: 0 } : { flexShrink: 0 }),
+      display: 'flex', flexDirection: 'column',
       borderTop: '1px solid var(--border)', background: 'var(--bg-surface)',
     }}>
       <div
@@ -358,6 +444,14 @@ function StudioBand({
         <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-secondary)' }}>
           STUDIO
         </span>
+        {/* THE SPACER COMES BEFORE THE SEGMENT, not after — this is the whole fix for item 1. The
+            band's header must not change SHAPE with its occupant: `ShellBand`'s own desktop bar
+            (this same band, showing `cli`/`shell` instead) has always put its segment on the RIGHT,
+            right before the move/close/collapse icon buttons — a spacer, then the segment, then the
+            icons. This bar used to put the segment right after the "STUDIO" label instead, which
+            read as the segment sitting on the LEFT the moment the Studio (rather than Claude Code or
+            Shell) was the band's occupant — reported with a screenshot circling exactly that jump. */}
+        <span style={{ flex: 1 }} />
         {(onSelectCli || onSelectShell) && (
           <div role="tablist" aria-label={pt ? 'Qual terminal' : 'Which terminal'} onClick={e => e.stopPropagation()}
             style={{
@@ -384,19 +478,20 @@ function StudioBand({
             ))}
           </div>
         )}
-        <span style={{ flex: 1 }} />
+        {/* item 5 (screenshot 4): a distinct, conventional icon PLUS a visible label on desktop —
+            the plain icon pair here was circled as confusing beside the aside's own move control. */}
         <button className="ag-tap-icon"
           onClick={e => { e.stopPropagation(); onMoveToRight() }}
           title={pt ? 'Mover o Studio para a direita' : 'Move the Studio to the right'}
           aria-label={pt ? 'Mover o Studio para a direita' : 'Move the Studio to the right'}
-          style={studioBandIconBtn}
-        ><PanelRightOpen size={13} /></button>
+          style={studioBandLabeledBtn}
+        ><PanelRightOpen size={13} /><span>{pt ? 'Mover para a direita' : 'Move to the right'}</span></button>
         <button className="ag-tap-icon"
           onClick={e => { e.stopPropagation(); onClose() }}
           title={pt ? 'Fechar o Studio' : 'Close the Studio'}
           aria-label={pt ? 'Fechar o Studio' : 'Close the Studio'}
-          style={studioBandIconBtn}
-        ><X size={13} /></button>
+          style={studioBandLabeledBtn}
+        ><X size={13} /><span>{pt ? 'Fechar' : 'Close'}</span></button>
         <button className="ag-tap-icon"
           onClick={e => { e.stopPropagation(); onToggleOpen() }}
           title={open ? (pt ? 'Recolher o Studio' : 'Collapse the Studio') : (pt ? 'Expandir o Studio' : 'Expand the Studio')}
@@ -405,8 +500,36 @@ function StudioBand({
         >{open ? <ChevronDown size={13} /> : <ChevronUp size={13} />}</button>
       </div>
       {open && (
-        <div style={{ height: 320, display: 'flex', flexDirection: 'column', padding: '0 12px 10px' }}>
-          <div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} />
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          {/* THE DRAG HANDLE (design item 7) — free-resizing, no low ceiling, and it SNAPS to fill
+              the centre column within `BAND_SNAP_THRESHOLD_PX` of its top; see `resolveBandHeight`
+              and this component's own header for why the height/full record is SHARED with
+              `ShellBand`. Same geometry as that band's own handle: on the TOP edge, grows upward. */}
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label={pt ? 'Redimensionar o Studio' : 'Resize the Studio'}
+            tabIndex={0}
+            onMouseDown={e => { e.preventDefault(); onDragStart(e.clientY) }}
+            onTouchStart={e => { const p = e.touches[0]; if (p) onDragStart(p.clientY) }}
+            onKeyDown={e => {
+              if (e.key === 'ArrowUp') { e.preventDefault(); applyHeight(resolveBandHeight(renderedHeight + 24, columnHeight)) }
+              if (e.key === 'ArrowDown') { e.preventDefault(); applyHeight(resolveBandHeight(renderedHeight - 24, columnHeight)) }
+            }}
+            style={{ height: 6, cursor: 'ns-resize', background: 'transparent' }}
+          />
+          <div style={{
+            // NOT full: an explicit pixel height, because the ROOT above is auto-sized (content
+            // decides it) and has no box of its own to hand this one a share of. FULL: the ROOT is
+            // itself flex-stretched (see its own style, above), so this box in turn just takes
+            // `flex: 1` of THAT — the same two-step every other flexed box in this file uses.
+            ...(heightPrefs.full
+              ? { flex: '1 1 auto', minHeight: 0 }
+              : { height: Math.max(BAND_MIN_PX, renderedHeight), flexShrink: 0 }),
+            display: 'flex', flexDirection: 'column', padding: '0 12px 10px',
+          }}>
+            <div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} />
+          </div>
         </div>
       )}
     </div>
@@ -418,6 +541,14 @@ const studioBandIconBtn: React.CSSProperties = {
   width: 26, height: 22, flexShrink: 0, borderRadius: 6, padding: 0,
   border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
   color: 'var(--text-secondary)', cursor: 'pointer',
+}
+
+/** `studioBandIconBtn`, plus a visible word (design item 5). */
+const studioBandLabeledBtn: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 5, height: 22, flexShrink: 0,
+  padding: '0 8px', borderRadius: 6, border: '1px solid var(--border-subtle)',
+  background: 'var(--bg-elevated)', color: 'var(--text-secondary)', cursor: 'pointer',
+  fontFamily: 'inherit', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
 }
 
 /** Exported: the shared App.tsx header draws the SAME segmented control for the lifted-up

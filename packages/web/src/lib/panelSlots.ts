@@ -35,7 +35,7 @@
 import { createElement, useSyncExternalStore, type ComponentType, type ReactElement } from 'react'
 import { holdIfUnsaved } from './unsavedBuffers'
 
-export type PanelId = 'contents' | 'studio' | 'cli' | 'shell'
+export type PanelId = 'contents' | 'studio' | 'cli' | 'shell' | 'hardware'
 export type SlotId = 'right' | 'bottom'
 
 export interface SlotLayout {
@@ -48,16 +48,18 @@ export interface SlotLayout {
   lastSlot: Record<PanelId, SlotId>
 }
 
-export const PANEL_IDS: readonly PanelId[] = ['contents', 'studio', 'cli', 'shell']
+export const PANEL_IDS: readonly PanelId[] = ['contents', 'studio', 'cli', 'shell', 'hardware']
 
-/** Defaults: `contents`/`studio` open on the right; `cli`/`shell` open at the bottom — matching
- *  where each of them has always lived before this feature existed. */
+/** Defaults: `contents`/`studio`/`hardware` open on the right; `cli`/`shell` open at the bottom —
+ *  matching where each of them has always lived before this feature existed. */
 export const DEFAULT_LAST_SLOT: Record<PanelId, SlotId> = {
-  contents: 'right', studio: 'right', cli: 'bottom', shell: 'bottom',
+  contents: 'right', studio: 'right', cli: 'bottom', shell: 'bottom', hardware: 'right',
 }
 
-/** What each slot may host — CLOSED sets, so a new panel must be added here on purpose. */
-const RIGHT_PANELS: readonly PanelId[] = ['contents', 'studio', 'cli', 'shell']
+/** What each slot may host — CLOSED sets, so a new panel must be added here on purpose.
+ *  `hardware` is RIGHT ONLY — it answers "what is this machine doing right now", which is a
+ *  question with no useful shape in a band under the composer, and nobody asked for it there. */
+const RIGHT_PANELS: readonly PanelId[] = ['contents', 'studio', 'cli', 'shell', 'hardware']
 const BOTTOM_PANELS: readonly PanelId[] = ['cli', 'shell', 'studio']
 
 export const EMPTY_SLOT_LAYOUT: SlotLayout = {
@@ -197,7 +199,7 @@ function gateOpen(panel: PanelId, gates: PanelGates): boolean {
   if (panel === 'studio') return gates.editorEnabled
   if (panel === 'cli') return !gates.relayed
   if (panel === 'shell') return gates.shellEnabled && !gates.relayed
-  return true // `contents` has no gate of its own.
+  return true // `contents` and `hardware` have no server gate of their own.
 }
 
 /**

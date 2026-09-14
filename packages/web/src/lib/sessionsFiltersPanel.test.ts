@@ -2,6 +2,7 @@ import { describe, test, expect } from 'bun:test'
 import {
   filtrosPanelInert, sessionsFiltersShouldReturnFocus,
   filtrosPanelBounds, FILTROS_PANEL_PREFERRED_WIDTH, FILTROS_PANEL_MIN_WIDTH,
+  metricsTabBounds, METRICS_PANEL_PREFERRED_WIDTH, METRICS_PANEL_MIN_WIDTH,
 } from './sessionsFiltersPanel'
 
 describe('filtrosPanelInert', () => {
@@ -69,5 +70,48 @@ describe('filtrosPanelBounds', () => {
   test('an aside crossing the left edge entirely (no room at all) still floors rather than going negative', () => {
     const bounds = filtrosPanelBounds({ left: 0, right: 800 }, { left: 700, right: 1440 }, 1440)
     expect(bounds.width).toBe(FILTROS_PANEL_MIN_WIDTH)
+  })
+})
+
+describe('metricsTabBounds — the session-metrics tab beside Filtros (design item 4)', () => {
+  test('plenty of room: the tab sits right after Filtros, dropdown gets its preferred width', () => {
+    const filtros = filtrosPanelBounds({ left: 0, right: 320 }, { left: 820, right: 1440 }, 1440)
+    const bounds = metricsTabBounds(filtros, 100, 6)
+    expect(bounds.left).toBe(320 + 100 + 6)
+    expect(bounds.panelMaxWidth).toBe(METRICS_PANEL_PREFERRED_WIDTH)
+  })
+
+  test('a narrower gap between the asides clamps the dropdown, never past the right aside', () => {
+    // 360px between the asides — enough for the Filtros panel to want its full room, but once the
+    // metrics tab's own width is subtracted there is less than the metrics dropdown's preferred
+    // 300px left, and MORE than its floor: a real, non-degenerate clamp.
+    const filtros = filtrosPanelBounds({ left: 0, right: 320 }, { left: 680, right: 1440 }, 1440)
+    const bounds = metricsTabBounds(filtros, 100, 6)
+    expect(bounds.panelMaxWidth).toBeLessThan(METRICS_PANEL_PREFERRED_WIDTH)
+    expect(bounds.panelMaxWidth).toBeGreaterThan(METRICS_PANEL_MIN_WIDTH)
+    expect(bounds.left + bounds.panelMaxWidth).toBeLessThanOrEqual(680)
+  })
+
+  test('room narrower than the floor still returns the floor, not a negative width', () => {
+    const filtros = { left: 320, width: FILTROS_PANEL_MIN_WIDTH } // 320..560, 240px of room total
+    const bounds = metricsTabBounds(filtros, 200, 6) // tab alone eats 206 of the 240
+    expect(bounds.panelMaxWidth).toBe(METRICS_PANEL_MIN_WIDTH)
+  })
+
+  // The residual tradeoff `filtrosPanelBounds` itself already documents and accepts: once even the
+  // FLOOR cannot fit in what is left, the floor is returned anyway rather than a panel squeezed to
+  // nothing — which can still cross the right aside's edge. Stated here rather than hidden by a
+  // looser assertion, the same way `filtrosPanelBounds`'s own last two tests state it for the panel.
+  test('when the room is narrower than even the floor, the floor may still cross the right edge', () => {
+    const filtros = filtrosPanelBounds({ left: 0, right: 320 }, { left: 585, right: 1024 }, 1024)
+    const bounds = metricsTabBounds(filtros, 90, 6)
+    expect(bounds.panelMaxWidth).toBe(METRICS_PANEL_MIN_WIDTH)
+    expect(bounds.left + bounds.panelMaxWidth).toBeGreaterThan(585)
+  })
+
+  test('the tab never lands to the LEFT of the Filtros tab, whatever the gap', () => {
+    const filtros = filtrosPanelBounds({ left: 0, right: 320 }, null, 1440)
+    const bounds = metricsTabBounds(filtros, 0, 0)
+    expect(bounds.left).toBeGreaterThanOrEqual(filtros.left)
   })
 })

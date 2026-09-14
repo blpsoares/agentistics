@@ -13,7 +13,8 @@ import { dirname, resolve } from 'node:path'
 import type { StartHost } from '../cli-start'
 import { gitEnv } from '../backup/repo-probe'
 import { planSessionDirectory, type SessionDirPlan } from './editor-directory'
-import { containedInRoot, resolveTreePath } from './editor-path'
+import { resolveTreePath } from './editor-path'
+import { realContained } from './real-contained'
 import { childrenFromDirents, collapseToChildren, mergeEmptyDirs, type TreeChild } from './editor-list'
 import { looksBinary } from './artifact-web'
 import { decodeUtf8Lossless } from './editor-text'
@@ -69,23 +70,6 @@ export type EntryRefusal = 'escaped' | 'not-found' | 'not-a-directory'
 export type ListPlan =
   | { ok: true; children: TreeChild[] }
   | { ok: false; reason: EntryRefusal }
-
-/**
- * The REAL containment recheck. `resolveTreePath` already refused a lexical `..`; this catches a
- * symlink placed INSIDE the tree that points somewhere else — `realpath` follows every link on
- * both sides, and the containment test runs again on what it actually resolves to.
- *
- * Returns the real, resolved path on success. A target that does not exist YET (a create) has no
- * real path of its own — the caller checks its PARENT instead; see Task 9.
- */
-async function realContained(root: string, abs: string): Promise<string | null> {
-  try {
-    const [realRoot, realAbs] = await Promise.all([realpath(root), realpath(abs)])
-    return containedInRoot(realAbs, realRoot) ? realAbs : null
-  } catch {
-    return null
-  }
-}
 
 export async function listChildren(root: string, requestedPath: string): Promise<ListPlan> {
   const planned = resolveTreePath(root, requestedPath)
@@ -444,7 +428,8 @@ async function realContainedParent(root: string, abs: string): Promise<string | 
   return `${realParent}/${abs.slice(parent.length + 1)}`
 }
 
-export type CreateRefusal = 'escaped' | 'not-found' | 'already-exists' | 'not-a-directory'
+export type CreateRefusal =
+  'escaped' | 'not-found' | 'already-exists' | 'not-a-directory' | 'name-too-long' | 'no-permission'
 export type CreatePlan = { ok: true } | { ok: false; reason: CreateRefusal }
 
 export async function createTreeEntry(
@@ -470,7 +455,10 @@ export async function createTreeEntry(
     else await writeFile(target, '', { encoding: 'utf8', flag: 'wx' })
   } catch (err) {
     const reason = fsRefusal(err)
-    if (reason === 'already-exists' || reason === 'not-found' || reason === 'not-a-directory') return { ok: false, reason }
+    if (
+      reason === 'already-exists' || reason === 'not-found' || reason === 'not-a-directory'
+      || reason === 'name-too-long' || reason === 'no-permission'
+    ) return { ok: false, reason }
     throw err
   }
   return { ok: true }
@@ -484,14 +472,23 @@ export async function createTreeEntry(
  * whose middle segment is a FILE (ENOTDIR), something created at the name in between (EEXIST). Those
  * used to escape as a thrown `Error` whose message carries the ABSOLUTE host path, straight out of a
  * route with no catch. Only codes with a true sentence are mapped; anything else stays an exception.
+ *
+ * ENAMETOOLONG and EACCES joined the table for the same reason: an entry name over the filesystem's
+ * limit, or a folder this process may not write to, are ORDINARY user mistakes — a name pasted from
+ * somewhere else, a repository checked out read-only — and both used to fall through to the generic
+ * 500 every other mapped code here was added to avoid.
  */
-function fsRefusal(err: unknown): 'into-itself' | 'not-a-directory' | 'already-exists' | 'not-found' | 'not-empty' | null {
+function fsRefusal(
+  err: unknown,
+): 'into-itself' | 'not-a-directory' | 'already-exists' | 'not-found' | 'not-empty' | 'name-too-long' | 'no-permission' | null {
   const code = (err as { code?: unknown } | null)?.code
   if (code === 'EINVAL') return 'into-itself'
   if (code === 'ENOTDIR') return 'not-a-directory'
   if (code === 'EEXIST') return 'already-exists'
   if (code === 'ENOENT') return 'not-found'
   if (code === 'ENOTEMPTY') return 'not-empty'
+  if (code === 'ENAMETOOLONG') return 'name-too-long'
+  if (code === 'EACCES') return 'no-permission'
   return null
 }
 
@@ -529,7 +526,9 @@ function namesRoot(root: string, abs: string): boolean {
   return resolve(abs) === resolve(root)
 }
 
-export type RenameRefusal = 'escaped' | 'not-found' | 'already-exists' | 'is-root' | 'into-itself' | 'not-a-directory'
+export type RenameRefusal =
+  | 'escaped' | 'not-found' | 'already-exists' | 'is-root' | 'into-itself' | 'not-a-directory'
+  | 'name-too-long' | 'no-permission'
 export type RenamePlan = { ok: true } | { ok: false; reason: RenameRefusal }
 
 export async function renameTreeEntry(root: string, fromPath: string, toPath: string): Promise<RenamePlan> {
@@ -541,6 +540,15 @@ export async function renameTreeEntry(root: string, fromPath: string, toPath: st
 
   const realFrom = await entryContained(root, from.abs)
   if (realFrom === null) return { ok: false, reason: 'not-found' }
+
+  // `realContainedParent` collapses two different facts into one `null`: the destination's parent
+  // does not exist AT ALL, or it exists but escapes containment (a symlink route out of the tree).
+  // A move into a folder nobody made yet is an everyday mistake and reads as `escaped` before this
+  // check — a sentence about the wrong thing. Re-checking the parent LEXICALLY first (no realpath,
+  // no symlink-following) tells the two apart: only a parent that genuinely is not there answers
+  // `not-found`; one that exists but fails the REAL containment check keeps `escaped`.
+  const toParentExists = await lstat(dirname(to.abs)).then(() => true, () => false)
+  if (!toParentExists) return { ok: false, reason: 'not-found' }
 
   const realToTarget = await realContainedParent(root, to.abs)
   if (realToTarget === null) return { ok: false, reason: 'escaped' }
@@ -564,11 +572,16 @@ export async function renameTreeEntry(root: string, fromPath: string, toPath: st
   return { ok: true }
 }
 
-export type DeleteRefusal = 'escaped' | 'not-found' | 'not-empty' | 'is-root'
+export type DeleteRefusal = 'escaped' | 'not-found' | 'not-empty' | 'is-root' | 'name-too-long' | 'no-permission'
 export type DeletePlan = { ok: true } | { ok: false; reason: DeleteRefusal }
 
 export async function deleteTreeEntry(
   root: string, requestedPath: string, recursive: boolean,
+  // Injectable for tests only — the same seam `chat-web.ts`'s `readerFor` uses. `rm`'s own recursive
+  // walk throwing ENOENT/ENOTEMPTY for a CHILD a concurrent actor touched, while the entry itself is
+  // still right here, cannot be reproduced on a real filesystem without a genuine race; without this
+  // seam that branch would go untested the same way chat-web.ts's own comment describes.
+  rmFn: typeof rm = rm,
 ): Promise<DeletePlan> {
   const planned = resolveTreePath(root, requestedPath)
   if (!planned.ok) return { ok: false, reason: 'escaped' }
@@ -591,10 +604,19 @@ export async function deleteTreeEntry(
   }
 
   try {
-    await rm(real, { recursive: true, force: false })
+    await rmFn(real, { recursive: true, force: false })
   } catch (err) {
     const reason = fsRefusal(err)
-    if (reason === 'not-found' || reason === 'not-empty') return { ok: false, reason }
+    if (reason === 'not-found' || reason === 'not-empty') {
+      // `rm`'s own internal walk can throw either code for a CHILD a CONCURRENT actor touched —
+      // removed one (ENOENT) or added one (ENOTEMPTY) — even though the entry we were asked to
+      // delete is still right here, just shrinking or growing under us. Trusting the syscall's own
+      // reading answered `not-found` for a folder that plainly existed; re-checking against the
+      // entry itself is what tells "gone" apart from "still there, just raced with".
+      const stillThere = await lstat(real).then(() => true, () => false)
+      return { ok: false, reason: stillThere ? 'not-empty' : 'not-found' }
+    }
+    if (reason === 'name-too-long' || reason === 'no-permission') return { ok: false, reason }
     throw err
   }
   return { ok: true }

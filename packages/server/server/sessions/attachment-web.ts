@@ -21,6 +21,7 @@ import { join, resolve, sep } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { AGENTISTICS_DATA_DIR } from '../config'
 import { storedAttachmentName } from './attachment-name'
+import { realContained } from './real-contained'
 import { splitImageAttachments } from '@agentistics/core'
 import type { AttachmentMessage, AttachmentSend } from '@agentistics/core'
 
@@ -163,14 +164,37 @@ export function resolveAttachmentRead(requested: string): string | null {
 }
 
 /**
- * ONE stored attachment, named the way it is stored — PURE, and the whole security model of
- * `GET /api/fleet/attachment/by-name`.
+ * The REAL containment recheck for `resolveAttachmentRead` — the same `realContained` rule the
+ * Studio's own tree applies (`editor-fs.ts`, lifted into `real-contained.ts`), applied here.
+ *
+ * `resolveAttachmentRead` above is a LEXICAL check only — it never touches disk — so a symlink
+ * planted inside `ATTACHMENT_DIR` that points somewhere else resolves the prefix check and would
+ * then be served straight off its target. This is the one route that actually reads the bytes back
+ * (`GET /api/fleet/attachment`), so it is the one place this recheck has to run: `resolveAttachmentRead`
+ * itself stays lexical-only for its other two callers (`attachmentMessageOf`, the companion
+ * resolver), which only decide what to RECORD, never what to serve.
+ */
+export async function resolveAttachmentReadReal(requested: string): Promise<string | null> {
+  const lexical = resolveAttachmentRead(requested)
+  if (lexical === null) return null
+  return realContained(ATTACHMENT_DIR, lexical)
+}
+
+/**
+ * ONE stored attachment, named the way it is stored — PURE, and half of the security model of
+ * `GET /api/fleet/attachment/by-name` (the other half is `attachmentPathByNameReal`, below).
  *
  * This is the NARROWER twin of `resolveAttachmentRead`. That one has to accept a whole path,
  * because a message carries the attachment's path verbatim and the chat shows it back from the
  * message. The GALLERY does not need that: it is a grid of this directory's own files, so it can
  * ask by NAME, and a name that is a single segment cannot express a traversal at all — there is no
- * `resolve()` race to reason about, and no way for the answer to land outside `ATTACHMENT_DIR`.
+ * `resolve()` race to reason about.
+ *
+ * That rules out an ESCAPE SPELLED IN THE REQUEST, which is all a LEXICAL check can ever rule out —
+ * it says nothing about what `ATTACHMENT_DIR/<name>` actually IS on disk, so a symlink planted
+ * inside the directory (by anything else with write access to it) resolves this check exactly like
+ * an ordinary file. The REAL recheck for that is `attachmentPathByNameReal`; this function alone is
+ * not enough to decide what gets served.
  *
  * The accepted set is exactly what `storedAttachmentName` produces: one segment of
  * `[A-Za-z0-9._-]`. Anything this machine could not itself have written is refused, which is a
@@ -184,6 +208,24 @@ export function attachmentPathByName(name: string): string | null {
   if (name === '.' || name === '..') return null
   if (!/^[A-Za-z0-9._-]+$/.test(name)) return null
   return join(ATTACHMENT_DIR, name)
+}
+
+/**
+ * The REAL containment recheck for `attachmentPathByName` — the same `realContained` rule
+ * `resolveAttachmentReadReal` applies above, applied here.
+ *
+ * The single-segment name refuses a traversal BY CONSTRUCTION, but that only rules out an escape
+ * spelled in the request; it says nothing about what `ATTACHMENT_DIR/<name>` actually IS on disk.
+ * A symlink planted inside the directory — by anything else with write access to it, since the
+ * directory is shared by every session on this machine — resolves the lexical check exactly like an
+ * ordinary file and would then be served straight off its target. `GET /api/fleet/attachment/by-name`
+ * is the second route that reads attachment bytes back, so it gets the identical recheck rather than
+ * a second hand-rolled copy of the rule.
+ */
+export async function attachmentPathByNameReal(name: string): Promise<string | null> {
+  const lexical = attachmentPathByName(name)
+  if (lexical === null) return null
+  return realContained(ATTACHMENT_DIR, lexical)
 }
 
 /**

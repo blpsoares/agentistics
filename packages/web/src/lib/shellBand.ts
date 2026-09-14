@@ -25,9 +25,6 @@
 /** The smallest band worth drawing: a prompt, a command and a few lines of its output. */
 export const BAND_MIN_PX = 140
 
-/** The most of the panel a band may take. Above this the conversation it docks under is gone. */
-export const BAND_MAX_FRACTION = 0.7
-
 const STORAGE_KEY = 'agentistics-shell-band'
 
 export interface ShellWatchFacts {
@@ -46,14 +43,48 @@ export function shellWatching(f: ShellWatchFacts): boolean {
 /**
  * The dragged height, bounded.
  *
- * The floor is applied LAST so a viewport too short for it still yields a layable-out box rather
+ * The floor is applied LAST so a column too short for it still yields a layable-out box rather
  * than a ceiling below the floor, which a naive `Math.min(max, Math.max(min, h))` produces as a
  * height smaller than the minimum — and a flex child cannot be laid out at a negative one.
+ *
+ * UX PASS ITEM 7 REMOVED THE OLD CEILING (`viewportHeight * 0.7`, a fixed 70% no drag could ever
+ * cross) — reported as a low, arbitrary cap that stopped the band well short of the screen it was
+ * asked to fill. The one ceiling left is the CENTRE COLUMN'S OWN measured height (never the whole
+ * viewport, which also holds the header and — on the sessions workspace — the left/right asides
+ * beside this column, not above or below it): a band cannot cover more than the column it docks
+ * inside. Reaching that ceiling is `resolveBandHeight`'s job, not this function's — this one stays
+ * the plain clamp the keyboard step and every existing caller already expect.
  */
-export function clampBandHeight(px: number, viewportHeight: number): number {
+export function clampBandHeight(px: number, columnHeight: number): number {
   if (!Number.isFinite(px)) return BAND_MIN_PX
-  const ceiling = Math.round(viewportHeight * BAND_MAX_FRACTION)
+  const ceiling = Number.isFinite(columnHeight) && columnHeight > 0 ? columnHeight : Number.POSITIVE_INFINITY
   return Math.max(BAND_MIN_PX, Math.min(px, ceiling))
+}
+
+/** How close to the column's own top edge a drag must reach before the band SNAPS to fill it
+ *  (design item 7) — close enough that the reader is plainly asking for "all of it", far enough
+ *  that an ordinary resize a few pixels short of the ceiling does not snap by accident. */
+export const BAND_SNAP_THRESHOLD_PX = 48
+
+/**
+ * WHAT A DRAG (or a keyboard step) ASKS FOR, resolved against the measured centre column (design
+ * item 7). Two states, and the band is not free to be almost-but-not-quite full:
+ *
+ *  - within `BAND_SNAP_THRESHOLD_PX` of covering the WHOLE column, it SNAPS there exactly —
+ *    `height` reads the column's own height, never a few pixels short of it, and `full` says so.
+ *  - anywhere else, it is the ordinary clamp (`clampBandHeight`), and `full` is false.
+ *
+ * Symmetric by construction: dragging UP from an ordinary height past the threshold snaps to full;
+ * dragging DOWN from full (which starts the next drag at the column's own height) crosses back
+ * under the threshold on the very same arithmetic and releases it — there is no separate "release"
+ * rule to keep in sync with the "snap" one.
+ */
+export function resolveBandHeight(wantedPx: number, columnHeight: number): { height: number; full: boolean } {
+  const clamped = clampBandHeight(wantedPx, columnHeight)
+  if (Number.isFinite(columnHeight) && columnHeight > 0 && columnHeight - clamped <= BAND_SNAP_THRESHOLD_PX) {
+    return { height: columnHeight, full: true }
+  }
+  return { height: clamped, full: false }
 }
 
 /** The route-level refusal codes, which carry no sentence of their own. */
@@ -130,6 +161,15 @@ export interface BandPrefs {
   open: boolean
   height: number
   /**
+   * SNAPPED TO FILL THE CENTRE COLUMN (design item 7) — persisted the same way `height` already is,
+   * so a band left full reopens full. `height` is STILL kept current while `full` is true (the
+   * measured column height at the moment it was written), which is what lets a reload on a
+   * DIFFERENT-sized screen still read as full rather than as an arbitrary tall number — the render
+   * path re-derives the actual pixel figure from the live measurement, this flag only says which of
+   * the two readings applies.
+   */
+  full?: boolean
+  /**
    * The last geometry each PLACEMENT measured for its terminal, so the next open can state it
    * before the first capture instead of snapping a quarter-second later.
    *
@@ -183,6 +223,10 @@ export function readBandPrefs(storage?: Storage): BandPrefs {
       height: typeof r.height === 'number' && Number.isFinite(r.height)
         ? Math.max(BAND_MIN_PX, r.height)
         : DEFAULT_BAND_PREFS.height,
+      // OMITTED rather than `false`, matching `geometry`/`target` below: absent and false read the
+      // same way to every caller (`prefs.full === true`), so there is no reason for a record that
+      // never mentioned it to gain a key it did not have.
+      ...(r.full === true ? { full: true } : {}),
       // DROPPED PER PLACEMENT when it does not read as a pair of positive whole numbers. Half a
       // geometry is worse than none — it would be sent, refused, and the reader would never learn
       // why — and one unreadable placement must not cost the other.
