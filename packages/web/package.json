@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --logLevel warn",
+    "dev": "node ./node_modules/.bin/vite --logLevel warn",
     "build": "vite build",
     "preview": "vite preview"
   },
