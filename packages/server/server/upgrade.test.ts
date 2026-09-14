@@ -14,6 +14,8 @@ import {
   MIN_BINARY_BYTES,
   pollRunningVersion,
   describeStaleServer,
+  describeUnconfirmedRestart,
+  decideVersionVerification,
 } from './upgrade'
 
 // --- platform/arch gate -----------------------------------------------------
@@ -280,4 +282,68 @@ test('describeStaleServer omits the pid/unit lines it has no facts for', () => {
   const lines = describeStaleServer({ port: 47291, want: '2.37.0', observed: '2.36.1' })
   expect(lines).toHaveLength(2) // headline + the generic restart-command fix, nothing invented
   expect(lines[1]).toContain('systemctl --user restart agentop-server')
+})
+
+// --- decideVersionVerification -----------------------------------------------
+//
+// The gap a review found in the commit above: when `restartRunningServices` genuinely bounced a
+// server that answers `PORT` and the poll's whole window passed with NOTHING ever answering
+// `/api/version`, the old code fell straight through to "Done — now running vX" because it only
+// ever checked `verified.observed !== null`. A restarted unit that crash-loops hard enough to never
+// bind the port even once is indistinguishable, from the poll alone, from "nothing runs here to
+// confirm" — the only thing that tells them apart is knowing a restart was expected.
+
+test('decideVersionVerification succeeds once the served version matches', () => {
+  expect(decideVersionVerification({ ok: true, observed: '2.37.0' }, true)).toEqual({ ok: true })
+  // Whether or not a restart happened is irrelevant once the new version is confirmed.
+  expect(decideVersionVerification({ ok: true, observed: '2.37.0' }, false)).toEqual({ ok: true })
+})
+
+test('decideVersionVerification fails on a stale version served by another process', () => {
+  // The originally measured defect: an orphan answers, and it is never the new version.
+  expect(decideVersionVerification({ ok: false, observed: '2.36.1' }, true))
+    .toEqual({ ok: false, reason: 'mismatch' })
+  // Still a mismatch even if `restartedServer` were somehow false — something IS answering.
+  expect(decideVersionVerification({ ok: false, observed: '2.36.1' }, false))
+    .toEqual({ ok: false, reason: 'mismatch' })
+})
+
+test('decideVersionVerification fails when a server was restarted and nothing ever answered (unit failed)', () => {
+  expect(decideVersionVerification({ ok: false, observed: null }, true))
+    .toEqual({ ok: false, reason: 'unconfirmed' })
+})
+
+test('decideVersionVerification fails when a server was restarted and nothing ever answered (unit activating)', () => {
+  // The decision itself does not read `portHolderFacts` — the unit state only affects the composed
+  // sentence — but the case is named separately because it is the one `describeUnconfirmedRestart`
+  // must render distinctly (see below): `activating (auto-restart)` is still crash-looping, not
+  // merely slow, and the decision must fail exactly the same as `failed`.
+  expect(decideVersionVerification({ ok: false, observed: null }, true))
+    .toEqual({ ok: false, reason: 'unconfirmed' })
+})
+
+test('decideVersionVerification succeeds when nothing was restarted at all', () => {
+  // No managed service was running (e.g. a foreground/dev setup) — there is nothing to confirm,
+  // and "nothing answered" must not read as a failure here.
+  expect(decideVersionVerification({ ok: false, observed: null }, false)).toEqual({ ok: true })
+})
+
+// --- describeUnconfirmedRestart ------------------------------------------------
+
+test('describeUnconfirmedRestart names the unit state and the exact inspection commands', () => {
+  const failed = describeUnconfirmedRestart({ port: 47291, want: '2.37.0', unitState: 'failed' })
+  expect(failed[0]).toContain('nothing answered on port 47291')
+  expect(failed.some(l => l.includes('agentop-server unit: failed'))).toBe(true)
+  expect(failed.some(l => l.includes('systemctl --user status agentop-server'))).toBe(true)
+  expect(failed.some(l => l.includes('journalctl --user -u agentop-server -n 50'))).toBe(true)
+
+  const activating = describeUnconfirmedRestart({ port: 47291, want: '2.37.0', unitState: 'activating (auto-restart)' })
+  expect(activating.some(l => l.includes('agentop-server unit: activating (auto-restart)'))).toBe(true)
+})
+
+test('describeUnconfirmedRestart names the pid holding the port when there is one', () => {
+  const lines = describeUnconfirmedRestart({
+    port: 47291, want: '2.37.0', unitState: 'inactive', pid: 777, cmd: '/opt/agentop server',
+  })
+  expect(lines.some(l => l.includes('777') && l.includes('/opt/agentop server'))).toBe(true)
 })

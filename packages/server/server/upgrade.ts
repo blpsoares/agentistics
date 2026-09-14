@@ -284,7 +284,20 @@ async function probeBinaryVersion(bin: string, timeoutMs = 20_000): Promise<stri
   }
 }
 
-export type RestartOutcome = { ok: boolean; failures: string[] }
+export type RestartOutcome = {
+  ok: boolean
+  failures: string[]
+  /**
+   * True only when something that answers THIS machine's own `/api/version` (bound to `PORT`) was
+   * bounced: the native `agentop-server` systemd unit, the machine-in-Docker container (it runs
+   * with `network_mode: host`, so it binds `PORT` directly, unlike the central which is a separate
+   * container on its own port), or an unmanaged background `agentop server` process. Never true for
+   * `agentop-watch` (the OTel daemon has no HTTP surface) or the central (a different port). This is
+   * what lets the poll below tell "a server was restarted and never came back" apart from "nothing
+   * runs here to confirm" — `didSomething` alone conflates both.
+   */
+  restartedServer: boolean
+}
 
 /**
  * After the new binary is in place, bounce whatever is actually running so it runs the new
@@ -339,6 +352,7 @@ async function restartBackgroundServerPids(newBin: string): Promise<boolean> {
 
 async function restartRunningServices(newBin: string): Promise<RestartOutcome> {
   let didSomething = false
+  let restartedServer = false
   const failures: string[] = []
 
   // 1) Native systemd user services: solo/member run as `agentop server`; `agentop watch` is the
@@ -352,12 +366,16 @@ async function restartRunningServices(newBin: string): Promise<RestartOutcome> {
         process.stdout.write(`    ${res.message.split('\n')[0]}\n`)
         if (!res.ok) failures.push(`agentop-${mode} service: ${res.message.split('\n')[0]}`)
         didSomething = true
+        // Only `server` answers `/api/version` on `PORT`; `watch` has no HTTP surface at all.
+        if (mode === 'server') restartedServer = true
       }
     }
   }
 
   // 2) Central (Docker): pull the new version-tagged image and recreate. Driven through the NEW
   //    binary so `agentop central` resolves the image tag to the version we just installed.
+  //    The central listens on its OWN port (48080 by default, mapped separately) — never `PORT` —
+  //    so bouncing it says nothing about whether `agentop server` itself came back up.
   if (await dockerRunning(`label=com.docker.compose.project=${CENTRAL_PROJECT}`)) {
     process.stdout.write('  Updating the central (Docker): pulling the new image and recreating…\n')
     const pull = await shInherit([newBin, 'central', 'pull'])
@@ -370,7 +388,8 @@ async function restartRunningServices(newBin: string): Promise<RestartOutcome> {
   // 3) Machine-in-Docker: recreate. The machine image is built from a repo checkout
   //    (docker/machine.yml), so this only applies when that compose is reachable —
   //    and when it isn't, the container KEEPS RUNNING THE OLD VERSION, which is a failure,
-  //    not a footnote.
+  //    not a footnote. Unlike the central, the machine runs with `network_mode: host`
+  //    (docker/machine.yml), so it binds `PORT` directly and counts toward `restartedServer`.
   if (await dockerRunning(`ancestor=${MACHINE_IMAGE}`)) {
     const compose = join(process.cwd(), 'docker', 'machine.yml')
     if (await Bun.file(compose).exists()) {
@@ -378,6 +397,7 @@ async function restartRunningServices(newBin: string): Promise<RestartOutcome> {
       const code = await shInherit(['docker', 'compose', '-f', compose, 'up', '-d', '--build'])
       if (code !== 0) failures.push(`machine container: \`docker compose up -d --build\` exited ${code}`)
       didSomething = true
+      restartedServer = true
     } else {
       failures.push(
         'machine container: docker/machine.yml not found here — it still runs the old version ' +
@@ -389,7 +409,7 @@ async function restartRunningServices(newBin: string): Promise<RestartOutcome> {
   // 4) Background unmanaged server process: if systemd did not restart server, check for and bounce running background server
   if (!didSomething) {
     const restartedBg = await restartBackgroundServerPids(newBin)
-    if (restartedBg) didSomething = true
+    if (restartedBg) { didSomething = true; restartedServer = true }
   }
 
   if (!didSomething && failures.length === 0) {
@@ -399,7 +419,7 @@ async function restartRunningServices(newBin: string): Promise<RestartOutcome> {
     )
   }
 
-  return { ok: failures.length === 0, failures }
+  return { ok: failures.length === 0, failures, restartedServer }
 }
 
 // ---------------------------------------------------------------------------
@@ -505,6 +525,57 @@ export function describeStaleServer(o: PortHolderFacts & { port: number; want: s
     ? `  Fix: kill ${o.pid} (it is not the unit's tracked process), then \`systemctl --user restart agentop-server\`.`
     : `  Fix: \`systemctl --user restart agentop-server\` — or \`agentop restart server\`.`)
   return lines
+}
+
+/**
+ * The sentence(s) for the OTHER failure shape `describeStaleServer` cannot name: a server was
+ * genuinely restarted (the systemd/docker command itself reported success) and the poll's whole
+ * window passed with NOTHING answering `/api/version` at all — a crash-loop that never binds the
+ * port even once looks identical, from `pollRunningVersion`'s side, to "nothing runs here", and the
+ * only thing that tells them apart is knowing a restart was expected. Never invents a pid/unit
+ * state it does not have; `portHolderFacts.unitState` carries systemd's own word (`failed`,
+ * `activating (auto-restart)`, `inactive`, …) when systemd is available.
+ */
+export function describeUnconfirmedRestart(o: PortHolderFacts & { port: number; want: string }): string[] {
+  const lines: string[] = []
+  lines.push(
+    `A server was restarted, but nothing answered on port ${o.port} within the check window — ` +
+    `v${o.want} may have failed to start.`,
+  )
+  if (o.pid) lines.push(`  pid ${o.pid} is holding the port${o.cmd ? `: \`${o.cmd}\`` : ''}`)
+  lines.push(`  agentop-server unit: ${o.unitState ?? 'unknown (systemd unavailable, or not a systemd service)'}`)
+  lines.push('  Inspect it: `systemctl --user status agentop-server`')
+  lines.push('  Recent logs: `journalctl --user -u agentop-server -n 50`')
+  return lines
+}
+
+/** What `runUpgrade` decided about the just-applied restart, from the poll alone. */
+export type VersionVerification =
+  | { ok: true }
+  | { ok: false; reason: 'mismatch' }
+  | { ok: false; reason: 'unconfirmed' }
+
+/**
+ * Pure: turns a poll result plus "was a server that answers this port actually restarted?" into a
+ * pass/fail verdict — never a confident success on either failure shape.
+ *
+ * - The new version answered → `ok: true`.
+ * - SOMETHING answered and it never became the new version → `mismatch` (the originally measured
+ *   defect: an orphan process squatting the port).
+ * - NOTHING ever answered, but a restart genuinely happened → `unconfirmed` (a restarted service
+ *   that crash-loops hard enough to never bind the port even once during the poll is exactly the
+ *   same "success claimed while the service is down" bug, for a different trigger).
+ * - NOTHING ever answered and NOTHING was restarted → `ok: true`. There was nothing to confirm: a
+ *   foreground/dev setup with no managed service is not a failure this check exists to catch.
+ */
+export function decideVersionVerification(
+  verified: VersionPollResult,
+  restartedServer: boolean,
+): VersionVerification {
+  if (verified.ok) return { ok: true }
+  if (verified.observed !== null) return { ok: false, reason: 'mismatch' }
+  if (restartedServer) return { ok: false, reason: 'unconfirmed' }
+  return { ok: true }
 }
 
 // ---------------------------------------------------------------------------
@@ -920,7 +991,7 @@ export async function runUpgrade(lang: CliLang = 'en'): Promise<number> {
   try {
     restart = await restartRunningServices(currentBin)
   } catch (err: any) {
-    restart = { ok: false, failures: [`unexpected error: ${err?.message ?? String(err)}`] }
+    restart = { ok: false, failures: [`unexpected error: ${err?.message ?? String(err)}`], restartedServer: false }
   }
 
   if (!restart.ok) {
@@ -940,20 +1011,29 @@ export async function runUpgrade(lang: CliLang = 'en'): Promise<number> {
   // trying to bind it — invisible to every check above, and exactly what let a previous run print
   // "Done — now running vX" while `GET /api/version` kept answering the version that was current
   // before the upgrade. This is the one check that asks what is actually answering requests.
+  //
+  // A restarted server whose OWN new process never binds the port at all (a harder crash-loop —
+  // broken build, missing dependency, a fatal startup error) leaves `observed === null` too, which
+  // used to be treated as "nothing runs here to confirm" and printed "Done" over a service that was
+  // actually down. `restart.restartedServer` is what tells the two apart.
   const verified = await pollRunningVersion(PORT, info.latest)
-  if (!verified.ok && verified.observed !== null) {
-    // Something IS answering, and it never became the new version — a real, confirmed failure.
-    // (An `observed === null` — nothing answered at all, ever — is left as before: that is
-    // indistinguishable from "nothing runs here" on this machine, e.g. a foreground/dev setup with
-    // no service to confirm, and is not the defect this check exists to catch.)
+  const decision = decideVersionVerification(verified, restart.restartedServer)
+  if (!decision.ok) {
     const facts = await portHolderFacts(PORT)
+    const lines = decision.reason === 'mismatch'
+      ? describeStaleServer({ port: PORT, want: info.latest, observed: verified.observed, ...facts })
+      : describeUnconfirmedRestart({ port: PORT, want: info.latest, ...facts })
     process.stderr.write(
       `\n  ${_Y}${_B}${s.upgradeVersionUnconfirmed(info.latest)}${_R}\n` +
-      describeStaleServer({ port: PORT, want: info.latest, observed: verified.observed, ...facts })
-        .map(l => `    ${l}\n`).join('') +
+      lines.map(l => `    ${l}\n`).join('') +
       '\n',
     )
-    recordUpgradeFailure(info.latest, `server still answering as v${verified.observed}`)
+    recordUpgradeFailure(
+      info.latest,
+      decision.reason === 'mismatch'
+        ? `server still answering as v${verified.observed}`
+        : 'restarted server never answered /api/version',
+    )
     return 1
   }
 
