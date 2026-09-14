@@ -2126,6 +2126,11 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     // directory. HEAD answers the SIZE without the bytes, which is what the
     // list column is for — a size fetched by downloading the file is not a size, it is a download.
     //
+    // `attachmentPathByNameReal` is what actually decides what gets served — the lexical check alone
+    // refuses an escape spelled in the request but says nothing about a symlink planted inside the
+    // directory pointing elsewhere, the same REAL (`realpath`-resolved) recheck `/api/fleet/attachment`
+    // applies above.
+    //
     // Guarded by the `/api/fleet` PREFIX in `capability-guard.ts` (localShell) and 404'd on a
     // central with the rest of `/api/fleet*`, both above — neither needs a new entry, which is the
     // point of the prefix.
@@ -2133,9 +2138,9 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     // A refused name, a type the table does not name and a missing file all get the same bare 404. Which of the three
     // it was is not this reader's to say, and the path is never echoed back.
     if (url.pathname === '/api/fleet/attachment/by-name' && (req.method === 'GET' || req.method === 'HEAD')) {
-      const { attachmentPathByName, attachmentMediaType } = await import('./sessions/attachment-web')
+      const { attachmentPathByNameReal, attachmentMediaType } = await import('./sessions/attachment-web')
       const name = url.searchParams.get('name') ?? ''
-      const resolved = attachmentPathByName(name)
+      const resolved = await attachmentPathByNameReal(name)
       const type = resolved === null ? null : attachmentMediaType(name)
       if (resolved === null || type === null) {
         return new Response(null, { status: 404, headers: CORS_HEADERS })
