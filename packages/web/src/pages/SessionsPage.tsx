@@ -569,11 +569,14 @@ export default function SessionsPage() {
 
   const artLayout = resolveArtifactLayout({
     // The RIGHT SLOT is open whenever Contents wants it OR panelSlots has put the Studio, Claude
-    // Code or the Shell there — opening any of the three from a switcher must show the box even
-    // though none of them touch `art.open`; see `StudioHost.tsx` and `lib/panelSlots.ts`. Missing
-    // `rightIsCli`/`rightIsShell` here is exactly the shape of bug this comment already warns
-    // about for the Studio: the switcher can pick the panel and the box never opens to show it.
-    open: (art.open || rightIsStudio || rightIsCli || rightIsShell) && selected !== undefined,
+    // Code, the Shell or Hardware there — opening any of them from a switcher must show the box
+    // even though none of them touch `art.open`; see `StudioHost.tsx` and `lib/panelSlots.ts`.
+    // Missing one of these here is exactly the shape of bug this comment already warns about for
+    // the Studio: the switcher can pick the panel and the box never opens to show it — measured
+    // live for `hardware` (design item 3): the header tab lit, `rightSlotContent` correctly chose
+    // the `HardwarePanel` branch, and the aside stayed at ZERO width because nothing here had told
+    // `resolveArtifactLayout` this was a reason to open it at all.
+    open: (art.open || rightIsStudio || rightIsCli || rightIsShell || rightIsHardware) && selected !== undefined,
     width: typeof window === 'undefined' ? 1440 : window.innerWidth,
     isMobile,
     // Phase B ships without the reversal control; the split-rail default is what the plan measured.

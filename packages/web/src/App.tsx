@@ -2223,15 +2223,38 @@ export default function AppLayout() {
    * mistake `filtrosPanelBounds`'s own header already tells this story about, one level down.
    */
   const [filtrosTabW, setFiltrosTabW] = useState(0)
-  useEffect(() => {
-    const el = sessionsFiltersTriggerRef.current
-    if (!el) return
+  /**
+   * A CALLBACK ref, deliberately not a plain `useRef` + `useEffect` keyed on unrelated deps
+   * (`lang`, the filter count). This component returns an early `<LoadingScreen>` on its first
+   * several renders (`bootLoading` and the team-session gates, above) — the button this measures
+   * does not exist in the DOM at all until data has loaded, and an effect gated on `lang`/the
+   * filter count never fires again once THAT render finally reaches this JSX, because neither
+   * dependency happens to have changed between "loading" and "loaded". Measured live: the effect
+   * ran twice during the loading phase, both times against a `null` ref, and the tab it feeds sat
+   * at `filtrosTabW = 0` — overlapping the Filtros button — for the rest of the session. A
+   * callback ref fires exactly when THIS node attaches or detaches, on whichever render that is,
+   * the same pattern `Studio.tsx`'s own `measure` uses for its tree/editor split.
+   */
+  const filtrosTriggerObserver = useRef<ResizeObserver | null>(null)
+  const setFiltrosTriggerEl = useCallback((el: HTMLButtonElement | null) => {
+    sessionsFiltersTriggerRef.current = el
+    filtrosTriggerObserver.current?.disconnect()
+    filtrosTriggerObserver.current = null
+    if (el === null) return
+    // `getBoundingClientRect().width` (the BORDER box) on every callback — never
+    // `entries[0].contentRect.width`, which is the CONTENT box and reads ~22px narrower on this
+    // button (10px+1px of padding/border per side). A `ResizeObserver` fires once synchronously
+    // on `.observe()`, so that narrower figure overwrote the correct one from the very first
+    // frame: the metrics tab measured live at x394 instead of x410, OVERLAPPING the Filtros
+    // button — silent because nothing here ever changes size again, so it never re-corrects.
     const measure = () => setFiltrosTabW(el.getBoundingClientRect().width)
     measure()
+    if (typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(measure)
     ro.observe(el)
-    return () => ro.disconnect()
-  }, [lang, sessionsActiveFilterCount])
+    filtrosTriggerObserver.current = ro
+  }, [])
+  useEffect(() => () => filtrosTriggerObserver.current?.disconnect(), [])
   const METRICS_TAB_GAP = 6
   const metricsBounds = metricsTabBounds(filtrosBounds, filtrosTabW, METRICS_TAB_GAP)
 
@@ -2272,6 +2295,46 @@ export default function AppLayout() {
   const headerSessionMeta = selectedFleetSession?.conversationId !== undefined
     ? data?.sessions?.find(x => x.session_id === selectedFleetSession.conversationId)
     : undefined
+
+  /**
+   * THE TWO GLOBAL STUDIO SHORTCUTS (design items 8 and 11) — `Ctrl/Cmd+B` opens or closes the
+   * Studio wherever it lives, `Ctrl/Cmd+Shift+F` opens it (in its last slot) and switches to a
+   * whole-tree content search. Registered on `document` rather than on some element, because
+   * neither shortcut has a natural "focused" owner — the reader could be reading the conversation,
+   * sitting in the tree, or anywhere else on the page.
+   *
+   * GATED here to the Sessions workspace and a session actually selected — NOT to the editor gate
+   * itself, unlike the Studio's own header entry a few hundred lines below
+   * (`selectedFleetSession && appCtx.editorEnabled`). That gate lives on `appCtx`, built AFTER this
+   * component's early loading-screen returns, and a hook may never sit after a conditional return —
+   * placed there once, it fired on some renders and not others (data loading vs. loaded) and React
+   * refused to reconcile the mismatched hook count. Reading the raw server flag a second time up
+   * here to recompute the gate early would itself be exactly the "two gates that can disagree"
+   * shape `editorGate.test.ts` polices (`appCtx` is the ONE producer, asserted over the source) —
+   * so this effect skips the check instead: a `showPanel('studio')`/search request fired while the
+   * gate is actually closed lands on `panelSlots.ts`'s own `resolveForGates`, which already treats a
+   * gated-off Studio as absent wherever it is read, so an ungated write here is inert rather than
+   * wrong. This position, alongside every other hook `selectedFleetSession` itself depends on, is
+   * called on EVERY render regardless of loading state.
+   *
+   * `shouldHandleGlobally` (`lib/studioShortcuts.ts`) is the ONE gate on the KEYSTROKE — never
+   * re-derived here — and `runStudioShortcut` (`lib/studioSearchRequest.ts`) is the SAME function
+   * each Monaco instance's own registered command calls (`RepoFileEditor.tsx`), so a keystroke typed
+   * inside a file and one typed anywhere else in the workspace can never disagree about what either
+   * shortcut does.
+   */
+  useEffect(() => {
+    if (!inSessionsWorkspace || !selectedFleetSession) return
+    const onKey = (e: KeyboardEvent) => {
+      const shortcut = shouldHandleGlobally(e, e.target as { tagName?: string; isContentEditable?: boolean } | null)
+      if (shortcut === null) return
+      e.preventDefault()
+      runStudioShortcut(shortcut)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [inSessionsWorkspace, selectedFleetSession])
+
   // The Chat/Terminal choice lives in the URL (`?view=`) rather than in state here or in
   // `SessionPanel`, so the ONE control (now in this shared header) and the ONE reader (the panel,
   // still deciding which component to mount) can never disagree about which view is showing without
@@ -3383,36 +3446,6 @@ export default function AppLayout() {
   }
 
   /**
-   * THE TWO GLOBAL STUDIO SHORTCUTS (design items 8 and 11) — `Ctrl/Cmd+B` opens or closes the
-   * Studio wherever it lives, `Ctrl/Cmd+Shift+F` opens it (in its last slot) and switches to a
-   * whole-tree content search. Registered on `document` rather than on some element, because
-   * neither shortcut has a natural "focused" owner — the reader could be reading the conversation,
-   * sitting in the tree, or anywhere else on the page.
-   *
-   * GATED to the Sessions workspace, a session actually selected, and the editor gate open — the
-   * same three facts that decide whether the Studio's own header entry exists at all
-   * (`selectedFleetSession && appCtx.editorEnabled`, a few hundred lines below). Outside that, both
-   * shortcuts are simply not bound: there is no Studio to reach, and stealing `Ctrl+B` on, say, the
-   * dashboard would be binding a key nobody asked for there.
-   *
-   * `shouldHandleGlobally` (`lib/studioShortcuts.ts`) is the ONE gate — never re-derived here — and
-   * `runStudioShortcut` (`lib/studioSearchRequest.ts`) is the SAME function each Monaco instance's
-   * own registered command calls (`RepoFileEditor.tsx`), so a keystroke typed inside a file and one
-   * typed anywhere else in the workspace can never disagree about what either shortcut does.
-   */
-  useEffect(() => {
-    if (!inSessionsWorkspace || !selectedFleetSession || appCtx.editorEnabled !== true) return
-    const onKey = (e: KeyboardEvent) => {
-      const shortcut = shouldHandleGlobally(e, e.target as { tagName?: string; isContentEditable?: boolean } | null)
-      if (shortcut === null) return
-      e.preventDefault()
-      runStudioShortcut(shortcut)
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [inSessionsWorkspace, selectedFleetSession, appCtx.editorEnabled])
-
-  /**
    * The sessions workspace's ONE bar: the selected session's title, the filters, the view tabs and
    * the actions — drawn INTO the fixed top strip.
    *
@@ -3636,17 +3669,10 @@ export default function AppLayout() {
         position: 'absolute', top: '100%',
         left: filtrosBounds.left,
         zIndex: 10, pointerEvents: 'none',
-        // A ROW, not a single column any more: the session-metrics tab (design item 4) hangs
-        // right beside this one. Flexbox is what actually places it there — `metricsBounds.left`
-        // (computed above, and tested in `sessionsFiltersPanel.test.ts`) states the SAME arithmetic
-        // for the dropdown's own clamp, but the tab's own on-screen position follows the Filtros
-        // tab's REAL rendered width, never a value that could fall a frame behind a language change
-        // or the badge's digit count.
-        display: 'flex', alignItems: 'flex-start', gap: METRICS_TAB_GAP,
       }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', pointerEvents: 'auto' }}>
           <button
-            ref={sessionsFiltersTriggerRef}
+            ref={setFiltrosTriggerEl}
             onClick={toggleSessionsFilters}
             aria-expanded={sessionsFiltersOpen}
             aria-controls={FILTROS_PANEL_ID}
@@ -3730,13 +3756,28 @@ export default function AppLayout() {
             </div>
           </div>
         </div>
+      </div>
 
-        {/* THE SESSION-METRICS TAB (design item 4, screenshot 7) — the header's old "66%" button,
-            now hanging beside "Filtros" instead of sitting in the strip. `variant="tab"` is the
-            ONLY thing that changed on `SessionStatsMenu`: same props, same dropdown, same content
-            — see that component's own header. Absent exactly when the button was: no selected
-            session, or (inside the component) no context figure to show. */}
-        {selectedFleetSession && (
+      {/* THE SESSION-METRICS TAB (design item 4, screenshot 7) — the header's old "66%" button, now
+          hanging beside "Filtros" instead of sitting in the strip. `variant="tab"` is the ONLY thing
+          that changed on `SessionStatsMenu`: same props, same dropdown, same content — see that
+          component's own header. Absent exactly when the button was: no selected session, or
+          (inside the component) no context figure to show.
+
+          ITS OWN `position: absolute` SIBLING of the Filtros wrapper above — NOT a flex child beside
+          it. A flex row was tried first and put 356px of dead air between the two: the Filtros
+          COLUMN's flex-item width follows its widest DESCENDANT, and the collapsed filter panel
+          keeps its full `filtrosBounds.width` (~440px) the whole time — `grid-template-rows: 0fr`
+          collapses HEIGHT, never width — so the column occupied that width even while showing only
+          its own button. `metricsBounds.left` (`metricsTabBounds`, `lib/sessionsFiltersPanel.ts`) is
+          computed against the FILTROS BUTTON's own measured width instead, which is what actually
+          puts this tab immediately after it regardless of whether the filter panel is open. */}
+      {selectedFleetSession && (
+        <div style={{
+          position: 'absolute', top: '100%',
+          left: metricsBounds.left,
+          zIndex: 10, pointerEvents: 'none',
+        }}>
           <div style={{ pointerEvents: 'auto' }}>
             <SessionStatsMenu
               variant="tab"
@@ -3763,8 +3804,8 @@ export default function AppLayout() {
               onOpenTask={ref => navigate(`/tasks/${encodeURIComponent(ref)}`)}
             />
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   ) : null
 
