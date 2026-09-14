@@ -48,7 +48,7 @@ import { useDocumentVisible } from '../../hooks/useDocumentVisible'
 import { keyStripShown } from '../../lib/terminalSurface'
 import { dockedShowsTarget, usePanelSlots } from '../../lib/panelSlots'
 import {
-  TERMINAL_TARGETS, readTarget, targetLabel, targetScope, targetStreamId, type TerminalTarget,
+  readTarget, targetLabel, targetScope, targetStreamId, type TerminalTarget,
 } from '../../lib/terminalTarget'
 import {
   atCap, ceilingRows, ceilingTitle, type CeilingRow, type CeilingShell,
@@ -66,6 +66,8 @@ import {
 import { KEY_STRIP, ctrlKeyFor, keyBytes, stripKeyLabel } from '../../lib/keyStrip'
 import { terminalStatus } from '../../lib/terminalStream'
 import { createPaneResizer } from '../../lib/paneResizeRequest'
+import { bandSegmentEntries } from '../../lib/bandSegment'
+import { BandLabeledButton, BandSegment, BandSegmentTab } from './bandControls'
 
 const SessionTerminal = lazy(() => import('../SessionTerminal'))
 
@@ -471,35 +473,23 @@ export function ShellBand({
    * is named after the HARNESS, so it names what is on the screen instead of a concept.
    */
   const targetSwitch = (
-    <div role="tablist" aria-label={t.whichTerminal} style={{
-      display: 'flex', gap: 3, padding: 3, borderRadius: 8, flexShrink: 0,
-      background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-    }}>
-      {TERMINAL_TARGETS.map(id => {
-        const on = target === id
-        return (
-          <button
-            key={id}
-            role="tab"
-            aria-selected={on}
-            // Collapsed, picking a target is also the gesture that OPENS the band — the segment is
-            // the door, so it must not need a second click on the bar behind it.
-            onClick={e => { e.stopPropagation(); chooseTarget(id); if (!bandOpen) setBand({ open: true }) }}
-            style={{
-              // 44px is the MOBILE figure; on a pointer it would turn a segmented control into a
-              // row of buttons.
-              minHeight: isMobile ? 44 : 22, padding: isMobile ? '0 14px' : '0 9px',
-              borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-              fontSize: 11, fontWeight: 650, border: 'none', whiteSpace: 'nowrap',
-              background: on ? 'var(--bg-surface)' : 'transparent',
-              color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
-            }}
-          >
-            {targetLabel(id, harness, lang)}
-          </button>
-        )
-      })}
-    </div>
+    <BandSegment label={t.whichTerminal} isMobile={isMobile}>
+      {bandSegmentEntries(target, { cli: true, shell: true, studio: false }).map(({ id, on }) => (
+        <BandSegmentTab
+          key={id}
+          on={on}
+          isMobile={isMobile}
+          // Collapsed, picking a target is also the gesture that OPENS the band — the segment is
+          // the door, so it must not need a second click on the bar behind it.
+          onClick={e => {
+            e.stopPropagation()
+            chooseTarget(id as TerminalTarget)
+            if (!bandOpen) setBand({ open: true })
+          }}
+          label={targetLabel(id as TerminalTarget, harness, lang)}
+        />
+      ))}
+    </BandSegment>
   )
 
   /**
@@ -517,52 +507,23 @@ export function ShellBand({
    * `aside` already show one stream and nothing else sits beside them.
    */
   const dockedTargetSwitch = (
-    <div role="tablist" aria-label={t.whichTerminal} style={{
-      display: 'flex', gap: 3, padding: 3, borderRadius: 8, flexShrink: 0,
-      background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-    }}>
-      {TERMINAL_TARGETS.map(id => {
-        const on = target === id
-        return (
-          <button
-            key={id}
-            role="tab"
-            aria-selected={on}
-            onClick={e => {
-              e.stopPropagation()
-              chooseTarget(id)
-              onSelectTerminal?.(id)
-              if (!bandOpen) setBand({ open: true })
-            }}
-            style={{
-              minHeight: 22, padding: '0 9px',
-              borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-              fontSize: 11, fontWeight: 650, border: 'none', whiteSpace: 'nowrap',
-              background: on ? 'var(--bg-surface)' : 'transparent',
-              color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
-            }}
-          >
-            {targetLabel(id, harness, lang)}
-          </button>
-        )
-      })}
-      {studioEnabled && (
-        <button
-          role="tab"
-          aria-selected={false}
-          onClick={e => { e.stopPropagation(); onSelectStudio?.() }}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 4,
-            minHeight: 22, padding: '0 9px',
-            borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-            fontSize: 11, fontWeight: 650, border: 'none', whiteSpace: 'nowrap',
-            background: 'transparent', color: 'var(--text-tertiary)',
+    <BandSegment label={t.whichTerminal} isMobile={false}>
+      {bandSegmentEntries(target, { cli: true, shell: true, studio: studioEnabled === true }).map(({ id, on }) => (
+        <BandSegmentTab
+          key={id}
+          on={on}
+          onClick={e => {
+            e.stopPropagation()
+            if (id === 'studio') { onSelectStudio?.(); return }
+            chooseTarget(id as TerminalTarget)
+            onSelectTerminal?.(id as TerminalTarget)
+            if (!bandOpen) setBand({ open: true })
           }}
-        >
-          <FolderTree size={11} />Studio
-        </button>
-      )}
-    </div>
+          icon={id === 'studio' ? <FolderTree size={11} /> : undefined}
+          label={id === 'studio' ? 'Studio' : targetLabel(id as TerminalTarget, harness, lang)}
+        />
+      ))}
+    </BandSegment>
   )
 
   const where = shellWhere(cwd)
@@ -880,14 +841,12 @@ export function ShellBand({
             right'") — the same gesture the Studio's own band already offers, generalized to cli and
             shell now that both can sit in the right slot too (§1.5). */}
         {prefs.open && onMoveToRight && (
-          <button className="ag-tap-icon"
+          <BandLabeledButton
+            isMobile={false}
             onClick={e => { e.stopPropagation(); onMoveToRight(target) }}
-            title={lang === 'pt' ? 'Mover para a direita' : 'Move to the right'}
-            aria-label={lang === 'pt' ? 'Mover para a direita' : 'Move to the right'}
-            style={labeledBtn}
-          >
-            <PanelRightOpen size={13} /><span>{lang === 'pt' ? 'Mover para a direita' : 'Move to the right'}</span>
-          </button>
+            label={lang === 'pt' ? 'Mover para a direita' : 'Move to the right'}
+            visibleText={lang === 'pt' ? 'Mover para a direita' : 'Move to the right'}
+          ><PanelRightOpen size={13} /></BandLabeledButton>
         )}
         {/* TAKE THE WHOLE SCREEN. Offered only with a shell open and somewhere to go, so the bar of
             a band nobody has opened carries nothing that cannot act. It is the only way to the
@@ -897,39 +856,32 @@ export function ShellBand({
           // Fix-wave review, owner follow-up #5 — the same "plain icon here was reported as
           // confusing" complaint item 5 fixed for move/close, now closed for THIS bar's own
           // fullscreen/close-shell/collapse trio too.
-          <button className="ag-tap-icon"
+          <BandLabeledButton
+            isMobile={false}
             onClick={e => { e.stopPropagation(); onOpenFullscreen() }}
-            title={t.fullscreen}
-            aria-label={t.fullscreen}
-            style={labeledBtn}
-          >
-            <Maximize2 size={13} /><span>{t.fullscreenLabel}</span>
-          </button>
+            label={t.fullscreen}
+            visibleText={t.fullscreenLabel}
+          ><Maximize2 size={13} /></BandLabeledButton>
         )}
         {/* A shell is something the person OPENED and can end; the CLI pane is the session itself
             and ending it here would be a kill button wearing a wastebasket. */}
         {prefs.open && shell && target === 'shell' && (
-          <button className="ag-tap-icon"
+          <BandLabeledButton
+            isMobile={false}
             /* A TRASH CAN, not an ✕. The ✕ read as "close this panel" next to a chevron that
                actually closes the panel, and this one KILLS the shell — a different, irreversible
                act. The icon is the only thing saying which of the two you are about to do. */
             onClick={e => { e.stopPropagation(); void close() }}
-            title={t.close}
-            aria-label={t.close}
-            style={labeledBtn}
-          >
-            <Trash2 size={13} /><span>{t.closeLabel}</span>
-          </button>
+            label={t.close}
+            visibleText={t.closeLabel}
+          ><Trash2 size={13} /></BandLabeledButton>
         )}
-        <button className="ag-tap-icon"
+        <BandLabeledButton
+          isMobile={false}
           onClick={e => { e.stopPropagation(); setBand({ open: !prefs.open }) }}
-          title={prefs.open ? t.collapse : t.expand}
-          aria-label={prefs.open ? t.collapse : t.expand}
-          style={labeledBtn}
-        >
-          {prefs.open ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
-          <span>{prefs.open ? t.collapseLabel : t.expandLabel}</span>
-        </button>
+          label={prefs.open ? t.collapse : t.expand}
+          visibleText={prefs.open ? t.collapseLabel : t.expandLabel}
+        >{prefs.open ? <ChevronDown size={13} /> : <ChevronUp size={13} />}</BandLabeledButton>
       </div>
       {prefs.open && (
         <div style={{
@@ -947,17 +899,4 @@ export function ShellBand({
       )}
     </div>
   )
-}
-
-/**
- * Icon plus a visible word — design item 5 (a plain icon here was reported as confusing, beside
- * the aside's own move control) for move/close, and fix-wave review owner follow-up #5 for the
- * remaining trio (fullscreen/close-shell/collapse) this bar draws. No icon-only style survives
- * here any more.
- */
-const labeledBtn: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', gap: 5, height: 22, flexShrink: 0,
-  padding: '0 8px', borderRadius: 6, border: '1px solid var(--border-subtle)',
-  background: 'var(--bg-elevated)', color: 'var(--text-secondary)', cursor: 'pointer',
-  fontFamily: 'inherit', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
 }
