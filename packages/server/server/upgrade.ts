@@ -5,7 +5,7 @@ import { platform } from 'os'
 import { basename, dirname, join } from 'path'
 import { getVersionInfo, CURRENT_VERSION, compareVersions } from './version.ts'
 import { restartAutostart } from './autostart.ts'
-import { AGENTISTICS_DATA_DIR } from './config.ts'
+import { AGENTISTICS_DATA_DIR, PORT } from './config.ts'
 import { cliStrings, type CliLang, type CliStrings } from './cli-i18n.ts'
 
 const GITHUB_REPO = 'blpsoares/agentistics'
@@ -400,6 +400,111 @@ async function restartRunningServices(newBin: string): Promise<RestartOutcome> {
   }
 
   return { ok: failures.length === 0, failures }
+}
+
+// ---------------------------------------------------------------------------
+// Confirm the restart actually took — a systemd/docker command REPORTING success only means the
+// OS accepted it. Measured: after a reboot an orphaned `agentop server` (ppid 1, started outside
+// the systemd unit) held ports 47291/47292 with the OLD binary; `systemctl --user restart
+// agentop-server` succeeded, the unit's own process then failed to bind the already-taken port and
+// crash-looped, and `agentop upgrade` printed "Done — now running vX" while `GET /api/version`
+// went on answering the version that was current before the upgrade. `restartRunningServices`'s
+// `ok` cannot see this — it is a fact about systemd's command queue, not about who is answering
+// requests. This is the one check that asks the thing actually being claimed.
+// ---------------------------------------------------------------------------
+
+export interface VersionPollResult {
+  /** True once something answered `/api/version` with exactly `want`. */
+  ok: boolean
+  /** The version last seen answering, or `null` if nothing ever answered. */
+  observed: string | null
+}
+
+/**
+ * Poll this machine's own `/api/version` until it reports `want`, or the bounded time runs out.
+ *
+ * `fetchImpl`/`sleepImpl`/`nowImpl` are injectable so the bounded-time behavior (stop polling once
+ * matched; stop polling once the budget is spent; never claim success on a persistent mismatch) is
+ * testable without a real clock, a real socket, or a real 15-second wait.
+ */
+export async function pollRunningVersion(
+  port: number,
+  want: string,
+  opts: {
+    timeoutMs?: number
+    intervalMs?: number
+    fetchImpl?: (url: string) => Promise<{ ok: boolean; json: () => Promise<unknown> }>
+    sleepImpl?: (ms: number) => Promise<void>
+    nowImpl?: () => number
+  } = {},
+): Promise<VersionPollResult> {
+  const timeoutMs = opts.timeoutMs ?? 15_000
+  const intervalMs = opts.intervalMs ?? 1_000
+  const doFetch = opts.fetchImpl ?? ((url: string) => fetch(url, { signal: AbortSignal.timeout(2_000) }))
+  const sleep = opts.sleepImpl ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)))
+  const now = opts.nowImpl ?? Date.now
+  const deadline = now() + timeoutMs
+
+  let observed: string | null = null
+  for (;;) {
+    try {
+      const res = await doFetch(`http://127.0.0.1:${port}/api/version`)
+      if (res.ok) {
+        const body = await res.json() as { current?: unknown }
+        if (typeof body.current === 'string') {
+          observed = body.current
+          if (observed === want) return { ok: true, observed }
+        }
+      }
+    } catch {
+      // Unreachable this tick (connecting, or nothing is listening yet) — keep polling.
+    }
+    if (now() >= deadline) return { ok: false, observed }
+    await sleep(intervalMs)
+  }
+}
+
+/** What is holding the local port, when the poll above never sees the new version. */
+export interface PortHolderFacts {
+  pid?: number
+  cmd?: string
+  /** `systemctl --user is-active agentop-server`'s own word, when systemd is available. */
+  unitState?: string
+}
+
+async function portHolderFacts(port: number): Promise<PortHolderFacts> {
+  const lsof = await sh(['lsof', '-ti', `tcp:${port}`, '-sTCP:LISTEN'])
+  const pid = Number(lsof.out.split(/\s+/).filter(Boolean)[0])
+  const facts: PortHolderFacts = {}
+  if (Number.isInteger(pid) && pid > 0) {
+    facts.pid = pid
+    const ps = await sh(['ps', '-o', 'args=', '-p', String(pid)])
+    if (ps.out) facts.cmd = ps.out
+  }
+  if (platform() === 'linux') {
+    const active = await sh(['systemctl', '--user', 'is-active', 'agentop-server'])
+    if (active.out) facts.unitState = active.out
+  }
+  return facts
+}
+
+/**
+ * The sentence(s) naming what is still running instead of the new version and the exact command to
+ * fix it — never a bare "the restart failed". Pure so the wording is tested without spawning
+ * anything; `describeStaleServer`'s `port`/`want`/`observed` come straight from `pollRunningVersion`
+ * and `portHolderFacts` above.
+ */
+export function describeStaleServer(o: PortHolderFacts & { port: number; want: string; observed: string | null }): string[] {
+  const lines: string[] = []
+  lines.push(o.observed !== null
+    ? `The server answering on port ${o.port} still reports v${o.observed}, not v${o.want}.`
+    : `Nothing answered on port ${o.port} after the restart — it may still be starting, or failed to bind the port.`)
+  if (o.pid) lines.push(`  pid ${o.pid} is holding the port${o.cmd ? `: \`${o.cmd}\`` : ''}`)
+  if (o.unitState) lines.push(`  agentop-server unit: ${o.unitState}`)
+  lines.push(o.pid
+    ? `  Fix: kill ${o.pid} (it is not the unit's tracked process), then \`systemctl --user restart agentop-server\`.`
+    : `  Fix: \`systemctl --user restart agentop-server\` — or \`agentop restart server\`.`)
+  return lines
 }
 
 // ---------------------------------------------------------------------------
@@ -826,6 +931,29 @@ export async function runUpgrade(lang: CliLang = 'en'): Promise<number> {
       restart.failures.map(f => `    • ${f}\n`).join('') +
       `  ${s.upgradeRestartHint}\n\n`,
     )
+    recordUpgradeFailure(info.latest, `restart failed: ${restart.failures.join('; ')}`)
+    return 1
+  }
+
+  // The restart command succeeding only means systemd/docker ACCEPTED it. An orphaned process
+  // from before a reboot can go on holding the port while the unit's own new process crash-loops
+  // trying to bind it — invisible to every check above, and exactly what let a previous run print
+  // "Done — now running vX" while `GET /api/version` kept answering the version that was current
+  // before the upgrade. This is the one check that asks what is actually answering requests.
+  const verified = await pollRunningVersion(PORT, info.latest)
+  if (!verified.ok && verified.observed !== null) {
+    // Something IS answering, and it never became the new version — a real, confirmed failure.
+    // (An `observed === null` — nothing answered at all, ever — is left as before: that is
+    // indistinguishable from "nothing runs here" on this machine, e.g. a foreground/dev setup with
+    // no service to confirm, and is not the defect this check exists to catch.)
+    const facts = await portHolderFacts(PORT)
+    process.stderr.write(
+      `\n  ${_Y}${_B}${s.upgradeVersionUnconfirmed(info.latest)}${_R}\n` +
+      describeStaleServer({ port: PORT, want: info.latest, observed: verified.observed, ...facts })
+        .map(l => `    ${l}\n`).join('') +
+      '\n',
+    )
+    recordUpgradeFailure(info.latest, `server still answering as v${verified.observed}`)
     return 1
   }
 

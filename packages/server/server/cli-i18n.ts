@@ -434,6 +434,8 @@ export interface CliStrings {
   upgradeBackupKept: (backup: string) => string
   upgradeRestartFailed: (version: string) => string
   upgradeRestartHint: string
+  /** The restart command reported success, but the server answering requests never confirmed it. */
+  upgradeVersionUnconfirmed: (version: string) => string
 
   // multi-central member commands (Task 6 — spec §8.2)
   cancel: string
@@ -785,6 +787,8 @@ const EN: CliStrings = {
   upgradeBackupKept: (backup) => `Previous binary kept at ${backup}.`,
   upgradeRestartFailed: (version) => `v${version} is installed, but some services were NOT restarted onto it:`,
   upgradeRestartHint: 'Restart them by hand (e.g. `agentop restart --all`) — they still run the old version.',
+  upgradeVersionUnconfirmed: (version) =>
+    `v${version} is installed and the restart command succeeded, but nothing has confirmed it is actually running yet:`,
 
   cancel: 'Cancel',
   leaveWhich: 'Leave which central?',
@@ -1116,6 +1120,8 @@ const PT: CliStrings = {
   upgradeBackupKept: (backup) => `Binário anterior mantido em ${backup}.`,
   upgradeRestartFailed: (version) => `a v${version} foi instalada, mas alguns serviços NÃO foram reiniciados nela:`,
   upgradeRestartHint: 'Reinicie na mão (ex.: `agentop restart --all`) — eles ainda rodam a versão antiga.',
+  upgradeVersionUnconfirmed: (version) =>
+    `a v${version} foi instalada e o comando de reinício teve sucesso, mas nada confirmou que ela está realmente no ar ainda:`,
 
   cancel: 'Cancelar',
   leaveWhich: 'Sair de qual central?',
