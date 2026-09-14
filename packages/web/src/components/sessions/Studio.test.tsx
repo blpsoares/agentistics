@@ -19,11 +19,11 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import {
   agentActivity, applyRootRefresh, clampTreeWidth, closeOutcome, DIVIDER_RAIL_W, DIVIDER_W,
   dividerKeyDelta, dividerWantedWidth, EDITOR_MIN, EditorStack,
-  Layer, mountedEditors, nextGoTo, NewFileRow, paneHits, resolveTreeCollapsed, resolveTreeSide,
-  resolveTreeWidth, sessionMovedOn, SPLIT_MIN,
+  Layer, mountedEditors, nextGoTo, NewFileRow, paneHits, resolveTreeCollapsed, resolveTreeShown,
+  resolveTreeSide, resolveTreeWidth, searchRequestNeedsExpand, sessionMovedOn, SPLIT_MIN,
   Studio, StudioBar, StudioBody, sameFile,
-  studioLayout, TabStrip, Toolbar, TREE_DEFAULT, TREE_MAX, TREE_MIN, TreeDivider, Watermark,
-  watermarkOpacity, type TreeSide,
+  studioLayout, TabStrip, Toolbar, treeCollapsible, TREE_DEFAULT, TREE_MAX, TREE_MIN, TreeDivider,
+  Watermark, watermarkOpacity, type TreeSide,
 } from './Studio'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -744,6 +744,71 @@ describe('studioLayout — whether there is a split at all', () => {
   })
 })
 
+/**
+ * FIX-WAVE REVIEW, CRITICAL #1 — "with no file open... there is no collapse toggle, no rail,
+ * nothing." `treeCollapsible` and `resolveTreeShown` are the fix, extracted so it can be pinned
+ * without mounting the whole `Studio` component (which fetches over the network from its first
+ * effect — see this file's own header on why the composition's rules are exported functions).
+ */
+describe('treeCollapsible — whether the minimize toggle has anything to act on', () => {
+  test('the split always qualifies — it is what the toggle was built for', () => {
+    expect(treeCollapsible(false, true, true)).toBe(true)
+  })
+
+  /** Plant: drop the `|| !fileOpen` half. This is the exact regression the review reported —
+   *  the toggle silently disappears the moment the last file closes. */
+  test('no file open ALSO qualifies, on a desktop — the tree is the only pane there is', () => {
+    expect(treeCollapsible(false, false, false)).toBe(true)
+  })
+
+  test('a file open on a too-narrow desktop panel does NOT — the editor already replaced the tree', () => {
+    expect(treeCollapsible(false, false, true)).toBe(false)
+  })
+
+  /** Plant: drop the `!isMobile` guard. A phone would then offer a toggle nothing on screen can act
+   *  on, since `studioLayout` never gives it a split and `resolveTreeShown` already ignores
+   *  `treeCollapsed` there — see the mobile case below. */
+  test('mobile never qualifies, file open or not — there is nothing here for it to act on', () => {
+    expect(treeCollapsible(true, false, false)).toBe(false)
+    expect(treeCollapsible(true, false, true)).toBe(false)
+  })
+})
+
+describe('resolveTreeShown — the tree pane, with the fix-wave fix applied', () => {
+  test('split: the collapse is the only thing that hides it, exactly as before', () => {
+    expect(resolveTreeShown(true, true, false, true)).toBe(true)
+    expect(resolveTreeShown(true, true, true, true)).toBe(false)
+  })
+
+  test('stacked with a file open: the open file decides, exactly as before item 9 ever existed', () => {
+    expect(resolveTreeShown(false, true, false, false)).toBe(false)
+    expect(resolveTreeShown(false, true, true, false)).toBe(false)
+  })
+
+  /** Plant: replace `!(collapsible && treeCollapsed)` with `true` (ignore the flag entirely). The
+   *  tree renders full-size forever with no file open, whatever the reader chose — the ORIGINAL
+   *  Critical #1 bug, now caught in isolation instead of only live in a browser. */
+  test('stacked with NOTHING open: `treeCollapsed` now reaches in — the fix itself', () => {
+    expect(resolveTreeShown(false, false, false, true)).toBe(true)
+    expect(resolveTreeShown(false, false, true, true)).toBe(false)
+  })
+
+  /** Plant: drop the `collapsible` guard (`!(treeCollapsed)` unconditionally). A phone that once
+   *  had `treeCollapsed` set from a desktop session would then render its one pane hidden with
+   *  nothing else to show — a blank Studio. */
+  test('stacked with nothing open, but NOT collapsible (mobile): the flag is inert', () => {
+    expect(resolveTreeShown(false, false, true, false)).toBe(true)
+  })
+})
+
+describe('searchRequestNeedsExpand — item 8 must never search inside a pane nobody can see', () => {
+  /** Plant: invert the return (`!treeCollapsed`). Both assertions below then read backwards. */
+  test('a minimized tree needs expanding; an already-visible one needs nothing', () => {
+    expect(searchRequestNeedsExpand(true)).toBe(true)
+    expect(searchRequestNeedsExpand(false)).toBe(false)
+  })
+})
+
 describe('clampTreeWidth — the column can never be dragged to something useless', () => {
   test('a width that fits is kept, to the pixel', () => {
     expect(clampTreeWidth(240, 800)).toBe(240)
@@ -980,6 +1045,35 @@ describe('StudioBody — where the panes sit, and what that may never cost', () 
     expect(body()).toContain('role="separator"')
   })
 
+  /**
+   * FIX-WAVE REVIEW, CRITICAL #1 — the rail must exist with NO file open too, not only in the
+   * split. `collapsed` is `!treeShown && (split || !editorShown)`: in `layers` with nothing open,
+   * hiding the tree leaves NEITHER pane showing anything (there is nothing else to show), which is
+   * exactly what the `!editorShown` half catches.
+   */
+  describe('the rail with NOTHING open', () => {
+    /** Plant: revert `collapsed` to `split && !treeShown`. The rail then vanishes for exactly this
+     *  case — the reported bug ("close the last tab while minimized... the rail is there and
+     *  restores the tree" no longer holds), reproduced here without a browser. */
+    test('minimized with no file open offers the rail, not a full-size tree with no way back', () => {
+      const html = body({ layout: 'layers', treeShown: false, editorShown: false })
+      expect(html).toContain('aria-label="Show the file tree"')
+      expect(html).not.toContain('role="separator"')
+    })
+
+    test('the SAME arrangement, tree visible, offers no rail — nothing to bring back', () => {
+      expect(body({ layout: 'layers', treeShown: true, editorShown: false }))
+        .not.toContain('aria-label="Show the file tree"')
+    })
+
+    test('an open FILE on a phone/narrow panel still gets no rail — that state has its own way back', () => {
+      // `treeShown: false` here because the editor REPLACED it (a file is open), not because the
+      // reader minimized it — the tab strip's own back arrow is the way to it, not this rail.
+      expect(body({ layout: 'layers', treeShown: false, editorShown: true }))
+        .not.toContain('aria-label="Show the file tree"')
+    })
+  })
+
   // item 10 — "move side bar right": the SAME two boxes, only their paint order flips.
   describe('side', () => {
     test('defaults to a plain row — the tree paints first, as it always has', () => {
@@ -997,6 +1091,36 @@ describe('StudioBody — where the panes sit, and what that may never cost', () 
     test('the side rides on the container as data, for anything that needs to ask from outside', () => {
       expect(body()).toContain('data-studio-side="left"')
       expect(body({ side: 'right' })).toContain('data-studio-side="right"')
+    })
+
+    /**
+     * OWNER FOLLOW-UP #4 — the rail's border must face the TREE, not wherever the box happens to
+     * sit. With the tree on the right, the rail's neighbours reverse (the editor is now on its
+     * left, the tree on its right), so the hairline must move to the rail's own right edge.
+     *
+     * Both sides are asserted EXPLICITLY (`none`, not merely absent) — live browser verification of
+     * this fix wave found that leaving the inactive side's property out of the style object (relying
+     * on the earlier `border: 'none'` shorthand alone) left a native button outset border on that
+     * side on first paint. `toContain('border-left:none')`/`'border-right:none'` is what a plant of
+     * `undefined` for the inactive side fails, which the earlier `not.toContain('border-left:1px…')`
+     * form did not catch (`undefined` renders as absent, which also satisfies `not.toContain`).
+     */
+    describe('the collapsed rail\'s hairline follows the tree, not a fixed edge', () => {
+      /** Plant: hardcode `borderLeft` unconditionally (the original defect) — the second assertion
+       *  of the second test then still reads a left border and fails. */
+      test('tree on the left (default): the hairline sits on the rail\'s left, facing the tree', () => {
+        const html = body({ treeShown: false, side: 'left' })
+        expect(html).toContain('border-left:1px solid var(--border)')
+        expect(html).toContain('border-right:none')
+        expect(html).not.toContain('border-right:1px solid var(--border)')
+      })
+
+      test('tree on the right: the hairline moves to the rail\'s right, still facing the tree', () => {
+        const html = body({ treeShown: false, side: 'right' })
+        expect(html).toContain('border-right:1px solid var(--border)')
+        expect(html).toContain('border-left:none')
+        expect(html).not.toContain('border-left:1px solid var(--border)')
+      })
     })
   })
 })
