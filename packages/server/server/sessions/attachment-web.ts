@@ -21,6 +21,7 @@ import { join, resolve, sep } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { AGENTISTICS_DATA_DIR } from '../config'
 import { storedAttachmentName } from './attachment-name'
+import { realContained } from './real-contained'
 import { splitImageAttachments } from '@agentistics/core'
 import type { AttachmentMessage, AttachmentSend } from '@agentistics/core'
 
@@ -160,6 +161,23 @@ export function resolveAttachmentRead(requested: string): string | null {
   const base = resolve(ATTACHMENT_DIR) + sep
   const resolved = resolve(requested)
   return resolved.startsWith(base) ? resolved : null
+}
+
+/**
+ * The REAL containment recheck for `resolveAttachmentRead` — the same `realContained` rule the
+ * Studio's own tree applies (`editor-fs.ts`, lifted into `real-contained.ts`), applied here.
+ *
+ * `resolveAttachmentRead` above is a LEXICAL check only — it never touches disk — so a symlink
+ * planted inside `ATTACHMENT_DIR` that points somewhere else resolves the prefix check and would
+ * then be served straight off its target. This is the one route that actually reads the bytes back
+ * (`GET /api/fleet/attachment`), so it is the one place this recheck has to run: `resolveAttachmentRead`
+ * itself stays lexical-only for its other two callers (`attachmentMessageOf`, the companion
+ * resolver), which only decide what to RECORD, never what to serve.
+ */
+export async function resolveAttachmentReadReal(requested: string): Promise<string | null> {
+  const lexical = resolveAttachmentRead(requested)
+  if (lexical === null) return null
+  return realContained(ATTACHMENT_DIR, lexical)
 }
 
 /**

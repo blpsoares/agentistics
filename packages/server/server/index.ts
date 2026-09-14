@@ -2088,14 +2088,16 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       }
     }
 
-    // Reading an attachment BACK — the chat's inline image preview. `resolveAttachmentRead` is the
-    // whole of the security model here: a message carries the attachment's path verbatim (see
+    // Reading an attachment BACK — the chat's inline image preview. `resolveAttachmentReadReal` is
+    // the whole of the security model here: a message carries the attachment's path verbatim (see
     // attachment-web.ts's header), so this route necessarily accepts a path, and that function is
-    // what stops it becoming an arbitrary local file read. A path outside the attachment directory,
-    // or one naming nothing, gets exactly the same 404 — the difference is not this reader's to say.
+    // what stops it becoming an arbitrary local file read — including through a symlink planted
+    // inside the attachments directory (its own REAL, `realpath`-resolved recheck, the same one
+    // `editor-fs.ts` applies to the Studio's tree). A path outside the attachment directory, or one
+    // naming nothing, gets exactly the same 404 — the difference is not this reader's to say.
     if (url.pathname === '/api/fleet/attachment' && req.method === 'GET') {
-      const { resolveAttachmentRead } = await import('./sessions/attachment-web')
-      const resolved = resolveAttachmentRead(url.searchParams.get('path') ?? '')
+      const { resolveAttachmentReadReal } = await import('./sessions/attachment-web')
+      const resolved = await resolveAttachmentReadReal(url.searchParams.get('path') ?? '')
       if (!resolved) {
         return new Response(null, { status: 404, headers: CORS_HEADERS })
       }

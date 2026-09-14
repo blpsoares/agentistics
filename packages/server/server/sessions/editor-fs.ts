@@ -13,7 +13,8 @@ import { dirname, resolve } from 'node:path'
 import type { StartHost } from '../cli-start'
 import { gitEnv } from '../backup/repo-probe'
 import { planSessionDirectory, type SessionDirPlan } from './editor-directory'
-import { containedInRoot, resolveTreePath } from './editor-path'
+import { resolveTreePath } from './editor-path'
+import { realContained } from './real-contained'
 import { childrenFromDirents, collapseToChildren, mergeEmptyDirs, type TreeChild } from './editor-list'
 import { looksBinary } from './artifact-web'
 import { decodeUtf8Lossless } from './editor-text'
@@ -69,23 +70,6 @@ export type EntryRefusal = 'escaped' | 'not-found' | 'not-a-directory'
 export type ListPlan =
   | { ok: true; children: TreeChild[] }
   | { ok: false; reason: EntryRefusal }
-
-/**
- * The REAL containment recheck. `resolveTreePath` already refused a lexical `..`; this catches a
- * symlink placed INSIDE the tree that points somewhere else — `realpath` follows every link on
- * both sides, and the containment test runs again on what it actually resolves to.
- *
- * Returns the real, resolved path on success. A target that does not exist YET (a create) has no
- * real path of its own — the caller checks its PARENT instead; see Task 9.
- */
-async function realContained(root: string, abs: string): Promise<string | null> {
-  try {
-    const [realRoot, realAbs] = await Promise.all([realpath(root), realpath(abs)])
-    return containedInRoot(realAbs, realRoot) ? realAbs : null
-  } catch {
-    return null
-  }
-}
 
 export async function listChildren(root: string, requestedPath: string): Promise<ListPlan> {
   const planned = resolveTreePath(root, requestedPath)
