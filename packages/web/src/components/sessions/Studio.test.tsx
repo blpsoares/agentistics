@@ -17,7 +17,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  agentActivity, applyRootRefresh, clampTreeWidth, closeOutcome, DIVIDER_RAIL_W, DIVIDER_W,
+  agentActivity, applyRootRefresh, clampTreeWidth, closeOutcome, DIVIDER_W,
   dividerKeyDelta, dividerWantedWidth, EDITOR_MIN, EditorStack,
   Layer, mountedEditors, nextGoTo, NewFileRow, paneHits, resolveTreeCollapsed, resolveTreeShown,
   resolveTreeSide, resolveTreeWidth, searchRequestNeedsExpand, sessionMovedOn, SPLIT_MIN,
@@ -920,7 +920,7 @@ describe('StudioBody — where the panes sit, and what that may never cost', () 
   const body = (over: Partial<Parameters<typeof StudioBody>[0]> = {}) => renderToStaticMarkup(
     <StudioBody
       layout="split" treeWidth={200} treeShown={true} editorShown={true} available={620} lang="en"
-      onResize={() => {}} onCommit={() => {}} onCollapse={() => {}} onExpand={() => {}}
+      onResize={() => {}} onCommit={() => {}} onCollapse={() => {}}
       tree={<p>THE TREE</p>} editor={<p>THE EDITOR</p>}
       {...over}
     />,
@@ -1015,26 +1015,34 @@ describe('StudioBody — where the panes sit, and what that may never cost', () 
     expect(body({ treeShown: false })).not.toContain('role="separator"')
   })
 
-  // item 9 — a SECOND way back, at the column's own location, rather than only the Studio bar's.
-  test('minimizing REPLACES the separator with a labelled rail, at the same spot', () => {
+  /**
+   * DESIGN ITEM 4, screenshot 3 — "there is a floating aside button when the tree is closed". A
+   * `CollapsedTreeRail` used to render here in place of the separator, so a minimized tree had TWO
+   * controls back to it on screen at once: this rail AND the Studio bar's own labelled "Mostrar
+   * árvore" toggle. The rail is gone outright — `StudioBar`'s toggle (see that component's own
+   * tests) is now the ONLY way back, wherever the tree sits and whether or not a file is open.
+   *
+   * Plant: reintroduce `<CollapsedTreeRail .../>` in the `collapsed` branch (either arrangement) —
+   * these assertions then fail on the exact string the old rail rendered.
+   */
+  test('minimizing leaves no rail behind — no second "show the file tree" control in the pane itself', () => {
     const html = body({ treeShown: false })
-    expect(html).not.toContain('role="separator"')
-    expect(html).toContain('aria-label="Show the file tree"')
+    expect(html).not.toContain('aria-label="Show the file tree"')
+    expect(html).not.toContain('Show the file tree')
   })
 
-  test('the rail exists whether or not a file is open — it is `collapsed`, never `editorShown`', () => {
-    expect(body({ treeShown: false, editorShown: false })).toContain('aria-label="Show the file tree"')
-    expect(body({ treeShown: false, editorShown: true })).toContain('aria-label="Show the file tree"')
+  test('no rail whether or not a file is open — the split case and the no-file-open case alike', () => {
+    expect(body({ treeShown: false, editorShown: false })).not.toContain('Show the file tree')
+    expect(body({ treeShown: false, editorShown: true })).not.toContain('Show the file tree')
+    expect(body({ layout: 'layers', treeShown: false, editorShown: false })).not.toContain('Show the file tree')
   })
 
-  test('the rail is in Portuguese too', () => {
-    expect(body({ treeShown: false, lang: 'pt' })).toContain('aria-label="Mostrar árvore de arquivos"')
-  })
-
-  test('an EXPANDED column offers the separator, never the rail', () => {
+  test('an EXPANDED column offers the separator; a minimized one offers neither the separator nor a rail', () => {
     const html = body()
     expect(html).toContain('role="separator"')
-    expect(html).not.toContain('Show the file tree')
+    const minimized = body({ treeShown: false })
+    expect(minimized).not.toContain('role="separator"')
+    expect(minimized).not.toContain('Show the file tree')
   })
 
   test('stacked, there is no separator either: there is nothing beside anything', () => {
@@ -1045,33 +1053,10 @@ describe('StudioBody — where the panes sit, and what that may never cost', () 
     expect(body()).toContain('role="separator"')
   })
 
-  /**
-   * FIX-WAVE REVIEW, CRITICAL #1 — the rail must exist with NO file open too, not only in the
-   * split. `collapsed` is `!treeShown && (split || !editorShown)`: in `layers` with nothing open,
-   * hiding the tree leaves NEITHER pane showing anything (there is nothing else to show), which is
-   * exactly what the `!editorShown` half catches.
-   */
-  describe('the rail with NOTHING open', () => {
-    /** Plant: revert `collapsed` to `split && !treeShown`. The rail then vanishes for exactly this
-     *  case — the reported bug ("close the last tab while minimized... the rail is there and
-     *  restores the tree" no longer holds), reproduced here without a browser. */
-    test('minimized with no file open offers the rail, not a full-size tree with no way back', () => {
-      const html = body({ layout: 'layers', treeShown: false, editorShown: false })
-      expect(html).toContain('aria-label="Show the file tree"')
-      expect(html).not.toContain('role="separator"')
-    })
-
-    test('the SAME arrangement, tree visible, offers no rail — nothing to bring back', () => {
-      expect(body({ layout: 'layers', treeShown: true, editorShown: false }))
-        .not.toContain('aria-label="Show the file tree"')
-    })
-
-    test('an open FILE on a phone/narrow panel still gets no rail — that state has its own way back', () => {
-      // `treeShown: false` here because the editor REPLACED it (a file is open), not because the
-      // reader minimized it — the tab strip's own back arrow is the way to it, not this rail.
-      expect(body({ layout: 'layers', treeShown: false, editorShown: true }))
-        .not.toContain('aria-label="Show the file tree"')
-    })
+  test('minimized with no file open renders neither a full-size tree nor a rail — the bar alone is the way back', () => {
+    const html = body({ layout: 'layers', treeShown: false, editorShown: false })
+    expect(html).not.toContain('role="separator"')
+    expect(html).not.toContain('Show the file tree')
   })
 
   // item 10 — "move side bar right": the SAME two boxes, only their paint order flips.
@@ -1093,34 +1078,9 @@ describe('StudioBody — where the panes sit, and what that may never cost', () 
       expect(body({ side: 'right' })).toContain('data-studio-side="right"')
     })
 
-    /**
-     * OWNER FOLLOW-UP #4 — the rail's border must face the TREE, not wherever the box happens to
-     * sit. With the tree on the right, the rail's neighbours reverse (the editor is now on its
-     * left, the tree on its right), so the hairline must move to the rail's own right edge.
-     *
-     * Both sides are asserted EXPLICITLY (`none`, not merely absent) — live browser verification of
-     * this fix wave found that leaving the inactive side's property out of the style object (relying
-     * on the earlier `border: 'none'` shorthand alone) left a native button outset border on that
-     * side on first paint. `toContain('border-left:none')`/`'border-right:none'` is what a plant of
-     * `undefined` for the inactive side fails, which the earlier `not.toContain('border-left:1px…')`
-     * form did not catch (`undefined` renders as absent, which also satisfies `not.toContain`).
-     */
-    describe('the collapsed rail\'s hairline follows the tree, not a fixed edge', () => {
-      /** Plant: hardcode `borderLeft` unconditionally (the original defect) — the second assertion
-       *  of the second test then still reads a left border and fails. */
-      test('tree on the left (default): the hairline sits on the rail\'s left, facing the tree', () => {
-        const html = body({ treeShown: false, side: 'left' })
-        expect(html).toContain('border-left:1px solid var(--border)')
-        expect(html).toContain('border-right:none')
-        expect(html).not.toContain('border-right:1px solid var(--border)')
-      })
-
-      test('tree on the right: the hairline moves to the rail\'s right, still facing the tree', () => {
-        const html = body({ treeShown: false, side: 'right' })
-        expect(html).toContain('border-right:1px solid var(--border)')
-        expect(html).toContain('border-left:none')
-        expect(html).not.toContain('border-left:1px solid var(--border)')
-      })
+    test('minimized and flipped: still no rail on either side', () => {
+      expect(body({ treeShown: false, side: 'left' })).not.toContain('Show the file tree')
+      expect(body({ treeShown: false, side: 'right' })).not.toContain('Show the file tree')
     })
   })
 })

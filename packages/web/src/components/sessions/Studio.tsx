@@ -121,6 +121,7 @@ import { RepoSearchView } from './RepoSearchView'
 import { RepoTreeView, toggleDirectory, treeViewState, type TreeOps } from './RepoTreeView'
 import { RepoNote } from './repoNote'
 import { insertMention } from '../../lib/mentionInsert'
+import { BandLabeledButton } from './bandControls'
 import type { HarnessId } from '@agentistics/core'
 
 export interface StudioProps {
@@ -324,11 +325,6 @@ export const EDITOR_MIN = 220
 
 /** The grip between the panes. A 1px line is not something a pointer can land on. */
 export const DIVIDER_W = 6
-
-/** The collapsed tree's own rail (design item 9) — wider than the ordinary divider because it
- *  carries an icon rather than a hairline, and is the ONLY way back to the tree that lives at the
- *  column's own location. */
-export const DIVIDER_RAIL_W = 20
 
 /**
  * What the tree opens at.
@@ -994,7 +990,6 @@ export function Studio({
         onResize={resize}
         onCommit={commit}
         onCollapse={() => setTreeCollapsed(true)}
-        onExpand={() => setTreeCollapsed(false)}
         tree={<>
           {view === 'tree' && (
             <Toolbar
@@ -1222,7 +1217,7 @@ export function StudioBar({ isMobile, lang, onExit, tree }: {
       </button>
 
       {tree !== undefined && (
-        <LabeledIconButton
+        <BandLabeledButton
           label={tree.collapsed
             ? (pt ? 'Mostrar a árvore de arquivos' : 'Show the file tree')
             : (pt ? 'Esconder a árvore de arquivos' : 'Hide the file tree')}
@@ -1234,16 +1229,16 @@ export function StudioBar({ isMobile, lang, onExit, tree }: {
           onClick={tree.onToggle}
         >
           {tree.collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
-        </LabeledIconButton>
+        </BandLabeledButton>
       )}
 
       {/* MOVE THE TREE TO THE OTHER SIDE (design item 10, "move side bar right") — a control on the
           Studio bar, labelled, next to the collapse toggle it shares a gate with (both are
           meaningless outside the split). It flips `treeSide`, which `StudioBody` reads to mirror the
-          whole column arrangement — the resize handle, the minimize rail (item 9) and the drag
-          direction all follow it; see that component's own header. */}
+          whole column arrangement — the resize handle and the drag direction both follow it; see
+          that component's own header. */}
       {tree !== undefined && (
-        <LabeledIconButton
+        <BandLabeledButton
           label={tree.side === 'left'
             ? (pt ? 'Mover a árvore para a direita' : 'Move the tree to the right')
             : (pt ? 'Mover a árvore para a esquerda' : 'Move the tree to the left')}
@@ -1252,7 +1247,7 @@ export function StudioBar({ isMobile, lang, onExit, tree }: {
           onClick={tree.onFlipSide}
         >
           <ArrowLeftRight size={14} />
-        </LabeledIconButton>
+        </BandLabeledButton>
       )}
 
       <span style={{
@@ -1412,7 +1407,7 @@ export function paneHits(shown: boolean): 'none' | undefined {
  */
 export function StudioBody({
   layout, side = 'left', treeWidth, treeShown, editorShown, available, lang,
-  containerRef, onResize, onCommit, onCollapse, onExpand, tree, editor,
+  containerRef, onResize, onCommit, onCollapse, tree, editor,
 }: {
   layout: StudioLayout
   /**
@@ -1436,13 +1431,6 @@ export function StudioBody({
   onResize: (width: number) => void
   onCommit: (width: number) => void
   onCollapse: () => void
-  /**
-   * BRING THE TREE BACK (design item 9) — read only while collapsed, when it replaces the
-   * separator with a slim rail. The Studio bar's own toggle already does this; the rail exists
-   * because that bar sits at the panel's TOP edge, disconnected from where the (now zero-width)
-   * column actually is, and a control's location is part of how discoverable it is.
-   */
-  onExpand: () => void
   tree: ReactNode
   editor: ReactNode
 }) {
@@ -1491,21 +1479,28 @@ export function StudioBody({
         </div>
       </div>
 
-      {split
-        ? (collapsed
-          ? <CollapsedTreeRail lang={lang} side={side} onExpand={onExpand} />
-          : (
-            <TreeDivider
-              width={treeWidth}
-              available={available}
-              lang={lang}
-              reverse={reverse}
-              onResize={onResize}
-              onCommit={onCommit}
-              onCollapse={onCollapse}
-            />
-          ))
-        : (collapsed && <CollapsedTreeRail lang={lang} side={side} onExpand={onExpand} />)}
+      {/*
+        NO RAIL HERE ANY MORE (design item 4, screenshot 3 — "there is a floating aside button when
+        the tree is closed"). This used to render a `CollapsedTreeRail` in place of the divider
+        whenever `collapsed`, so a minimized tree had TWO ways back on screen at once: this rail AND
+        the Studio bar's own labelled "Mostrar árvore" toggle, floating with no other chrome around
+        it in the no-file-open case (screenshot 3's own capture). `StudioBar`'s toggle is now the
+        ONLY way back — see `Studio`'s own `treeCollapsible`/`resolveTreeShown` for why it is
+        offered whenever there is something to act on. Collapsed and split, there is simply no
+        divider to drag (nothing to resize at zero width); collapsed and NOT split, there is nothing
+        here at all.
+      */}
+      {split && !collapsed && (
+        <TreeDivider
+          width={treeWidth}
+          available={available}
+          lang={lang}
+          reverse={reverse}
+          onResize={onResize}
+          onCommit={onCommit}
+          onCollapse={onCollapse}
+        />
+      )}
 
       <div
         data-studio-pane="editor"
@@ -1516,55 +1511,6 @@ export function StudioBody({
         <Layer shown={editorShown}>{editor}</Layer>
       </div>
     </div>
-  )
-}
-
-/**
- * THE MINIMIZED TREE'S OWN WAY BACK (design item 9) — a slim rail sitting exactly where the
- * separator would be (the split), or where the tree itself would be (the no-file-open panel), so
- * the control that hides the tree and the control that brings it back occupy the SAME strip of
- * screen rather than one living at the panel's top edge and the other nowhere. `StudioBody` renders
- * it whenever `collapsed` is true — `!treeShown && (split || !editorShown)` — which covers BOTH the
- * split (a file open, wide enough, minimized) and the layers arrangement with nothing open at all
- * (there the tree is the only pane, so hiding it leaves neither pane showing, exactly what the
- * second half of that condition catches). It is deliberately never reached for the ORDINARY layers
- * case — a file open on a phone or a too-narrow panel, where the editor simply replaces the tree and
- * the tab strip's own back arrow is the way to it, not this rail.
- *
- * THE BORDER FACES THE TREE, not wherever the box happens to sit (fix-wave review, owner follow-up
- * #4): with the tree flipped to the right (`side === 'right'`) the rail's neighbours reverse too —
- * the editor is now on its left, the tree on its right — so the hairline moves to the other edge
- * rather than staying stuck on the side facing the editor.
- *
- * BOTH SIDES ARE STATED EXPLICITLY — `'none'`, never `undefined` — for the inactive one. This is a
- * `<button>`, which carries its OWN user-agent default border, and leaving one side's property out
- * of the style object relies on the earlier `border: 'none'` shorthand to have zeroed it; measured
- * live, that combination left a native outset border on the unset side on first paint. Naming both
- * sides on every render is what actually rules that out.
- */
-function CollapsedTreeRail({ lang, side, onExpand }: { lang: 'pt' | 'en'; side: TreeSide; onExpand: () => void }) {
-  const pt = lang === 'pt'
-  const label = pt ? 'Mostrar árvore de arquivos' : 'Show the file tree'
-  return (
-    <button
-      type="button"
-      onClick={onExpand}
-      aria-label={label}
-      title={label}
-      style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        width: DIVIDER_RAIL_W, flexShrink: 0, alignSelf: 'stretch',
-        border: 'none',
-        borderLeft: side === 'left' ? '1px solid var(--border)' : 'none',
-        borderRight: side === 'right' ? '1px solid var(--border)' : 'none',
-        background: 'transparent',
-        color: 'var(--text-tertiary)', cursor: 'pointer', padding: 0,
-      }}
-      onMouseEnter={e => { e.currentTarget.style.color = 'var(--anthropic-orange)' }}
-      onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-tertiary)' }}
-    >
-      <PanelLeftOpen size={13} />
-    </button>
   )
 }
 
@@ -2503,47 +2449,8 @@ function IconButton({ label, onClick, disabled, pressed, children }: {
   )
 }
 
-/**
- * `IconButton`, PLUS a short visible word (design item 5 — the plain icon-only pair on the Studio
- * bar was reported as confusing, circled in a screenshot beside the aside's own move-to-bottom
- * icon). A SEPARATE component rather than a new option on `IconButton` itself: that one is used
- * throughout this file for rename/cancel/close/back controls where an icon alone is exactly right
- * (a small square button beside an input, or a back arrow with a title next to it already) — giving
- * every one of those a label as a side effect of this fix would widen controls nobody asked about.
- *
- * `label` is the FULL sentence (the tooltip, and what a screen reader announces); `visibleText` is
- * the short word actually painted next to the icon, so the button stays a compact bar item rather
- * than a full sentence wide.
- */
-function LabeledIconButton({ label, visibleText, isMobile, onClick, pressed, children }: {
-  label: string
-  visibleText: string
-  isMobile: boolean
-  onClick: () => void
-  pressed?: boolean
-  children: ReactNode
-}) {
-  return (
-    <button
-      className="ag-tap-icon"
-      type="button"
-      aria-label={label}
-      aria-pressed={pressed}
-      title={label}
-      onClick={onClick}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0, boxSizing: 'border-box',
-        // 44px is the MOBILE figure. Stated for completeness — `studioLayout` never offers the
-        // split (the only arrangement that passes `tree` to this bar at all) on a phone, so this
-        // branch is desktop-only in practice today; the rule still holds if that ever changes.
-        minHeight: isMobile ? 44 : 22, padding: isMobile ? '0 10px' : '0 6px',
-        background: 'transparent', border: 'none', borderRadius: 6, cursor: 'pointer',
-        color: 'var(--text-tertiary)', fontFamily: 'inherit', fontSize: 11, fontWeight: 600,
-        whiteSpace: 'nowrap',
-      }}
-    >
-      {children}
-      <span>{visibleText}</span>
-    </button>
-  )
-}
+// The Studio bar's own tree controls (collapse toggle, flip-side) now render through
+// `BandLabeledButton` (`bandControls.tsx`) — the same component the bottom band's own move/close/
+// collapse trio uses (design item 3, screenshot 1: "the buttons are non-standard sizes"). A local
+// `LabeledIconButton` used to live here, agreeing on height with the band's own `labeledBtn` but
+// not on border/background (a ghost button beside bordered pills) — see that shared file's header.
