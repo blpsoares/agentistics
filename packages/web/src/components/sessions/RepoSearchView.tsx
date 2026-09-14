@@ -221,6 +221,10 @@ export function RepoSearchView({ sessionId, onOpenFile, onBack, lang }: RepoSear
         </IconButton>
         <Search size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
         <input
+          // Design item 8: Ctrl/Cmd+Shift+F switches to this view precisely so the query is ready
+          // to type into — focusing it here covers every route in (the toolbar's own search
+          // button included), not only the new shortcut.
+          autoFocus
           value={q}
           onChange={ev => setQ(ev.target.value)}
           onKeyDown={ev => { if (ev.key === 'Enter') { ev.preventDefault(); queue.flush() } }}

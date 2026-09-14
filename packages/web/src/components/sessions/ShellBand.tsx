@@ -57,8 +57,8 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { useTerminalStream } from '../../hooks/useTerminalStream'
 import { useTerminalWrite } from '../../hooks/useTerminalWrite'
 import {
-  BAND_MIN_PX, clampBandHeight, readBandPrefs, shellApiUrl, shellErrorText, shellWatching,
-  bandGeometry, shellWhere, writeBandGeometry, writeBandPrefs,
+  BAND_MIN_PX, readBandPrefs, resolveBandHeight, shellApiUrl, shellErrorText, shellWatching,
+  bandGeometry, shellWhere, writeBandGeometry, writeBandPrefs, type BandPrefs,
 } from '../../lib/shellBand'
 import {
   INITIAL_SHELL_BAND, shellBandReducer, shellResolveWanted, type OpenShell,
@@ -86,6 +86,12 @@ interface T {
   endThis: string
   whichTerminal: string
   openOnRight: string
+  /** The VISIBLE word beside the icon (fix-wave review, owner follow-up #5) — short, unlike the
+   *  fuller `fullscreen`/`close`/`collapse`/`expand` sentences above, which stay the tooltip. */
+  fullscreenLabel: string
+  closeLabel: string
+  collapseLabel: string
+  expandLabel: string
 }
 
 const TXT: Record<'pt' | 'en', T> = {
@@ -106,6 +112,10 @@ const TXT: Record<'pt' | 'en', T> = {
     endThis: 'End this terminal',
     whichTerminal: 'Which terminal',
     openOnRight: 'This is open in the panel on the right. Pick it again to bring it back here.',
+    fullscreenLabel: 'Full screen',
+    closeLabel: 'End shell',
+    collapseLabel: 'Collapse',
+    expandLabel: 'Expand',
   },
   pt: {
     title: 'Shell',
@@ -124,6 +134,10 @@ const TXT: Record<'pt' | 'en', T> = {
     endThis: 'Encerrar este terminal',
     whichTerminal: 'Qual terminal',
     openOnRight: 'Isto está aberto no painel à direita. Selecione de novo para trazer de volta aqui.',
+    fullscreenLabel: 'Tela cheia',
+    closeLabel: 'Encerrar shell',
+    collapseLabel: 'Recolher',
+    expandLabel: 'Expandir',
   },
 }
 
@@ -174,11 +188,18 @@ export interface ShellBandProps {
   /** Move whichever pane THIS band is currently showing to the right slot. Docked only — `aside` is
    *  already the right slot, and `dedicated` has no slot to move into. */
   onMoveToRight?: (target: TerminalTarget) => void
+  /**
+   * THE CENTRE COLUMN'S OWN MEASURED HEIGHT (design item 7) — what "full" resolves against, and
+   * the ceiling `resolveBandHeight` reads. `docked` only: `dedicated`/`aside` already fill the
+   * whole box they are given and have no drag handle to snap. Absent or `0` reads as "not measured
+   * yet", which `resolveBandHeight` already treats as "never snap".
+   */
+  columnHeight?: number
 }
 
 export function ShellBand({
   sessionId, cwd, lang, theme, harness, placement = 'docked', onOpenFullscreen,
-  studioEnabled, onSelectStudio, onSelectTerminal, onMoveToRight,
+  studioEnabled, onSelectStudio, onSelectTerminal, onMoveToRight, columnHeight = 0,
 }: ShellBandProps) {
   const t = TXT[lang]
   const isMobile = useIsMobile()
@@ -227,9 +248,12 @@ export function ShellBand({
     try { writeBandPrefs({ ...readBandPrefs(), target: next }) } catch { /* storage blocked */ }
   }, [])
 
-  const setBand = useCallback((next: Partial<{ open: boolean; height: number }>) => {
+  const setBand = useCallback((next: Partial<{ open: boolean; height: number; full: boolean }>) => {
     setPrefs(p => {
-      const merged = { ...p, ...next }
+      const merged: BandPrefs = { ...p, ...next }
+      // `full: false` is written by OMISSION, matching `readBandPrefs`'s own convention — a
+      // literal `false` and an absent key must read identically to every caller.
+      if (merged.full === false) delete merged.full
       writeBandPrefs(merged)
       return merged
     })
@@ -410,16 +434,21 @@ export function ShellBand({
     }).catch(() => {})
   }, [shell, setBand, lang])
 
-  // ---- the drag handle -----------------------------------------------------------------------
+  // ---- the drag handle (design item 7: free-resizing, snapping to full) -----------------------
+  /** What is ACTUALLY on screen right now — `columnHeight` while `full`, `prefs.height` otherwise.
+   *  A drag's start point has to be THIS, never the stored `prefs.height` alone: while full, that
+   *  field is stale (see `BandPrefs.full`'s own doc comment), and starting the drag from it would
+   *  have the band jump the instant the pointer moved at all. */
+  const renderedHeight = prefs.full && columnHeight > 0 ? columnHeight : prefs.height
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
-  const onDragStart = (clientY: number) => { dragRef.current = { startY: clientY, startH: prefs.height } }
+  const onDragStart = (clientY: number) => { dragRef.current = { startY: clientY, startH: renderedHeight } }
   useEffect(() => {
     if (isMobile) return
     const move = (clientY: number) => {
       const d = dragRef.current
       if (!d) return
       // The band grows UPWARD: it is docked at the bottom, so dragging up must make it taller.
-      setBand({ height: clampBandHeight(d.startH + (d.startY - clientY), window.innerHeight) })
+      setBand(resolveBandHeight(d.startH + (d.startY - clientY), columnHeight))
     }
     const onMouse = (e: MouseEvent) => move(e.clientY)
     const onTouch = (e: TouchEvent) => { const p = e.touches[0]; if (p) move(p.clientY) }
@@ -434,7 +463,7 @@ export function ShellBand({
       window.removeEventListener('touchmove', onTouch)
       window.removeEventListener('touchend', end)
     }
-  }, [isMobile, setBand])
+  }, [isMobile, setBand, columnHeight])
 
   /**
    * THE ONE CONTROL THAT PICKS A TERMINAL. It replaced the header's `Conversa | Terminal` toggle —
@@ -786,7 +815,12 @@ export function ShellBand({
   // ---- desktop: the last band of the panel, under the composer ---------------------------------
   return (
     <div style={{
-      flexShrink: 0, display: 'flex', flexDirection: 'column',
+      // FULL (design item 7) flex-stretches this ROOT within `SessionPanel`'s own column, the same
+      // two-step `StudioBand` uses for the identical reason — see that component's own header on
+      // why a literal pixel figure equal to the whole measured column would overflow it by this
+      // bar's own height.
+      ...(prefs.full ? { flex: '1 1 auto', minHeight: 0 } : { flexShrink: 0 }),
+      display: 'flex', flexDirection: 'column',
       borderTop: '1px solid var(--border)', background: 'var(--bg-surface)',
     }}>
       {/* The drag handle sits on the band's TOP edge — the VS Code geometry, where the panel is
@@ -800,8 +834,8 @@ export function ShellBand({
           tabIndex={0}
           onMouseDown={e => { e.preventDefault(); onDragStart(e.clientY) }}
           onKeyDown={e => {
-            if (e.key === 'ArrowUp') { e.preventDefault(); setBand({ height: clampBandHeight(prefs.height + 24, window.innerHeight) }) }
-            if (e.key === 'ArrowDown') { e.preventDefault(); setBand({ height: clampBandHeight(prefs.height - 24, window.innerHeight) }) }
+            if (e.key === 'ArrowUp') { e.preventDefault(); setBand(resolveBandHeight(renderedHeight + 24, columnHeight)) }
+            if (e.key === 'ArrowDown') { e.preventDefault(); setBand(resolveBandHeight(renderedHeight - 24, columnHeight)) }
           }}
           style={{ height: 6, cursor: 'ns-resize', background: 'transparent' }}
         />
@@ -850,9 +884,9 @@ export function ShellBand({
             onClick={e => { e.stopPropagation(); onMoveToRight(target) }}
             title={lang === 'pt' ? 'Mover para a direita' : 'Move to the right'}
             aria-label={lang === 'pt' ? 'Mover para a direita' : 'Move to the right'}
-            style={iconBtn}
+            style={labeledBtn}
           >
-            <PanelRightOpen size={13} />
+            <PanelRightOpen size={13} /><span>{lang === 'pt' ? 'Mover para a direita' : 'Move to the right'}</span>
           </button>
         )}
         {/* TAKE THE WHOLE SCREEN. Offered only with a shell open and somewhere to go, so the bar of
@@ -860,13 +894,16 @@ export function ShellBand({
             shell's own screen — the route has accepted `?pane=shell` since phase 3b and nothing
             linked there. */}
         {prefs.open && streamId && onOpenFullscreen && (
+          // Fix-wave review, owner follow-up #5 — the same "plain icon here was reported as
+          // confusing" complaint item 5 fixed for move/close, now closed for THIS bar's own
+          // fullscreen/close-shell/collapse trio too.
           <button className="ag-tap-icon"
             onClick={e => { e.stopPropagation(); onOpenFullscreen() }}
             title={t.fullscreen}
             aria-label={t.fullscreen}
-            style={iconBtn}
+            style={labeledBtn}
           >
-            <Maximize2 size={13} />
+            <Maximize2 size={13} /><span>{t.fullscreenLabel}</span>
           </button>
         )}
         {/* A shell is something the person OPENED and can end; the CLI pane is the session itself
@@ -879,23 +916,26 @@ export function ShellBand({
             onClick={e => { e.stopPropagation(); void close() }}
             title={t.close}
             aria-label={t.close}
-            style={iconBtn}
+            style={labeledBtn}
           >
-            <Trash2 size={13} />
+            <Trash2 size={13} /><span>{t.closeLabel}</span>
           </button>
         )}
         <button className="ag-tap-icon"
           onClick={e => { e.stopPropagation(); setBand({ open: !prefs.open }) }}
           title={prefs.open ? t.collapse : t.expand}
           aria-label={prefs.open ? t.collapse : t.expand}
-          style={iconBtn}
+          style={labeledBtn}
         >
           {prefs.open ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+          <span>{prefs.open ? t.collapseLabel : t.expandLabel}</span>
         </button>
       </div>
       {prefs.open && (
         <div style={{
-          height: Math.max(BAND_MIN_PX, prefs.height),
+          ...(prefs.full
+            ? { flex: '1 1 auto', minHeight: 0 }
+            : { height: Math.max(BAND_MIN_PX, renderedHeight), flexShrink: 0 }),
           display: 'flex', flexDirection: 'column', gap: 6, padding: '0 12px 10px',
         }}>
           {/* EXCLUDED (C3): the right slot already shows this exact target — see
@@ -909,9 +949,15 @@ export function ShellBand({
   )
 }
 
-const iconBtn: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-  width: 26, height: 22, flexShrink: 0, borderRadius: 6, padding: 0,
-  border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
-  color: 'var(--text-secondary)', cursor: 'pointer',
+/**
+ * Icon plus a visible word — design item 5 (a plain icon here was reported as confusing, beside
+ * the aside's own move control) for move/close, and fix-wave review owner follow-up #5 for the
+ * remaining trio (fullscreen/close-shell/collapse) this bar draws. No icon-only style survives
+ * here any more.
+ */
+const labeledBtn: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 5, height: 22, flexShrink: 0,
+  padding: '0 8px', borderRadius: 6, border: '1px solid var(--border-subtle)',
+  background: 'var(--bg-elevated)', color: 'var(--text-secondary)', cursor: 'pointer',
+  fontFamily: 'inherit', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
 }
