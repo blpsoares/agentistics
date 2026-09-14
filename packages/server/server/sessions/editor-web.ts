@@ -83,6 +83,14 @@ const GENERIC_REFUSAL: Record<GenericRefusal, { en: string; pt: string }> = {
     en: 'That folder is not empty. Delete it recursively to remove everything inside it.',
     pt: 'Essa pasta não está vazia. Apague recursivamente para remover tudo dentro dela.',
   },
+  'name-too-long': {
+    en: 'That name is too long for this filesystem.',
+    pt: 'Esse nome é longo demais para este sistema de arquivos.',
+  },
+  'no-permission': {
+    en: 'This machine does not have permission to write there.',
+    pt: 'Esta máquina não tem permissão para gravar nesse lugar.',
+  },
   conflict: {
     en: 'This file changed on disk since it was opened. Review the current version before saving over it.',
     pt: 'Este arquivo mudou no disco desde que foi aberto. Revise a versão atual antes de salvar sobre ela.',
