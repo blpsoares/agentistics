@@ -86,6 +86,12 @@ interface T {
   endThis: string
   whichTerminal: string
   openOnRight: string
+  /** The VISIBLE word beside the icon (fix-wave review, owner follow-up #5) — short, unlike the
+   *  fuller `fullscreen`/`close`/`collapse`/`expand` sentences above, which stay the tooltip. */
+  fullscreenLabel: string
+  closeLabel: string
+  collapseLabel: string
+  expandLabel: string
 }
 
 const TXT: Record<'pt' | 'en', T> = {
@@ -106,6 +112,10 @@ const TXT: Record<'pt' | 'en', T> = {
     endThis: 'End this terminal',
     whichTerminal: 'Which terminal',
     openOnRight: 'This is open in the panel on the right. Pick it again to bring it back here.',
+    fullscreenLabel: 'Full screen',
+    closeLabel: 'End shell',
+    collapseLabel: 'Collapse',
+    expandLabel: 'Expand',
   },
   pt: {
     title: 'Shell',
@@ -124,6 +134,10 @@ const TXT: Record<'pt' | 'en', T> = {
     endThis: 'Encerrar este terminal',
     whichTerminal: 'Qual terminal',
     openOnRight: 'Isto está aberto no painel à direita. Selecione de novo para trazer de volta aqui.',
+    fullscreenLabel: 'Tela cheia',
+    closeLabel: 'Encerrar shell',
+    collapseLabel: 'Recolher',
+    expandLabel: 'Expandir',
   },
 }
 
@@ -880,13 +894,16 @@ export function ShellBand({
             shell's own screen — the route has accepted `?pane=shell` since phase 3b and nothing
             linked there. */}
         {prefs.open && streamId && onOpenFullscreen && (
+          // Fix-wave review, owner follow-up #5 — the same "plain icon here was reported as
+          // confusing" complaint item 5 fixed for move/close, now closed for THIS bar's own
+          // fullscreen/close-shell/collapse trio too.
           <button className="ag-tap-icon"
             onClick={e => { e.stopPropagation(); onOpenFullscreen() }}
             title={t.fullscreen}
             aria-label={t.fullscreen}
-            style={iconBtn}
+            style={labeledBtn}
           >
-            <Maximize2 size={13} />
+            <Maximize2 size={13} /><span>{t.fullscreenLabel}</span>
           </button>
         )}
         {/* A shell is something the person OPENED and can end; the CLI pane is the session itself
@@ -899,18 +916,19 @@ export function ShellBand({
             onClick={e => { e.stopPropagation(); void close() }}
             title={t.close}
             aria-label={t.close}
-            style={iconBtn}
+            style={labeledBtn}
           >
-            <Trash2 size={13} />
+            <Trash2 size={13} /><span>{t.closeLabel}</span>
           </button>
         )}
         <button className="ag-tap-icon"
           onClick={e => { e.stopPropagation(); setBand({ open: !prefs.open }) }}
           title={prefs.open ? t.collapse : t.expand}
           aria-label={prefs.open ? t.collapse : t.expand}
-          style={iconBtn}
+          style={labeledBtn}
         >
           {prefs.open ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+          <span>{prefs.open ? t.collapseLabel : t.expandLabel}</span>
         </button>
       </div>
       {prefs.open && (
@@ -931,15 +949,12 @@ export function ShellBand({
   )
 }
 
-const iconBtn: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-  width: 26, height: 22, flexShrink: 0, borderRadius: 6, padding: 0,
-  border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
-  color: 'var(--text-secondary)', cursor: 'pointer',
-}
-
-/** `iconBtn`, plus a visible word (design item 5 — a plain icon here was reported as confusing,
- *  beside the aside's own move control). */
+/**
+ * Icon plus a visible word — design item 5 (a plain icon here was reported as confusing, beside
+ * the aside's own move control) for move/close, and fix-wave review owner follow-up #5 for the
+ * remaining trio (fullscreen/close-shell/collapse) this bar draws. No icon-only style survives
+ * here any more.
+ */
 const labeledBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 5, height: 22, flexShrink: 0,
   padding: '0 8px', borderRadius: 6, border: '1px solid var(--border-subtle)',
