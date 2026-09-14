@@ -76,7 +76,9 @@ import { closeArtifacts, openArtifacts, useArtifacts } from './lib/artifactsStor
 import { isPanelShown, rightSlotShowing, usePanelSlots } from './lib/panelSlots'
 import { getCentralMachine } from './lib/centralMachinePick'
 import { targetLabel } from './lib/terminalTarget'
-import { headerSwitcherEntries, type HeaderSwitcherGates, type HeaderSwitcherPanel } from './lib/sessionHeaderSwitcher'
+import {
+  headerSwitcherEntries, studioLocationLabel, type HeaderSwitcherGates, type HeaderSwitcherPanel,
+} from './lib/sessionHeaderSwitcher'
 import { shouldHandleGlobally } from './lib/studioShortcuts'
 import { runStudioShortcut } from './lib/studioSearchRequest'
 import { SessionsAside } from './components/nav/SessionsAside'
@@ -90,7 +92,7 @@ import { AsideResizer } from './components/nav/AsideResizer'
 import { modeOfPath } from './lib/workspaceMode'
 import { ASIDE_DEFAULT } from './lib/asideWidth'
 import { useFleet, useFleetIndex, type FleetActionId } from './lib/fleet'
-import { Segment } from './components/sessions/SessionPanel'
+import { BandSegment, BandSegmentTab } from './components/sessions/bandControls'
 import { SessionActions } from './components/sessions/SessionActions'
 import { MemberConnectionStatus } from './components/MemberConnectionStatus'
 import { OwnerSetup } from './components/OwnerSetup'
@@ -1392,33 +1394,30 @@ export function writeStudioSeen(storage: Pick<StorageLike, 'setItem'>): void {
   try { storage.setItem(STUDIO_SEEN_KEY, '1') } catch { /* private mode */ }
 }
 
-/** The button's border/background/colour, as a pure function of its own pressed state. */
-export function studioButtonTokens(studioOn: boolean): { border: string; background: string; color: string } {
-  return {
-    border: '1px solid ' + (studioOn ? 'var(--anthropic-orange)' : 'var(--border-subtle)'),
-    background: studioOn ? 'rgba(232,146,90,0.08)' : 'var(--bg-elevated)',
-    color: studioOn ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-  }
-}
-
 /**
- * THE ONE TAB GROUP FOR THE RIGHT SLOT (design item 2, screenshot 6) — `Conteúdo · Studio · Claude
- * Code · Shell · Hardware`, replacing three separate header buttons (the Contents icon, the Studio
- * button, the hardware chip) that could each answer "is the right slot showing me" independently
- * and therefore disagree (screenshot 3: the Contents button and the Studio button lit at once). The
- * aside's OWN internal tab row (the same four/five choices, drawn a second time above the panel
- * itself) is removed on desktop for the same reason — see `SessionsPage.tsx`'s `rightSlotHeader`.
+ * THE ONE TAB GROUP FOR THE RIGHT SLOT (design item 2, screenshot 6; owner follow-up, screenshot 5)
+ * — `Conteúdo · Studio · Claude Code · Shell · Hardware`, replacing three separate header buttons
+ * (the Contents icon, the Studio button, the hardware chip) that could each answer "is the right
+ * slot showing me" independently and therefore disagree (screenshot 3: the Contents button and the
+ * Studio button lit at once). The aside's OWN internal tab row (the same four/five choices, drawn a
+ * second time above the panel itself) is removed on desktop for the same reason — see
+ * `SessionsPage.tsx`'s `rightSlotHeader`.
  *
- * Exactly one entry is ever `on`: `headerSwitcherEntries` reads it off `rightSlotShowing`/
- * `isPanelShown`, the SAME selector the slot's own content branches read, so this row and the panel
- * on screen cannot name two different things. `studioButtonTokens` — the Studio button's own
- * pressed-state colours — is reused for every entry rather than invented per-button, and the
- * first-open dot (§2/W1-A) stays on the Studio entry alone.
+ * ONE SEGMENTED CONTROL, not five separate pills (screenshot 5: "I want them all in ONE tab menu").
+ * `BandSegment`/`BandSegmentTab` are the SAME components the bottom band's own `Claude Code | Shell
+ * | Studio` segment renders through (`bandControls.tsx`) — the visual language the owner pointed at
+ * — so this row can never drift into its own bordered-pill-per-entry look again.
+ *
+ * `headerSwitcherEntries` decides which entry is `on` (Studio in EITHER slot; everything else only
+ * in the right one) and, for Studio, where it sits — rendered as a small tag folded into the label
+ * itself (`studioLocationLabel`), which is what makes it part of the tab's own accessible name
+ * without a second `aria-label` to keep in sync. The first-open dot (§2/W1-A) stays on the Studio
+ * entry's icon alone.
  */
 export function SessionHeaderSwitcher({
   entries, lang, studioSeen, cliLabel, shellLabel, onPick,
 }: {
-  entries: readonly { id: HeaderSwitcherPanel; on: boolean }[]
+  entries: readonly { id: HeaderSwitcherPanel; on: boolean; studioAt?: 'side' | 'bottom' }[]
   lang: string
   studioSeen: boolean
   cliLabel: string
@@ -1460,32 +1459,24 @@ export function SessionHeaderSwitcher({
     },
   }
   return (
-    <div role="tablist" aria-label={pt ? 'O que mostrar' : 'What to show'} style={{
-      display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0,
-    }}>
-      {entries.map(({ id, on }) => {
+    <BandSegment label={pt ? 'O que mostrar' : 'What to show'} isMobile={false}>
+      {entries.map(({ id, on, studioAt }) => {
         const m = meta[id]!
-        const tokens = studioButtonTokens(on)
+        const label = id === 'studio' && studioAt
+          ? `${m.label} · ${studioLocationLabel(studioAt, pt)}`
+          : m.label
         return (
-          <button
+          <BandSegmentTab
             key={id}
-            role="tab"
-            aria-selected={on}
+            on={on}
             onClick={() => onPick(id)}
+            icon={m.icon}
+            label={<span>{label}</span>}
             title={m.title}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-              height: 30, padding: '0 9px', borderRadius: 9, cursor: 'pointer',
-              ...tokens,
-              fontFamily: 'inherit', fontSize: 12,
-            }}
-          >
-            {m.icon}
-            <span>{m.label}</span>
-          </button>
+          />
         )
       })}
-    </div>
+    </BandSegment>
   )
 }
 
@@ -3500,32 +3491,38 @@ export default function AppLayout() {
           arrow in the owner's own screenshot points from this exact spot to a new hanging tab next
           to Filtros. See `sessionMetricsTab` near the end of this bar. */}
 
-      {/* THE ONE TAB GROUP FOR THE RIGHT SLOT (design item 2, screenshot 6) — replaces the separate
-          Contents button, Studio button and hardware chip that used to sit here (and, on this
-          route, the hardware chip that sat further LEFT among the machine-wide controls — a
-          question about THIS session's right slot belongs on the session side of the rule this bar
-          otherwise draws). Each used to answer "am I lit" independently — the Contents button read
-          `artifacts.open` on its own, the Studio button read `isPanelShown(slotLayout, 'studio')` —
-          which is exactly how two of them lit at once (screenshot 3): the Studio switcher moved the
-          slot to Studio while the Contents button's own flag stayed `true`. `headerSwitcherEntries`
-          is now the ONE place that decides which single tab is `on`, reading `headerRightShowing`
-          (`rightSlotShowing`) — the same selector the right slot's own content branches read in
-          `SessionsPage.tsx` — so this row and the panel on screen cannot disagree.
+      {/* THE ONE TAB GROUP FOR THE RIGHT SLOT (design item 2, screenshot 6; owner follow-up,
+          screenshot 5) — replaces the separate Contents button, Studio button and hardware chip
+          that used to sit here (and, on this route, the hardware chip that sat further LEFT among
+          the machine-wide controls — a question about THIS session's right slot belongs on the
+          session side of the rule this bar otherwise draws). Each used to answer "am I lit"
+          independently — the Contents button read `artifacts.open` on its own, the Studio button
+          read `isPanelShown(slotLayout, 'studio')` — which is exactly how two of them lit at once
+          (screenshot 3): the Studio switcher moved the slot to Studio while the Contents button's
+          own flag stayed `true`. `headerSwitcherEntries` is now the ONE place that decides which
+          entries are `on`, reading `headerRightShowing` (`rightSlotShowing`) — the same selector
+          the right slot's own content branches read in `SessionsPage.tsx` — and `slotLayout.bottom`
+          for the Studio's own tag, so this row and the panel on screen cannot disagree.
 
           `relayed`: this session belongs to ANOTHER machine, reached through a central's relay —
           no `cli`/`shell` stream of its own exists to show, the same fact `SessionPanel`'s own
           `relayed` reads. `hardwareOffered`: hardware reads THIS machine's own process list, which
           is meaningless (and was always excluded, `!isCentral`) on a central.
 
-          Every entry but Contents moves the RIGHT SLOT explicitly (`openSlotPanel(id, 'right')`),
-          which is what "clicking another switches it" means — a Studio sitting in the BOTTOM band
-          is not what this row is asking about, and clicking its tab brings it to the right rather
-          than leaving it wherever `lastSlot` last remembered. Contents keeps going through the OLD
+          CLICKING STUDIO IS DIFFERENT FROM CLICKING EVERYTHING ELSE (owner follow-up, screenshot
+          5): unlit → `openSlotPanel('studio')` with NO explicit slot, which resolves to
+          `lastSlot['studio']` — "opens in its last slot", not forced to the right the way every
+          other entry is; lit → `closeSlotPanel('studio')`, which closes it wherever it currently
+          sits (`panelSlots.ts`'s `hidePanel` already asks first when it holds unsaved buffers,
+          regardless of which slot). Every other entry but Contents still moves the RIGHT SLOT
+          explicitly (`openSlotPanel(id, 'right')`) and closes only the right slot when lit — a
+          Studio sitting in the BOTTOM band is not what THEIR click means, and clicking one of them
+          must never reach into the band to close it. Contents keeps going through the OLD
           `artifactsStore` (`openArtifacts`/`closeArtifacts`), deliberately — see `panelSlots.ts`'s
           own header on why `contents` carries no field of its own there. */}
       {selectedFleetSession && (
         <SessionHeaderSwitcher
-          entries={headerSwitcherEntries(headerRightShowing, {
+          entries={headerSwitcherEntries(headerRightShowing, slotLayout.bottom, {
             editorEnabled: appCtx.editorEnabled === true,
             shellEnabled: appCtx.shellEnabled === true,
             relayed: getCentralMachine() !== null,
@@ -3538,6 +3535,11 @@ export default function AppLayout() {
           onPick={id => {
             if (id === 'contents') {
               if (headerRightShowing === 'contents') closeArtifacts(); else openArtifacts()
+              return
+            }
+            if (id === 'studio') {
+              if (studioOn) { closeSlotPanel('studio'); return }
+              openSlotPanel('studio')
               return
             }
             if (headerRightShowing === id) { closeSlotPanel(id); return }
