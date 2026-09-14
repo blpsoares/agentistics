@@ -402,28 +402,10 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
 
   return (
     <div className="ag-bubble" {...(anchorId ? { id: anchorId } : {})} style={{
-      display: 'flex', gap: isMobile ? 6 : 10, minWidth: 0,
+      display: 'flex', minWidth: 0,
       flexDirection: mine ? 'row-reverse' : 'row',
       alignItems: 'flex-start',
     }}>
-      {mine ? (
-        <span
-          aria-hidden
-          style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-            width: 26, height: 26, borderRadius: 7, marginTop: 2,
-            background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-            color: 'var(--text-tertiary)',
-          }}
-        >
-          <User size={13} />
-        </span>
-      ) : (
-        <span style={{ marginTop: 2, display: 'flex' }}>
-          <HarnessMark harness={harness} />
-        </span>
-      )}
-
       <div
         ref={bodyRef}
         onMouseUp={readSelection}
@@ -451,12 +433,17 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
         opacity: awaiting ? 0.62 : 1,
         transition: 'opacity 0.2s',
       }}>
+        {/* THE HARNESS ICON MOVED INSIDE THE BUBBLE, immediately left of the name, on the same
+            line (owner follow-up, screenshot 4 — "I want the harness icon on the LEFT of the
+            name"). It used to sit OUTSIDE the bubble as a flex sibling, at the row's own edge —
+            reported as reading like a stray mark beside the message rather than part of it. */}
         {!mine && (
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 7,
+            display: 'flex', alignItems: 'center', gap: 6,
             fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
             color: provisional ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
           }}>
+            <HarnessMark harness={harness} size={14} />
             <span style={{ color }}>{name}</span>
             {provisional && (
               <>
@@ -466,6 +453,26 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
                 <span>{pt ? 'escrevendo — lido da tela' : 'writing — read from the screen'}</span>
               </>
             )}
+          </div>
+        )}
+
+        {/* THE USER'S AVATAR MOVED THE SAME WAY, to the TOP-RIGHT CORNER of their own bubble
+            (owner follow-up, screenshot 4) — its own header line, mirroring the assistant's, with
+            nothing beside it: a user message carries no name to show and no header line of its
+            own before this change, so the icon is the whole of it. */}
+        {mine && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <span
+              aria-hidden
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                width: 18, height: 18, borderRadius: 5,
+                background: 'var(--bg-tertiary)', border: '1px solid var(--border-subtle)',
+                color: 'var(--text-tertiary)',
+              }}
+            >
+              <User size={10} />
+            </span>
           </div>
         )}
 

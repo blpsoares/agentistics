@@ -35,6 +35,8 @@ import { SessionActions } from './SessionActions'
 import { ShellBand } from './ShellBand'
 import { targetLabel } from '../../lib/terminalTarget'
 import { BAND_MIN_PX, readBandPrefs, resolveBandHeight, writeBandPrefs } from '../../lib/shellBand'
+import { bandSegmentEntries } from '../../lib/bandSegment'
+import { BandLabeledButton, BandSegment, BandSegmentTab } from './bandControls'
 
 export type SessionView = 'chat' | 'terminal'
 
@@ -452,52 +454,49 @@ function StudioBand({
             read as the segment sitting on the LEFT the moment the Studio (rather than Claude Code or
             Shell) was the band's occupant — reported with a screenshot circling exactly that jump. */}
         <span style={{ flex: 1 }} />
-        {(onSelectCli || onSelectShell) && (
-          <div role="tablist" aria-label={pt ? 'Qual terminal' : 'Which terminal'} onClick={e => e.stopPropagation()}
-            style={{
-              display: 'flex', gap: 3, padding: 3, borderRadius: 8, flexShrink: 0,
-              background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-            }}
-          >
-            {([
-              ...(onSelectCli ? [['cli', targetLabel('cli', harness, lang), onSelectCli] as const] : []),
-              ...(onSelectShell ? [['shell', targetLabel('shell', harness, lang), onSelectShell] as const] : []),
-            ]).map(([id, label, onSelect]) => (
-              <button
-                key={id}
-                role="tab"
-                aria-selected={false}
-                onClick={onSelect}
-                style={{
-                  minHeight: 22, padding: '0 9px',
-                  borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-                  fontSize: 11, fontWeight: 650, border: 'none', whiteSpace: 'nowrap',
-                  background: 'transparent', color: 'var(--text-tertiary)',
-                }}
-              >{label}</button>
-            ))}
-          </div>
-        )}
+        {/* THE SEGMENT ALWAYS OFFERS ALL THREE (design item 2, screenshot 2 — "when I open the
+            Studio it disappears from the tab menu"): this bar used to draw only `cli`/`shell` here,
+            because "what else can I switch to" was answered by hand a second time and Studio was
+            never asked about itself. `bandSegmentEntries` is the SAME pure function `ShellBand`'s
+            own docked segment calls, so the two can never draw a different answer for the same
+            occupant again — Studio simply reads `on` here, since this bar IS the Studio. */}
+        <div onClick={e => e.stopPropagation()}>
+          <BandSegment label={pt ? 'Qual terminal' : 'Which terminal'} isMobile={false}>
+            {bandSegmentEntries('studio', { cli: !!onSelectCli, shell: !!onSelectShell, studio: true })
+              .map(({ id, on }) => (
+                <BandSegmentTab
+                  key={id}
+                  on={on}
+                  onClick={id === 'cli' ? onSelectCli! : id === 'shell' ? onSelectShell! : () => {}}
+                  icon={id === 'studio' ? <FolderTree size={11} /> : undefined}
+                  label={id === 'studio' ? 'Studio' : targetLabel(id, harness, lang)}
+                />
+              ))}
+          </BandSegment>
+        </div>
         {/* item 5 (screenshot 4): a distinct, conventional icon PLUS a visible label on desktop —
-            the plain icon pair here was circled as confusing beside the aside's own move control. */}
-        <button className="ag-tap-icon"
+            the plain icon pair here was circled as confusing beside the aside's own move control.
+            item 3 (screenshot 1): the SAME shared control every other labelled button in this
+            family (the band's own move/close/collapse trio, the Studio bar's tree toggles) renders
+            through, so none of them can drift into a different height/padding again. */}
+        <BandLabeledButton
+          isMobile={false}
           onClick={e => { e.stopPropagation(); onMoveToRight() }}
-          title={pt ? 'Mover o Studio para a direita' : 'Move the Studio to the right'}
-          aria-label={pt ? 'Mover o Studio para a direita' : 'Move the Studio to the right'}
-          style={studioBandLabeledBtn}
-        ><PanelRightOpen size={13} /><span>{pt ? 'Mover para a direita' : 'Move to the right'}</span></button>
-        <button className="ag-tap-icon"
+          label={pt ? 'Mover o Studio para a direita' : 'Move the Studio to the right'}
+          visibleText={pt ? 'Mover para a direita' : 'Move to the right'}
+        ><PanelRightOpen size={13} /></BandLabeledButton>
+        <BandLabeledButton
+          isMobile={false}
           onClick={e => { e.stopPropagation(); onClose() }}
-          title={pt ? 'Fechar o Studio' : 'Close the Studio'}
-          aria-label={pt ? 'Fechar o Studio' : 'Close the Studio'}
-          style={studioBandLabeledBtn}
-        ><X size={13} /><span>{pt ? 'Fechar' : 'Close'}</span></button>
-        <button className="ag-tap-icon"
+          label={pt ? 'Fechar o Studio' : 'Close the Studio'}
+          visibleText={pt ? 'Fechar' : 'Close'}
+        ><X size={13} /></BandLabeledButton>
+        <BandLabeledButton
+          isMobile={false}
           onClick={e => { e.stopPropagation(); onToggleOpen() }}
-          title={open ? (pt ? 'Recolher o Studio' : 'Collapse the Studio') : (pt ? 'Expandir o Studio' : 'Expand the Studio')}
-          aria-label={open ? (pt ? 'Recolher o Studio' : 'Collapse the Studio') : (pt ? 'Expandir o Studio' : 'Expand the Studio')}
-          style={studioBandIconBtn}
-        >{open ? <ChevronDown size={13} /> : <ChevronUp size={13} />}</button>
+          label={open ? (pt ? 'Recolher o Studio' : 'Collapse the Studio') : (pt ? 'Expandir o Studio' : 'Expand the Studio')}
+          visibleText={open ? (pt ? 'Recolher' : 'Collapse') : (pt ? 'Expandir' : 'Expand')}
+        >{open ? <ChevronDown size={13} /> : <ChevronUp size={13} />}</BandLabeledButton>
       </div>
       {open && (
         <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -536,45 +535,8 @@ function StudioBand({
   )
 }
 
-const studioBandIconBtn: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-  width: 26, height: 22, flexShrink: 0, borderRadius: 6, padding: 0,
-  border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
-  color: 'var(--text-secondary)', cursor: 'pointer',
-}
-
-/** `studioBandIconBtn`, plus a visible word (design item 5). */
-const studioBandLabeledBtn: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', gap: 5, height: 22, flexShrink: 0,
-  padding: '0 8px', borderRadius: 6, border: '1px solid var(--border-subtle)',
-  background: 'var(--bg-elevated)', color: 'var(--text-secondary)', cursor: 'pointer',
-  fontFamily: 'inherit', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
-}
-
-/** Exported: the shared App.tsx header draws the SAME segmented control for the lifted-up
- *  Chat/Terminal toggle, and a second hand-rolled copy of it is exactly the drift this whole
- *  lift-up was meant to remove. */
-export function Segment({ on, onClick, icon, label }: {
-  on: boolean; onClick: () => void; icon: React.ReactNode; label: string
-}) {
-  return (
-    <button
-      role="tab"
-      aria-selected={on}
-      onClick={onClick}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 6,
-        minHeight: 30, padding: '0 10px', borderRadius: 8, border: 'none',
-        cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: on ? 700 : 500,
-        whiteSpace: 'nowrap',
-        background: on ? 'var(--bg-surface)' : 'transparent',
-        color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
-        boxShadow: on ? 'var(--ag-shadow-seg)' : 'none',
-        transition: 'background 0.15s, color 0.15s',
-      }}
-    >
-      {icon}
-      {label}
-    </button>
-  )
-}
+// The band's own controls (the move/close/collapse trio, the "which terminal" segment) now render
+// through `bandControls.tsx` — see its own header for why the two near-duplicate implementations
+// that used to live here (`studioBandIconBtn`/`studioBandLabeledBtn`, and a `Segment` component
+// exported for exactly this purpose and never actually imported anywhere) were the drift design
+// item 3 exists to close, not a second one to keep beside it.
