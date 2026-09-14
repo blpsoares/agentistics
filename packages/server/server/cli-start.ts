@@ -156,7 +156,7 @@ import { withResumeLock } from './sessions/resume-lock'
 import { liveConversationHolders } from './sessions/live-claims'
 import type { ManagedSession, SpawnPlanError } from './sessions/types'
 import {
-  addSession, newSessionId, patchSession, readRegistry, removeSession, retireFallenSessions, touchSessions,
+  addSession, newSessionId, patchSession, readRegistry, retireFallenSessions, retireSession, touchSessions,
 } from './sessions/registry'
 import { createSessionsPoller, type SessionsPoller, type SessionSnapshot } from './sessions/sessions-host'
 import { modeSpecFor } from './sessions/mode-spec'
@@ -3062,11 +3062,12 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
       const blocked = await backend.unavailable()
       if (blocked) return { ok: false, message: blocked }
       if (!(await backend.kill(id))) return { ok: false, message: s.sessKillUnconfirmed(id) }
-      // MARKED finished, never deleted. Removing the row took with it the only record of which
-      // conversation this was — the store had not caught up, so there was nothing left to offer as
-      // reopenable and the session simply vanished from the screen. A session you end is still a
-      // thing that happened, and picking it back up is the ordinary next thing to want.
-      if (!(await patchSession(id, { endedAt: new Date().toISOString() }))) await removeSession(id)
+      // MARKED finished, never deleted — see `retireSession`'s own docstring. Removing the row
+      // took with it the only record of which conversation this was — the store had not caught up,
+      // so there was nothing left to offer as reopenable and the session simply vanished from the
+      // screen. A session you end is still a thing that happened, and picking it back up is the
+      // ordinary next thing to want.
+      await retireSession(id)
       forgetConversations()
       return { ok: true, message: s.sessKilled(id) }
     },
