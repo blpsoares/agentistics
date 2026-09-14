@@ -1402,52 +1402,6 @@ export function studioButtonTokens(studioOn: boolean): { border: string; backgro
 }
 
 /**
- * The header's own Studio entry. Exported and taking every bit of its state as a PROP — the same
- * reason `RepoSearchResults` is (see `Studio.tsx`'s own doc on it) — so `renderToStaticMarkup` can
- * assert its `aria-pressed` and its dot without mounting `AppLayout` around it.
- */
-export function StudioHeaderButton({ studioOn, studioSeen, lang, onOpen }: {
-  studioOn: boolean
-  studioSeen: boolean
-  lang: string
-  onOpen: () => void
-}) {
-  const tokens = studioButtonTokens(studioOn)
-  return (
-    <button
-      onClick={onOpen}
-      aria-pressed={studioOn}
-      title={lang === 'pt'
-        ? 'Agentistics Studio (beta) — os arquivos desta sessão em árvore, com busca e editor'
-        : 'Agentistics Studio (beta) — this session’s files as a tree, with search and an editor'}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-        height: 30, padding: '0 9px', borderRadius: 9, cursor: 'pointer',
-        ...tokens,
-        fontFamily: 'inherit', fontSize: 12,
-      }}
-    >
-      {/* `FolderTree`, the glyph the strip entry already wears — one feature, one icon. The dot
-          sits on ITS corner rather than the button's, so it reads as "this is new" and not as an
-          unrelated notification badge on the label beside it. */}
-      <span style={{ position: 'relative', display: 'flex' }}>
-        <FolderTree size={14} />
-        {!studioSeen && (
-          <span
-            aria-hidden="true"
-            style={{
-              position: 'absolute', top: -2, right: -2, width: 6, height: 6,
-              borderRadius: '50%', background: 'var(--anthropic-orange)',
-            }}
-          />
-        )}
-      </span>
-      <span>Studio</span>
-    </button>
-  )
-}
-
-/**
  * THE ONE TAB GROUP FOR THE RIGHT SLOT (design item 2, screenshot 6) — `Conteúdo · Studio · Claude
  * Code · Shell · Hardware`, replacing three separate header buttons (the Contents icon, the Studio
  * button, the hardware chip) that could each answer "is the right slot showing me" independently
