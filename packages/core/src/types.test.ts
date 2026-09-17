@@ -264,6 +264,21 @@ describe('calcCost — cache-write TTL breakdown', () => {
     expect(afterFix).toBeCloseTo(9.25)
     expect(afterFix - beforeFix).toBeCloseTo(3) // understated by $3 on this 1M-token fixture
   })
+
+  test('a HALF-present breakdown (one TTL field set, the other genuinely undefined) is treated as NO breakdown — never a partial one that drops the unstated remainder', () => {
+    // claude-opus-4-8: cacheWrite1h $10/M, cacheWrite (5m) $6.25/M. Only 30k of the session's
+    // 100k cache-write tokens are stated as 1h; the other 70k have no stated TTL at all — a `||`
+    // gate would price the stated 30k at $10/M (=$0.30) and silently drop the other 70k at NO
+    // rate, which is the exact under-reporting direction this feature exists to fix.
+    const cost = calcCost(usage({
+      cacheCreationInputTokens: 100_000,
+      cacheCreation1hInputTokens: 30_000,
+      // cacheCreation5mInputTokens intentionally left undefined — a half-present breakdown.
+    }), 'claude-opus-4-8')
+    // Falls back to the conservative "no breakdown" reading: the WHOLE counter at the 5m rate.
+    expect(cost).toBeCloseTo(0.625)
+    expect(cost).not.toBeCloseTo(0.30)
+  })
 })
 
 // formatModel

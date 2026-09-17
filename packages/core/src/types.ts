@@ -1057,15 +1057,17 @@ export function sessionCostUSD(
 /**
  * `usage.cacheCreationInputTokens` is billed at TWO different rates depending on the TTL the write
  * requested — see `ModelUsage.cacheCreation1hInputTokens`. When the record states the split
- * (BOTH-OR-NEITHER), each portion is priced at its own rate; when it does not, the whole counter is
- * priced at the 5-minute rate, exactly as before this field existed — the conservative reading, and
- * the only one that is not a guess (see `MODEL_PRICING`'s `cacheWrite1h` for the source of the 2x
- * rate).
+ * (BOTH-OR-NEITHER — checked with `&&`, not `||`), each portion is priced at its own rate; when it
+ * does not, the whole counter is priced at the 5-minute rate, exactly as before this field existed —
+ * the conservative reading, and the only one that is not a guess (see `MODEL_PRICING`'s
+ * `cacheWrite1h` for the source of the 2x rate). A HALF-present breakdown (one field set, the other
+ * `undefined`) is NOT "some breakdown" — treating it as one would price only the stated half and
+ * silently drop whatever `cacheCreationInputTokens` carries beyond it, at no rate at all.
  */
 export function calcCost(usage: ModelUsage, modelId: string): number {
   const price = getModelPrice(modelId)
   const hasTtlBreakdown = usage.cacheCreation1hInputTokens !== undefined
-    || usage.cacheCreation5mInputTokens !== undefined
+    && usage.cacheCreation5mInputTokens !== undefined
   const cacheWriteCost = hasTtlBreakdown
     ? ((usage.cacheCreation1hInputTokens ?? 0) / 1_000_000) * price.cacheWrite1h
       + ((usage.cacheCreation5mInputTokens ?? 0) / 1_000_000) * price.cacheWrite
