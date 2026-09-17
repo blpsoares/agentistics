@@ -158,7 +158,10 @@ import type { ManagedSession, SpawnPlanError } from './sessions/types'
 import {
   addSession, newSessionId, patchSession, readRegistry, retireFallenSessions, retireSession, touchSessions,
 } from './sessions/registry'
-import { createSessionsPoller, type SessionsPoller, type SessionSnapshot } from './sessions/sessions-host'
+import {
+  createSessionsPoller, linkProcessConversation, type SessionsPoller, type SessionSnapshot,
+} from './sessions/sessions-host'
+import { HARNESS_PROCESS_LOGS } from './sessions/harness-session-file'
 import { modeSpecFor } from './sessions/mode-spec'
 import { isServerProcess, readServerSnapshot } from './sessions/shared-snapshot'
 import { conversationForProcess, forgetConversations, loadConversations } from './sessions/conversations'
@@ -1522,6 +1525,66 @@ async function sessionViewPref(): Promise<{ sessionView: SessionViewPrefs }> {
   return { sessionView: stored ?? DEFAULT_SESSION_VIEW }
 }
 
+/**
+ * How long antigravity's OWN log gets to name a fresh session's conversation before this machine
+ * gives up on it for this spawn — see `linkProcessConversationSoon` below.
+ *
+ * Measured against a live agy 1.2.5: the CLI opens its per-process log and writes `Created
+ * conversation …` into it roughly 1-1.5s after spawn — whether or not the folder is one it has ever
+ * seen before, and so whether or not the first-run trust dialog is ever answered. Ten attempts a
+ * second and a bit apart comfortably outlasts that, with room for a slow machine.
+ */
+const PROC_LINK_ATTEMPTS = 10
+const PROC_LINK_INTERVAL_MS = 1_200
+
+/**
+ * Retry the process-log link for ONE freshly spawned row, on this machine's own schedule —
+ * fire-and-forget, never awaited by the spawn response.
+ *
+ * ## Why the ordinary 5s poll is not enough
+ *
+ * `readProcessConversation` is this harness's ONLY chance at an exact link (see
+ * `HARNESS_PROCESS_LOGS` — antigravity has no `assignId` and no session record of its own), and it
+ * is a `/proc/<pid>/fd` read: once the process exits, the chance is gone forever, and nothing can
+ * recover it after the fact (see `session-view.ts`'s `metricsOf`, which refuses to guess one back
+ * from a directory). That chance was being handed entirely to whichever browser tab happened to be
+ * polling `/api/fleet` — and a short-lived session (killed at agy's own first-run trust dialog, or
+ * simply closed) can end before that tab's next tick, OR before it ever polls at all: the wizard's
+ * own `waitForRow` stops the INSTANT the new row appears in a fleet read, which is often under a
+ * second after spawn — well before agy has written the line this reads (measured ~1-1.5s). Reported
+ * as a session started from the web whose chat pane never has anything to show, and that cannot be
+ * reopened once it ends, both are this: the window this file owns is the whole of the fix, because
+ * nothing downstream can recover a link this machine never captured.
+ *
+ * So this machine gives the process its own several seconds, independent of any client — a session
+ * created from `agentop session batch`, with no browser open at all, gets exactly the same chance a
+ * dashboard tab would have given it.
+ */
+function linkProcessConversationSoon(id: string, harness: HarnessId): void {
+  if (!HARNESS_PROCESS_LOGS[harness]) return
+  void (async () => {
+    for (let attempt = 0; attempt < PROC_LINK_ATTEMPTS; attempt++) {
+      await new Promise(r => setTimeout(r, PROC_LINK_INTERVAL_MS))
+      // Read back first: an ordinary poll (this machine's own, or one this loop already ran) may
+      // have already linked it, and a row that is retired (reopened, or its process ended and
+      // something else took the id) is no longer this loop's to touch.
+      const row = (await readRegistry().catch(() => [])).find(m => m.id === id)
+      if (!row || row.conversationId) return
+      const backend = await resolveBackend()
+      const panePids = await backend.listPanePids?.().catch(() => undefined)
+      const pid = panePids?.get(id)
+      if (!pid) continue
+      const linked = await linkProcessConversation({
+        id, harness, pid,
+        readProcessConversation,
+        recordConversation: (sid, conversationId, link) =>
+          patchSession(sid, { conversationId, conversationLink: link }),
+      }).catch(() => false)
+      if (linked) return
+    }
+  })()
+}
+
 async function spawnManaged(req: {
   harness: HarnessId
   cwd: string
@@ -1601,6 +1664,12 @@ async function spawnManaged(req: {
     // grouping fell through to its last path segment as though it were a project.
     ...(await recordedRepo(req.cwd)),
   })
+
+  // Give this harness's one exact-link chance its own several seconds, independent of whichever
+  // client happens to be polling — see the header above `linkProcessConversationSoon`. A no-op for
+  // every harness but antigravity, and for antigravity only when `assignId`/`resumeId` did not
+  // already settle it above.
+  if (!planned.plan.conversationId) linkProcessConversationSoon(id, req.harness)
 
   const convId = planned.plan.conversationId ?? req.resumeId
   const liveBackend = await backend.list().catch(() => [])

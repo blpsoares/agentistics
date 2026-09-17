@@ -104,6 +104,48 @@ describe('which conversation a row continues from', () => {
       expect(c.conversationBlind).toBeUndefined()
     }
   })
+
+  describe('a harness whose only link needs the LIVE process (antigravity)', () => {
+    it('stays quiet while the row is still running — it is within its own capture window', () => {
+      // `linkProcessConversationSoon` (cli-start.ts) gives a fresh antigravity spawn several
+      // seconds of its own before giving up. Telling a session a few seconds old that its link is
+      // gone FOREVER would be a false sentence about a window it has not finished using yet.
+      const c = toControlSession(
+        view({ harness: 'antigravity', status: 'running', activity: 'working' }), S, LIVE,
+      )
+      expect(c.conversationBlind).toBeUndefined()
+    })
+
+    it('stays quiet on a row the poller could not read this time — that is not "ended"', () => {
+      // `status: 'lost'` (this suite's default) is "something is known to exist and nothing can be
+      // said about it", not a fact that the process has exited. Conflating the two would tell a
+      // session that is merely between polls that it can never be reopened.
+      const c = toControlSession(view({ harness: 'antigravity' }), S, LIVE)
+      expect(c.conversationBlind).toBeUndefined()
+    })
+
+    it('says the link is gone FOREVER once the row has actually ended unlinked', () => {
+      // `state === 'exited'` is `session-view.ts`'s own reading of `Boolean(managed.endedAt)` — the
+      // one moment this machine can be sure the process (and with it, `/proc/<pid>/fd`) is gone.
+      const c = toControlSession(
+        view({ harness: 'antigravity', status: 'exited', activity: 'exited' }), S, LIVE,
+      )
+      expect(c.conversationId).toBeUndefined()
+      expect(c.conversationBlind).toBe(S.sessConversationLost('antigravity'))
+      // A different sentence from the structural one — this harness CAN link, in principle.
+      expect(c.conversationBlind).not.toBe(S.sessConversationBlind('antigravity'))
+    })
+
+    it('says nothing once ended WITH a link — there is nothing left to explain', () => {
+      const c = toControlSession(
+        view({
+          harness: 'antigravity', status: 'exited', activity: 'exited', conversationId: 'agy-1',
+        }),
+        S, LIVE,
+      )
+      expect(c.conversationBlind).toBeUndefined()
+    })
+  })
 })
 
 describe('a dialog agentop can SEE and cannot READ', () => {

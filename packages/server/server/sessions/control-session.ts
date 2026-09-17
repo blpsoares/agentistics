@@ -21,7 +21,7 @@ import { needsChoice } from './dialog-choice'
 import { pickTitle } from './harness-session-file'
 import type { ResolvedRepoFacts } from './repo-facts'
 import type { SessionView } from './session-view'
-import { conversationLinkable } from './spawn-spec'
+import { conversationLinkGoneForever, conversationLinkable } from './spawn-spec'
 
 /** The state word each session wears, and the machine-readable state beside it. */
 export function sessionState(v: SessionView): SessionState {
@@ -97,6 +97,21 @@ export function toControlSession(
       ? s.sessUnregistered(v.id.slice(0, 12))
       : s.sessUntitled(harness || '?', project),
   })
+  // Why there is no conversation link, on a row we HOST and only while it has none — two DIFFERENT
+  // facts, and conflating them is how a disabled Reopen button ended up with nothing beside it
+  // explaining why. `!conversationLinkable` is a harness that can NEVER report one (codex, kimi,
+  // gemini): true the moment the row exists, no matter its state. `conversationLinkGoneForever` is
+  // narrower — a harness that CAN (antigravity, via its own process log), but only while that
+  // process is alive; a row still `state !== 'exited'` is within its own capture window (see
+  // `linkProcessConversationSoon` in `cli-start.ts`) and must not be told its link is gone, or a
+  // session a few seconds old would flash a permanent refusal it is about to outgrow.
+  const conversationBlind = v.status === 'external' || v.status === 'closed' || v.conversationId || !harness
+    ? undefined
+    : !conversationLinkable(v.harness!)
+      ? s.sessConversationBlind(harness)
+      : state === 'exited' && conversationLinkGoneForever(v.harness!)
+        ? s.sessConversationLost(harness)
+        : undefined
   return {
     id: v.id,
     title: picked.title,
@@ -157,10 +172,7 @@ export function toControlSession(
     // …and where no answer can ever exist, that is stated instead. Only on a row we HOST and only
     // while it has no id: an `external` or `closed` row was never ours to record, and a claude row
     // that has not been polled yet is about to have one. Same shape as `approvalBlind`.
-    ...(v.status !== 'external' && v.status !== 'closed' && !v.conversationId && harness
-      && !conversationLinkable(v.harness!)
-      ? { conversationBlind: s.sessConversationBlind(harness) }
-      : {}),
+    ...(conversationBlind ? { conversationBlind } : {}),
     ...(v.resume ? { resume: v.resume } : {}),
     ...(v.lastLines?.length ? { lastLines: v.lastLines } : {}),
     ...(v.chatTurns?.length ? { chatTurns: v.chatTurns } : {}),

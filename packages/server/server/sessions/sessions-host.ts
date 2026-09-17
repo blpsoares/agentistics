@@ -97,6 +97,30 @@ export interface SessionsPoller {
   poll(): Promise<SessionSnapshot>
 }
 
+/**
+ * One attempt at the OTHER exact link — the conversation named in the log a harness's own process
+ * holds open (`HARNESS_PROCESS_LOGS`; antigravity only today, see `agy-conversation.ts`).
+ *
+ * Extracted from the poll loop below so a caller with exactly ONE freshly spawned row can retry it
+ * on its own schedule — see `linkProcessConversationSoon` in `cli-start.ts`'s spawn wiring, and the
+ * header there for why the poll loop alone is not enough. `pid` is a parameter rather than resolved
+ * here so a caller walking many rows (the poll loop) still pays for `listPanePids()` once, not once
+ * per row.
+ */
+export async function linkProcessConversation(o: {
+  id: string
+  harness: HarnessId
+  pid: number
+  readProcessConversation: (harness: HarnessId, pid: number) => Promise<string | null>
+  recordConversation: (id: string, conversationId: string, link: 'assigned') => Promise<unknown>
+}): Promise<boolean> {
+  if (!HARNESS_PROCESS_LOGS[o.harness]) return false
+  const found = await o.readProcessConversation(o.harness, o.pid).catch(() => null)
+  if (!found) return false
+  await o.recordConversation(o.id, found, 'assigned').catch(() => undefined)
+  return true
+}
+
 export function createSessionsPoller(o: {
   backend: SessionBackend
   readRegistry: () => Promise<ManagedSession[]>
@@ -415,10 +439,12 @@ export function createSessionsPoller(o: {
           if (m.conversationId || !HARNESS_PROCESS_LOGS[m.harness]) continue
           const pid = panePids?.get(m.id)
           if (!pid) continue
-          const found = await o.readProcessConversation(m.harness, pid).catch(() => null)
-          if (!found) continue
-          procLinkWrites++
-          await o.recordConversation(m.id, found, 'assigned').catch(() => undefined)
+          const linked = await linkProcessConversation({
+            id: m.id, harness: m.harness, pid,
+            readProcessConversation: o.readProcessConversation,
+            recordConversation: o.recordConversation,
+          })
+          if (linked) procLinkWrites++
         }
       }
       markFleetPhase(`poll: processConversation x${procLinkWrites}`, procLinkStart)

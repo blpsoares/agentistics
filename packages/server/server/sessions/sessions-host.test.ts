@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'bun:test'
+import type { HarnessId } from '@agentistics/core'
 import type { HarnessProcess } from '../live-sessions'
 import type { BackendSession, ManagedSession, SessionBackend } from './types'
-import { createSessionsPoller } from './sessions-host'
+import { createSessionsPoller, linkProcessConversation } from './sessions-host'
 
 const NOW = 1_786_600_000_000
 
@@ -24,6 +25,7 @@ function fakeBackend(o: {
   frames?: Record<string, string[]>
   unavailable?: string
   onCapture?: (id: string) => void
+  panePids?: Record<string, number>
 }): SessionBackend {
   return {
     id: 'tmux',
@@ -41,6 +43,7 @@ function fakeBackend(o: {
     async sendText() { return true },
     async sendTextRaw() { return true },
     async sendKey() { return true },
+    ...(o.panePids ? { async listPanePids() { return new Map(Object.entries(o.panePids!)) } } : {}),
   }
 }
 
@@ -520,6 +523,117 @@ describe('first-sighting claims', () => {
       now: () => NOW,
       loadConversations: async () => [conv('c1')] as never,
       recordConversation: async (id, cid, link) => { calls.push([id, cid, link]) },
+    })
+    await p.poll()
+    expect(calls).toEqual([])
+  })
+})
+
+describe('linkProcessConversation', () => {
+  const args = (over: Partial<{
+    id: string
+    harness: HarnessId
+    pid: number
+    readProcessConversation: (harness: HarnessId, pid: number) => Promise<string | null>
+    recordConversation: (id: string, conversationId: string, link: 'assigned') => Promise<unknown>
+  }> = {}) => ({
+    id: 'm1',
+    harness: 'antigravity' as HarnessId,
+    pid: 4242,
+    readProcessConversation: async () => 'conv-1',
+    recordConversation: async () => undefined,
+    ...over,
+  })
+
+  it('records the id the process log names, as an exact (assigned) link', async () => {
+    const calls: Array<[string, string, string]> = []
+    const linked = await linkProcessConversation(args({
+      recordConversation: async (id, cid, link) => { calls.push([id, cid, link]); return undefined },
+    }))
+    expect(linked).toBe(true)
+    expect(calls).toEqual([['m1', 'conv-1', 'assigned']])
+  })
+
+  it('writes nothing for a harness with no process-log source', async () => {
+    const calls: unknown[] = []
+    const linked = await linkProcessConversation(args({
+      harness: 'claude',
+      recordConversation: async (...a) => { calls.push(a) },
+    }))
+    expect(linked).toBe(false)
+    expect(calls).toEqual([])
+  })
+
+  it('writes nothing when the log names no conversation yet', async () => {
+    const calls: unknown[] = []
+    const linked = await linkProcessConversation(args({
+      readProcessConversation: async () => null,
+      recordConversation: async (...a) => { calls.push(a) },
+    }))
+    expect(linked).toBe(false)
+    expect(calls).toEqual([])
+  })
+
+  it('writes nothing when the log read throws', async () => {
+    const calls: unknown[] = []
+    const linked = await linkProcessConversation(args({
+      readProcessConversation: async () => { throw new Error('/proc gone') },
+      recordConversation: async (...a) => { calls.push(a) },
+    }))
+    expect(linked).toBe(false)
+    expect(calls).toEqual([])
+  })
+})
+
+describe('poll: process-log conversation link', () => {
+  it('records the exact link once a row has a pid and a process-owned conversation', async () => {
+    const calls: Array<[string, string, string]> = []
+    const p = createSessionsPoller({
+      backend: fakeBackend({
+        sessions: [backendSession('m1')],
+        frames: { m1: ['x'] },
+        panePids: { m1: 777 },
+      }),
+      readRegistry: async () => [managed('m1', { harness: 'antigravity' })],
+      scanProcesses: async () => ({ procs: [] }),
+      now: () => NOW,
+      readProcessConversation: async (_harness, pid) => (pid === 777 ? 'agy-conv' : null),
+      recordConversation: async (id, cid, link) => { calls.push([id, cid, link]) },
+    })
+    await p.poll()
+    expect(calls).toEqual([['m1', 'agy-conv', 'assigned']])
+  })
+
+  it('never asks for a row that already carries a link', async () => {
+    const reads: number[] = []
+    const p = createSessionsPoller({
+      backend: fakeBackend({
+        sessions: [backendSession('m1')],
+        frames: { m1: ['x'] },
+        panePids: { m1: 777 },
+      }),
+      readRegistry: async () => [managed('m1', { harness: 'antigravity', conversationId: 'already' })],
+      scanProcesses: async () => ({ procs: [] }),
+      now: () => NOW,
+      readProcessConversation: async (_harness, pid) => { reads.push(pid); return 'agy-conv' },
+      recordConversation: async () => undefined,
+    })
+    await p.poll()
+    expect(reads).toEqual([])
+  })
+
+  it('writes nothing when the pane pid is not yet known to the backend', async () => {
+    // The exact reproduction: a row spawned this instant, before `tmux list-panes` has anything to
+    // say about it. Absence of a pid must never be treated as "nothing to link" forever — see
+    // `linkProcessConversationSoon` in cli-start.ts, which retries this on its own schedule.
+    const calls: unknown[] = []
+    const p = createSessionsPoller({
+      backend: fakeBackend({ sessions: [backendSession('m1')], frames: { m1: ['x'] } }),
+      readRegistry: async () => [managed('m1', { harness: 'antigravity' })],
+      scanProcesses: async () => ({ procs: [] }),
+      now: () => NOW,
+      readProcessConversation: async () => 'agy-conv',
+      recordConversation: async (...a) => { calls.push(a) },
     })
     await p.poll()
     expect(calls).toEqual([])
