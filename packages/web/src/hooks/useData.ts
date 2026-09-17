@@ -62,6 +62,86 @@ export function apportionModelUsage(
   }
 }
 
+/** The subset of a session `claudeExactUsageByDay` reads. Structural, so `SessionMeta` stays the
+ *  source of truth. */
+export interface ClaudeDaySession {
+  model?: string
+  start_time?: string
+  daily?: Record<string, DayUsage>
+  input_tokens?: number
+  output_tokens?: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
+}
+
+/**
+ * Per-day, per-model Claude usage a set of sessions can answer for EXACTLY — the one thing
+ * `dailyModelTokens` cannot, because it carries a per-model TOTAL with no day-by-day split at all
+ * (see `apportionModelUsage`'s header for why that gets guessed). A session's own `daily` field,
+ * or its lifetime counters when it has none, is a measurement rather than a guess.
+ *
+ * A day is present in the returned map — "covered" — when at least one session in `sessions`
+ * carries `daily[<that day>]` (its counters, zero or not, are still the truth for that day), or,
+ * for a session with no `daily` at all, when that session's START day is it — the same
+ * whole-session-on-its-start-day rule this file already applies wherever a record predates the
+ * field or its harness's adapter does not produce it.
+ *
+ * `days` restricts which days can ever be covered — pass the CURRENT filter's day set, or a
+ * session's whole lifetime leaks into a window that never asked for it. Absent from the map means
+ * "nothing in scope can answer for this day", never a zero: the caller falls back to
+ * `apportionModelUsage` for those.
+ */
+export function claudeExactUsageByDay(
+  sessions: readonly ClaudeDaySession[],
+  days: ReadonlySet<string>,
+  modelSet: ReadonlySet<string> | null = null,
+): Map<string, Record<string, import('@agentistics/core').ModelUsage>> {
+  const byDay = new Map<string, Record<string, import('@agentistics/core').ModelUsage>>()
+  const add = (
+    day: string,
+    model: string,
+    delta: { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number },
+  ) => {
+    if (modelSet && !modelSet.has(model)) return
+    let bucket = byDay.get(day)
+    if (!bucket) { bucket = {}; byDay.set(day, bucket) }
+    const entry = bucket[model] ?? (bucket[model] = {
+      inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+      webSearchRequests: 0, costUSD: 0,
+    })
+    entry.inputTokens += delta.inputTokens
+    entry.outputTokens += delta.outputTokens
+    entry.cacheReadInputTokens += delta.cacheReadInputTokens
+    entry.cacheCreationInputTokens += delta.cacheCreationInputTokens
+  }
+
+  for (const s of sessions) {
+    const model = s.model
+    if (!model) continue
+    if (s.daily) {
+      for (const [day, d] of Object.entries(s.daily)) {
+        if (!days.has(day)) continue
+        add(day, model, {
+          inputTokens: d.input_tokens || 0,
+          outputTokens: d.output_tokens || 0,
+          cacheReadInputTokens: d.cache_read_input_tokens || 0,
+          cacheCreationInputTokens: d.cache_creation_input_tokens || 0,
+        })
+      }
+    } else {
+      const day = dayKey(s.start_time)
+      if (!day || !days.has(day)) continue
+      add(day, model, {
+        inputTokens: s.input_tokens ?? 0,
+        outputTokens: s.output_tokens ?? 0,
+        cacheReadInputTokens: s.cache_read_input_tokens ?? 0,
+        cacheCreationInputTokens: s.cache_creation_input_tokens ?? 0,
+      })
+    }
+  }
+  return byDay
+}
+
 /**
  * Close the day series against the headline it decomposes.
  *
@@ -1623,6 +1703,23 @@ export function computeDerivedStats(
     const globalModelUsage = effectiveStatsCache.modelUsage ?? {}
     const dateFiltered = filters.dateRange !== 'all' || !!filters.customStart || !!filters.customEnd
 
+    /**
+     * DEFECT A's fix: the exact per-day Claude usage this window's own sessions can answer for.
+     *
+     * Empty whenever the range cannot be enumerated (`!rangeBounded` — the same gate
+     * `filteredSessions`' per-day slice already applies), which is exactly the case for the
+     * unfiltered/all-time view — so this changes nothing when there is no date filter. `days` is
+     * `rangeDays`, not the whole session set, or a session's lifetime would leak past the window.
+     */
+    const claudeSessionsInScope: ClaudeDaySession[] = rangeBounded
+      ? selectedSessions.filter(s => (s.harness ?? 'claude') === 'claude')
+      : []
+    const exactClaudeUsageByDay = claudeExactUsageByDay(claudeSessionsInScope, rangeDays, modelSet)
+    // How many of the window's days still had to be priced by `apportionModelUsage` because no
+    // in-scope session could answer for them. Surfaced on the cost KPI so an estimate never reads
+    // as a measurement — see `costEstimateNote`. Stays 0 outside the date-filtered branch below.
+    let costEstimatedDays = 0
+
     let filteredModelUsage: Record<string, import('@agentistics/core').ModelUsage>
 
     if (cacheBlindScope || nonClaudeHarness || harnessesFiltered) {
@@ -1654,11 +1751,17 @@ export function computeDerivedStats(
         }
       }
     } else if (dateFiltered) {
-      // Build approximate model usage from dailyModelTokens (date-filtered, Claude-only).
-      // We only have total tokens per model per day, so we split input/output using
-      // global proportions from statsCache as an approximation.
+      // Build model usage per day: EXACT from the sessions' own counters wherever
+      // `exactClaudeUsageByDay` covers the day, apportioned from `dailyModelTokens`' global
+      // proportions everywhere else — Defect A was pricing every day this way even on the days
+      // the exact data was sitting one map away in `filteredSessions`.
       filteredModelUsage = {}
+      let estimatedDayCount = 0
       for (const day of filteredDailyModelTokens) {
+        if (!isDateStr(day.date)) continue
+        const key = day.date.slice(0, 10)
+        if (exactClaudeUsageByDay.has(key)) continue // priced exactly below, never apportioned too
+        estimatedDayCount++
         for (const [model, totalTok] of Object.entries(day.tokensByModel)) {
           if (modelSet && !modelSet.has(model)) continue
           if (!filteredModelUsage[model]) {
@@ -1670,7 +1773,7 @@ export function computeDerivedStats(
           }
           const entry = filteredModelUsage[model]
           // Same apportionment the day-cost series uses — one implementation, so the two can
-          // never price the same day differently.
+          // never price the same (uncovered) day differently.
           const split = apportionModelUsage(totalTok, globalModelUsage[model])
           entry.inputTokens              += split.inputTokens
           entry.outputTokens             += split.outputTokens
@@ -1678,6 +1781,26 @@ export function computeDerivedStats(
           entry.cacheCreationInputTokens += split.cacheCreationInputTokens
         }
       }
+      // The covered days' EXACT contribution, merged in regardless of whether `dailyModelTokens`
+      // has an entry for them — a session-only day the cache has not caught up to yet still
+      // prices right instead of contributing nothing.
+      for (const perModel of exactClaudeUsageByDay.values()) {
+        for (const [model, u] of Object.entries(perModel)) {
+          if (!filteredModelUsage[model]) {
+            filteredModelUsage[model] = {
+              inputTokens: 0, outputTokens: 0,
+              cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+              webSearchRequests: 0, costUSD: 0,
+            }
+          }
+          const entry = filteredModelUsage[model]
+          entry.inputTokens              += u.inputTokens
+          entry.outputTokens             += u.outputTokens
+          entry.cacheReadInputTokens     += u.cacheReadInputTokens
+          entry.cacheCreationInputTokens += u.cacheCreationInputTokens
+        }
+      }
+      costEstimatedDays = estimatedDayCount
       // Supplement with non-Claude sessions in range (unified view, date-filtered)
       for (const sess of nonClaudeInRange) {
         // Per-model split: a multi-model session (Antigravity parent + folded subagents)
@@ -1784,21 +1907,33 @@ export function computeDerivedStats(
       // Claude's half. `dailyModelTokens` is the ONLY day series Claude has, and it carries a
       // per-model total with no input/output/cache split — so the split is apportioned from the
       // global per-model proportions, exactly as `filteredModelUsage` already does a few lines
-      // above. When a date filter is active those two are built from the same rows and the day
-      // series sums to the headline; with no filter the headline comes from the CUMULATIVE
-      // `modelUsage` instead, which covers history the daily series no longer retains. That gap
-      // is the residue, and it is real spend — reported, never folded into a day it did not
-      // happen on.
+      // above, UNLESS `exactClaudeUsageByDay` covers the day, in which case this uses the same
+      // exact counters the headline now prices from — or the day chart and the headline would
+      // disagree about the very day Defect A was fixed for. When a date filter is active those two
+      // are built from the same rows and the day series sums to the headline; with no filter the
+      // headline comes from the CUMULATIVE `modelUsage` instead, which covers history the daily
+      // series no longer retains. That gap is the residue, and it is real spend — reported, never
+      // folded into a day it did not happen on.
       for (const day of filteredDailyModelTokens) {
         if (!isDateStr(day.date)) continue
+        const key = day.date.slice(0, 10)
+        const exact = exactClaudeUsageByDay.get(key)
         let dayCost = 0
         let dayTokens = 0
-        for (const [model, totalTok] of Object.entries(day.tokensByModel)) {
-          if (modelSet && !modelSet.has(model)) continue
-          dayCost += calcCost(apportionModelUsage(totalTok, globalModelUsage[model]), model)
-          dayTokens += totalTok
+        if (exact) {
+          for (const [model, u] of Object.entries(exact)) {
+            if (modelSet && !modelSet.has(model)) continue
+            dayCost += calcCost(u, model)
+            dayTokens += usageTokenTotal(u)
+          }
+        } else {
+          for (const [model, totalTok] of Object.entries(day.tokensByModel)) {
+            if (modelSet && !modelSet.has(model)) continue
+            dayCost += calcCost(apportionModelUsage(totalTok, globalModelUsage[model]), model)
+            dayTokens += totalTok
+          }
         }
-        if (dayCost > 0 || dayTokens > 0) addDayCost('claude', day.date.slice(0, 10), dayCost, dayTokens, 0)
+        if (dayCost > 0 || dayTokens > 0) addDayCost('claude', key, dayCost, dayTokens, 0)
       }
 
       // Claude's SESSIONS also carry a day, and they reach further back than `dailyModelTokens`
@@ -2122,6 +2257,12 @@ export function computeDerivedStats(
       allTimeTotalSessions,
       totalToolCalls,
       totalCostUSD,
+      /** How many days of a date-filtered window were priced by `apportionModelUsage`'s
+       *  global-proportions guess because no in-scope session could answer for them exactly.
+       *  `0` outside a date filter, and `0` inside one when the sessions covered every day —
+       *  never a confident measurement when part of `totalCostUSD` was estimated. Feeds
+       *  `costEstimateNote` next to the cost KPI. */
+      costEstimatedDays,
       /** `totalCostUSD` decomposed by day and harness, plus the part no day can carry.
        *  Feeds the plan cost basis — see `billing.ts` in @agentistics/core. */
       apiCostByDay,

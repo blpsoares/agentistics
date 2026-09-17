@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test'
-import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals, apportionModelUsage, summarizeApiCostByDay, computeDerivedStats, resolvePresenceScope } from './useData'
+import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals, apportionModelUsage, summarizeApiCostByDay, computeDerivedStats, resolvePresenceScope, claudeExactUsageByDay } from './useData'
+import type { ClaudeDaySession } from './useData'
 import { EMPTY_TOKENS, mergeStatsCaches, totalTokens, calcCost } from '@agentistics/core'
 import type { RepoSortKey, RepoStat } from './useData'
 import type { SessionMeta } from '@agentistics/core'
@@ -1382,6 +1383,73 @@ describe('apportionModelUsage', () => {
   })
 })
 
+// claudeExactUsageByDay — Defect A: which days a date filter can price EXACTLY, from the
+// sessions' own counters, rather than by apportioning `dailyModelTokens`' per-model total.
+describe('claudeExactUsageByDay', () => {
+  const days = new Set(['2026-07-22', '2026-07-23', '2026-07-24'])
+
+  test('a session with `daily` covers exactly the days it recorded, in the window', () => {
+    const s: ClaudeDaySession = {
+      model: 'claude-opus-4-8',
+      daily: {
+        '2026-07-22': { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 10, cache_creation_input_tokens: 5, messages: 3 },
+        '2026-07-25': { input_tokens: 999, output_tokens: 999, cache_read_input_tokens: 999, cache_creation_input_tokens: 999, messages: 9 }, // outside `days`
+      },
+    }
+    const out = claudeExactUsageByDay([s], days)
+    expect([...out.keys()]).toEqual(['2026-07-22'])
+    expect(out.get('2026-07-22')).toEqual({
+      'claude-opus-4-8': { inputTokens: 100, outputTokens: 50, cacheReadInputTokens: 10, cacheCreationInputTokens: 5, webSearchRequests: 0, costUSD: 0 },
+    })
+  })
+
+  test('a session with NO `daily` covers its start day with its LIFETIME counters', () => {
+    const s: ClaudeDaySession = {
+      model: 'claude-opus-4-8',
+      start_time: '2026-07-22T13:24:29.000Z',
+      input_tokens: 1_707, output_tokens: 1_311_921,
+      cache_read_input_tokens: 347_733_854, cache_creation_input_tokens: 38_684_456,
+    }
+    const out = claudeExactUsageByDay([s], days)
+    expect([...out.keys()]).toEqual(['2026-07-22'])
+    expect(out.get('2026-07-22')!['claude-opus-4-8']).toMatchObject({
+      inputTokens: 1_707, outputTokens: 1_311_921,
+      cacheReadInputTokens: 347_733_854, cacheCreationInputTokens: 38_684_456,
+    })
+  })
+
+  test('a no-daily session whose start day falls outside the window covers nothing', () => {
+    const s: ClaudeDaySession = {
+      model: 'claude-opus-4-8', start_time: '2026-07-01T00:00:00.000Z',
+      input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 1, cache_creation_input_tokens: 1,
+    }
+    expect(claudeExactUsageByDay([s], days).size).toBe(0)
+  })
+
+  test('a session with no `model` at all answers for nothing — never priced under an empty key', () => {
+    const s: ClaudeDaySession = { start_time: '2026-07-22T00:00:00.000Z', input_tokens: 5, output_tokens: 5 }
+    expect(claudeExactUsageByDay([s], days).size).toBe(0)
+  })
+
+  test('two sessions on the same day sum, and a model filter drops what it excludes', () => {
+    const a: ClaudeDaySession = {
+      model: 'claude-opus-4-8',
+      daily: { '2026-07-22': { input_tokens: 100, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, messages: 0 } },
+    }
+    const b: ClaudeDaySession = {
+      model: 'claude-sonnet-4-6',
+      daily: { '2026-07-22': { input_tokens: 40, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, messages: 0 } },
+    }
+    const both = claudeExactUsageByDay([a, b], days)
+    expect(both.get('2026-07-22')).toEqual({
+      'claude-opus-4-8': { inputTokens: 100, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 },
+      'claude-sonnet-4-6': { inputTokens: 40, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 },
+    })
+    const filtered = claudeExactUsageByDay([a, b], days, new Set(['claude-opus-4-8']))
+    expect(Object.keys(filtered.get('2026-07-22')!)).toEqual(['claude-opus-4-8'])
+  })
+})
+
 // summarizeApiCostByDay — the residue is a difference, never a reconciliation
 describe('summarizeApiCostByDay', () => {
   const days = {
@@ -1870,6 +1938,220 @@ describe('the hour chart under a date filter', () => {
       onDay(DAY),
     )!
     expect(d.hourCounts).toEqual({ 16: 3, 22: 2, 8: 1, 9: 2 })
+  })
+})
+
+/**
+ * DEFECT A — a date-filtered view priced an ESTIMATED token split even on days the exact session
+ * data was sitting right there in `filteredSessions`. Fixture is the real one from the
+ * reconciliation: session `246b2b32-f7d9-4386-8001-300b19e9430a`, `claude-opus-4-8`, 2026-07-22.
+ * No `daily` on the record (Claude Code had already deleted the transcript before that field
+ * existed on this session), so it is filed — and now priced — on its start day with its LIFETIME
+ * counters, exactly as `claudeExactUsageByDay` documents for a session with no `daily`.
+ */
+describe('computeDerivedStats — date-filtered cost prices from the sessions\' own counters (Defect A)', () => {
+  const MODEL = 'claude-opus-4-8'
+  // The split the OLD dashboard rendered (documented in reconciliation.md) — set as the "global"
+  // proportions AND as the day's own total, so `apportionModelUsage` reproduces it exactly and a
+  // test can assert against the literal old numbers.
+  const oldSplitGlobal = {
+    inputTokens: 224_500, outputTokens: 1_500_000,
+    cacheReadInputTokens: 372_200_000, cacheCreationInputTokens: 13_800_000,
+    webSearchRequests: 0, costUSD: 0,
+  }
+  const OLD_SPLIT_TOTAL = 224_500 + 1_500_000 + 372_200_000 + 13_800_000 // 387,724,500
+
+  const session246b: SessionMeta = {
+    session_id: '246b2b32-f7d9-4386-8001-300b19e9430a', harness: 'claude', project_path: '/p',
+    model: MODEL,
+    start_time: '2026-07-22T13:24:29.000Z', end_time: '2026-07-23T13:20:20.000Z',
+    input_tokens: 1_707, output_tokens: 1_311_921,
+    cache_read_input_tokens: 347_733_854, cache_creation_input_tokens: 38_684_456,
+  } as unknown as SessionMeta
+  const REAL_TOTAL = 1_707 + 1_311_921 + 347_733_854 + 38_684_456 // 387,731,938
+
+  const baseCache = {
+    version: 1, lastComputedDate: '2026-08-01',
+    dailyActivity: [], hourCounts: {}, totalSessions: 0, totalMessages: 0,
+    modelUsage: { [MODEL]: oldSplitGlobal },
+  }
+
+  const oneDayFilter: import('@agentistics/core').Filters = {
+    dateRange: 'custom', customStart: '2026-07-22', customEnd: '2026-07-22', projects: [], models: [],
+  } as unknown as import('@agentistics/core').Filters
+
+  test('the covered day prices to the REAL counters, not the old apportioned split', () => {
+    const data = {
+      statsCache: { ...baseCache, dailyModelTokens: [{ date: '2026-07-22', tokensByModel: { [MODEL]: OLD_SPLIT_TOTAL } }] },
+      sessions: [session246b], allSessions: [], projects: [], harnesses: ['claude'],
+    } as unknown as import('@agentistics/core').AppData
+
+    const d = computeDerivedStats(data, oneDayFilter)!
+
+    // Nothing was estimated — the one day in the window is fully covered by the session.
+    expect(d.costEstimatedDays).toBe(0)
+
+    // The total is preserved (same as the old, broken split) — this was never about the volume.
+    expect(totalTokens(d.tokenTotals)).toBe(REAL_TOTAL)
+
+    const realCost = calcCost({
+      inputTokens: 1_707, outputTokens: 1_311_921,
+      cacheReadInputTokens: 347_733_854, cacheCreationInputTokens: 38_684_456,
+      webSearchRequests: 0, costUSD: 0,
+    }, MODEL)
+    const oldBrokenCost = calcCost({ ...oldSplitGlobal }, MODEL)
+
+    expect(realCost).toBeGreaterThan(400)
+    expect(realCost).toBeLessThan(460) // ~448.45, per the reconciliation
+    expect(oldBrokenCost).toBeCloseTo(310.97, 1) // the number that shipped, per reconciliation.md
+
+    expect(d.totalCostUSD).toBeCloseTo(realCost, 6)
+    expect(d.totalCostUSD).not.toBeCloseTo(oldBrokenCost, 1) // the defect this guards against
+
+    // The day-level series agrees with the headline for the very day it describes.
+    expect(d.apiCostByDay.days.claude?.['2026-07-22']?.costUSD).toBeCloseTo(realCost, 6)
+  })
+
+  test('a day with NO per-session data still prices through apportionModelUsage (unchanged)', () => {
+    // No session at all on 2026-07-21 — only the cache's day total. The old apportioned number
+    // must survive exactly, because there is nothing else to price it from.
+    const data = {
+      statsCache: { ...baseCache, dailyModelTokens: [{ date: '2026-07-21', tokensByModel: { [MODEL]: 50_000 } }] },
+      sessions: [], allSessions: [], projects: [], harnesses: ['claude'],
+    } as unknown as import('@agentistics/core').AppData
+
+    const filter = { ...oneDayFilter, customStart: '2026-07-21', customEnd: '2026-07-21' } as import('@agentistics/core').Filters
+    const d = computeDerivedStats(data, filter)!
+
+    expect(d.costEstimatedDays).toBe(1)
+    const expectedSplit = calcCost(
+      { ...oldSplitGlobal,
+        inputTokens: Math.round(50_000 * oldSplitGlobal.inputTokens / OLD_SPLIT_TOTAL),
+        outputTokens: Math.round(50_000 * oldSplitGlobal.outputTokens / OLD_SPLIT_TOTAL),
+        cacheReadInputTokens: Math.round(50_000 * oldSplitGlobal.cacheReadInputTokens / OLD_SPLIT_TOTAL),
+        cacheCreationInputTokens: Math.round(50_000 * oldSplitGlobal.cacheCreationInputTokens / OLD_SPLIT_TOTAL),
+      },
+      MODEL,
+    )
+    expect(d.totalCostUSD).toBeCloseTo(expectedSplit, 6)
+  })
+
+  test('a window mixing both composes them and reports the estimated-day count', () => {
+    const data = {
+      statsCache: {
+        ...baseCache,
+        dailyModelTokens: [
+          { date: '2026-07-21', tokensByModel: { [MODEL]: 50_000 } }, // no session -> estimated
+          { date: '2026-07-22', tokensByModel: { [MODEL]: OLD_SPLIT_TOTAL } }, // session -> exact
+        ],
+      },
+      sessions: [session246b], allSessions: [], projects: [], harnesses: ['claude'],
+    } as unknown as import('@agentistics/core').AppData
+
+    const filter = { ...oneDayFilter, customStart: '2026-07-21', customEnd: '2026-07-22' } as import('@agentistics/core').Filters
+    const d = computeDerivedStats(data, filter)!
+
+    // Exactly the uncovered day is counted as estimated — never both, never neither.
+    expect(d.costEstimatedDays).toBe(1)
+
+    const realCost = calcCost({
+      inputTokens: 1_707, outputTokens: 1_311_921,
+      cacheReadInputTokens: 347_733_854, cacheCreationInputTokens: 38_684_456,
+      webSearchRequests: 0, costUSD: 0,
+    }, MODEL)
+    const apportionedCost = calcCost(
+      { ...oldSplitGlobal,
+        inputTokens: Math.round(50_000 * oldSplitGlobal.inputTokens / OLD_SPLIT_TOTAL),
+        outputTokens: Math.round(50_000 * oldSplitGlobal.outputTokens / OLD_SPLIT_TOTAL),
+        cacheReadInputTokens: Math.round(50_000 * oldSplitGlobal.cacheReadInputTokens / OLD_SPLIT_TOTAL),
+        cacheCreationInputTokens: Math.round(50_000 * oldSplitGlobal.cacheCreationInputTokens / OLD_SPLIT_TOTAL),
+      },
+      MODEL,
+    )
+    expect(d.totalCostUSD).toBeCloseTo(realCost + apportionedCost, 6)
+  })
+
+  test('`tokenTotals` and `totalCostUSD` are built from the SAME composed result', () => {
+    const data = {
+      statsCache: {
+        ...baseCache,
+        dailyModelTokens: [
+          { date: '2026-07-21', tokensByModel: { [MODEL]: 50_000 } },
+          { date: '2026-07-22', tokensByModel: { [MODEL]: OLD_SPLIT_TOTAL } },
+        ],
+      },
+      sessions: [session246b], allSessions: [], projects: [], harnesses: ['claude'],
+    } as unknown as import('@agentistics/core').AppData
+
+    const filter = { ...oneDayFilter, customStart: '2026-07-21', customEnd: '2026-07-22' } as import('@agentistics/core').Filters
+    const d = computeDerivedStats(data, filter)!
+
+    // Re-derive the cost straight from `tokenTotals` at the SAME model's rate and it must match
+    // `totalCostUSD` exactly — if the two were built from different sources (one exact, one
+    // apportioned, or vice versa) this would drift.
+    const recomputed = calcCost({
+      inputTokens: d.tokenTotals.input,
+      outputTokens: d.tokenTotals.output,
+      cacheReadInputTokens: d.tokenTotals.cacheRead,
+      cacheCreationInputTokens: d.tokenTotals.cacheWrite,
+      webSearchRequests: 0, costUSD: 0,
+    }, MODEL)
+    expect(d.totalCostUSD).toBeCloseTo(recomputed, 6)
+  })
+
+  test('no date filter: behaviour is unchanged (headline reads the cumulative cache, not sessions)', () => {
+    const data = {
+      statsCache: {
+        ...baseCache,
+        dailyModelTokens: [{ date: '2026-07-22', tokensByModel: { [MODEL]: OLD_SPLIT_TOTAL } }],
+      },
+      sessions: [session246b], allSessions: [], projects: [], harnesses: ['claude'],
+    } as unknown as import('@agentistics/core').AppData
+
+    const all = { dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [] } as unknown as import('@agentistics/core').Filters
+    const d = computeDerivedStats(data, all)!
+
+    expect(d.costEstimatedDays).toBe(0)
+    // Unfiltered, the headline comes straight off statsCache.modelUsage (the OLD split's own
+    // total, unchanged) — this branch is untouched by Defect A's fix.
+    expect(d.totalCostUSD).toBeCloseTo(calcCost(oldSplitGlobal, MODEL), 6)
+  })
+
+  test('the day-level series agrees with the headline even when apportionment OVERprices the day', () => {
+    // The per-session MAX-merge (a pre-existing safety net, unrelated to this fix) always picks
+    // the LARGER of the apportioned day figure and the session's own cost — which happens to hide
+    // a broken day-series exactly when apportionment UNDERprices (the 246b2b32 case above). Here
+    // apportionment is rigged to OVERprice instead (100% cache-write, the priciest rate in the
+    // table, against a session that is 100% cache-READ, the cheapest): MAX can no longer save a
+    // day-series that still apportions, so this is the one shape that isolates the day-series fix
+    // from the headline fix.
+    const cheapModel = 'claude-opus-4-8'
+    const cheapSession: SessionMeta = {
+      session_id: 'cheap-read-only', harness: 'claude', project_path: '/p', model: cheapModel,
+      start_time: '2026-07-22T10:00:00.000Z', end_time: '2026-07-22T11:00:00.000Z',
+      input_tokens: 0, output_tokens: 0,
+      cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 0,
+    } as unknown as SessionMeta
+    const data = {
+      statsCache: {
+        ...baseCache,
+        // 100% cache-write proportions — the priciest of the four rates.
+        modelUsage: { [cheapModel]: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 1_000, webSearchRequests: 0, costUSD: 0 } },
+        dailyModelTokens: [{ date: '2026-07-22', tokensByModel: { [cheapModel]: 1_000_000 } }],
+      },
+      sessions: [cheapSession], allSessions: [], projects: [], harnesses: ['claude'],
+    } as unknown as import('@agentistics/core').AppData
+
+    const d = computeDerivedStats(data, oneDayFilter)!
+
+    const realCost = calcCost({ inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 1_000_000, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 }, cheapModel)
+    const apportionedCost = calcCost({ inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 1_000_000, webSearchRequests: 0, costUSD: 0 }, cheapModel)
+    expect(realCost).toBeCloseTo(0.5, 6)
+    expect(apportionedCost).toBeCloseTo(6.25, 6)
+
+    expect(d.totalCostUSD).toBeCloseTo(realCost, 6)
+    expect(d.apiCostByDay.days.claude?.['2026-07-22']?.costUSD).toBeCloseTo(realCost, 6)
+    expect(d.apiCostByDay.days.claude?.['2026-07-22']?.costUSD).not.toBeCloseTo(apportionedCost, 1)
   })
 })
 
