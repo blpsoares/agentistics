@@ -317,7 +317,11 @@ export async function handleSession(req: Request): Promise<Response> {
   const required = Boolean(TEAM_PASSWORD)
   const authed = isAuthed(req)
   const aggregatorOnly = TEAM_CENTRAL && !CENTRAL_USER
-  // Unreadable preferences are not consent: chat and the shell stay off rather than falling open.
+  // Unreadable preferences read the same as ABSENT ones do for each of these three switches —
+  // OFF for chat (`chatAllowed`'s own strict rule, unchanged), ON for shell/editor when the profile
+  // is capable (`shellAllowed`/`editorAllowed`'s owner-decided rule, 2026-09-14). A failed read is
+  // not a person answering "no" to either question; it is simply not knowing, and each gate's own
+  // rule for "not knowing" applies exactly as it would to a preferences file with the key missing.
   const prefs = await readPreferences().catch(() => ({} as {
     chatEnabled?: boolean; shellEnabled?: boolean; editorEnabled?: boolean
   }))
@@ -343,8 +347,9 @@ export async function handleSession(req: Request): Promise<Response> {
       chatEnabled: chatAllowed(CAPS.localChat, prefs.chatEnabled),
       // The same split, for the per-session utility SHELL: the capability AND the user's own
       // switch, separate from `capabilities.localShell` (the profile alone) so Settings can say
-      // "your profile allows this, you have it off". Unreadable preferences are not consent here
-      // either — `shellAllowed` reads an absent switch as OFF.
+      // "your profile allows this, you have it off". `shellAllowed` reads an absent (or unreadable)
+      // switch as ON when the profile is capable — owner decision, 2026-09-14 — still narrowed by
+      // an explicit `false` and, always, by `capable` itself.
       shellEnabled: shellAllowed(CAPS.localShell, prefs.shellEnabled),
       // The same split, for the repository explorer: the capability AND the user's own switch,
       // separate from `capabilities.localShell` (the profile alone) so Settings can say "your

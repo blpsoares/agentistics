@@ -68,15 +68,22 @@ export default function SessionsSettings() {
         const m: ArchiveMode =
           p?.archiveMode ?? (p?.archiveSessions === true ? 'full' : p?.archiveSessions === false ? 'off' : 'off')
         setMode(m)
-        // ABSENT READS AS OFF. Nobody acquires a browser shell by having upgraded.
-        setShellEnabled(p?.shellEnabled === true)
-        // Nor a read/write file editor — same reading, same reason.
-        setEditorEnabled(p?.editorEnabled === true)
-        // A convenience rather than a gate, but still OFF unless the store says otherwise.
+        // ABSENT READS AS ON when the profile is capable (owner decision, 2026-09-14) — only an
+        // EXPLICIT `false` reads as off. `shellCapable`/`editorCapable` below are what actually
+        // decide whether the toggle can be pressed at all; this is the preference's own value.
+        setShellEnabled(p?.shellEnabled !== false)
+        // Same reading for the Studio's switch, same reason.
+        setEditorEnabled(p?.editorEnabled !== false)
+        // Autosave is UNTOUCHED by the reversal above — it stays absent = OFF, since widening a
+        // save race is a materially different risk than opening a panel that is already gated by
+        // `capable` on the two switches above.
         setEditorAutosave(p?.editorAutosave === true)
       })
       .catch(() => {
-        setMode('off'); setShellEnabled(false); setEditorEnabled(false); setEditorAutosave(false)
+        // A failed read is not a person answering "off" to either question — it is not knowing,
+        // and each switch's own "absent" reading applies exactly as it would to a present-but-empty
+        // preferences file. `archiveMode` keeps its own conservative 'off' default; unrelated.
+        setMode('off'); setShellEnabled(true); setEditorEnabled(true); setEditorAutosave(false)
       })
   }, [])
 
@@ -180,20 +187,26 @@ export default function SessionsSettings() {
 
   return (
     <div>
-      {/* THE SHELL SWITCH. It is off until somebody turns it on, and that is the whole security
-          model this feature ships with: a raw PTY on the host is strictly more powerful than the
-          chat — which `chat-gate.ts` already calls the most powerful thing this server does, and
-          the chat at least runs a NAMED assistant CLI. So absent reads as OFF, it may only ever
-          NARROW what the exposure profile already permits, and the server enforces both before the
-          routes rather than only here. Hiding a button would not close a door. */}
+      {/* THE SHELL SWITCH. A raw PTY on the host is strictly more powerful than the chat — which
+          `chat-gate.ts` already calls the most powerful thing this server does, and the chat at
+          least runs a NAMED assistant CLI — but the SECURITY model is entirely the exposure
+          profile below, not this switch: it may only ever NARROW what the profile already permits,
+          and the server enforces both before the routes rather than only here. Hiding a button
+          would not close a door.
+
+          ON BY DEFAULT on a capable profile (owner decision, 2026-09-14) — the bottom bar under
+          every session's composer offers Claude Code, Shell and Studio as three standing entries of
+          one control, and the owner's call is that Shell belongs there from the first run, the same
+          way the session's own Claude Code pane always has. This switch is therefore an OPT-OUT,
+          not an opt-in: turning it off is what a person does here, not turning it on. */}
       <SectionHeader label={pt ? 'Terminal nesta máquina' : 'Terminal on this machine'} />
 
       <PrefRow
         label={pt ? 'Habilitar o shell por sessão' : 'Enable the per-session shell'}
         sub={shellCapable
           ? (pt
-            ? 'Desligado por padrão. Ligar permite abrir um shell de verdade na pasta de uma sessão, direto no painel.'
-            : 'Off by default. Turning it on lets you open a real shell in a session’s own folder, from the dashboard.')
+            ? 'Ligado por padrão nesta instância. Abre um shell de verdade na pasta de uma sessão, direto no painel — desligue aqui se não quiser isso disponível.'
+            : 'On by default on this instance. Opens a real shell in a session’s own folder, from the dashboard — turn it off here if you would rather not have that available.')
           : (pt
             ? 'Indisponível: o perfil de exposição desta instância não permite executar nada no host — o interruptor só pode restringir, nunca reabrir.'
             : 'Unavailable: this instance’s exposure profile does not allow running anything on the host — the switch can only narrow, never re-open.')}
@@ -214,11 +227,11 @@ export default function SessionsSettings() {
             : 'This instance’s profile already denies the shell; nothing here can re-open it.')
           : shellEnabled
             ? (pt
-              ? 'Seu perfil permite e você está com isso LIGADO. Cada sessão ganha uma faixa "Shell" abaixo do compositor; no máximo 8 terminais abertos ao mesmo tempo.'
-              : 'Your profile allows this and you have it ON. Each session gets a "Shell" band below the composer; at most 8 terminals open at once.')
+              ? 'Seu perfil permite e você está com isso LIGADO (o padrão desta instância). Cada sessão ganha uma faixa "Shell" abaixo do compositor; no máximo 8 terminais abertos ao mesmo tempo.'
+              : 'Your profile allows this and you have it ON (this instance’s default). Each session gets a "Shell" band below the composer; at most 8 terminals open at once.')
             : (pt
-              ? 'Seu perfil permite isso, e você está com isso DESLIGADO. Com o shell desligado, /api/shell/* responde 403 — o servidor é quem decide.'
-              : 'Your profile allows this, and you have it OFF. With the shell off, /api/shell/* answers 403 — the server is what decides.')}
+              ? 'Seu perfil permite isso, mas você DESLIGOU. Com o shell desligado, /api/shell/* responde 403 — o servidor é quem decide.'
+              : 'Your profile allows this, but you have turned it OFF. With the shell off, /api/shell/* answers 403 — the server is what decides.')}
       </div>
 
       <Divider />
@@ -230,8 +243,8 @@ export default function SessionsSettings() {
         label={pt ? 'Habilitar o Studio' : 'Enable the Studio'}
         sub={editorCapable
           ? (pt
-            ? 'Desligado por padrão. Ligar dá a cada sessão um botão "Studio": a árvore de arquivos e um editor de verdade, ocupando o painel lateral inteiro.'
-            : 'Off by default. Turning it on gives each session a "Studio" button: the file tree and a real editor, taking over the whole side panel.')
+            ? 'Ligado por padrão nesta instância. Dá a cada sessão um "Studio" na barra inferior: a árvore de arquivos e um editor de verdade — desligue aqui se não quiser isso disponível.'
+            : 'On by default on this instance. Gives each session a "Studio" entry in the bottom bar: the file tree and a real editor — turn it off here if you would rather not have that available.')
           : editorCentral
             ? (pt
               ? 'Indisponível neste central: ele agrega métricas de outras máquinas e recusa /api/fleet/* por inteiro — não há arquivos daqui para abrir. Ligue o Studio na máquina onde a sessão roda.'
@@ -274,11 +287,11 @@ export default function SessionsSettings() {
               : 'This instance’s profile already denies host file access; nothing here can re-open it.')
           : editorEnabled
             ? (pt
-              ? 'Seu perfil permite e você está com isso LIGADO. Cada sessão ganha o Studio no painel lateral, com leitura e escrita na pasta da própria sessão.'
-              : 'Your profile allows this and you have it ON. Each session gets the Studio in the side panel, reading and writing inside that session’s own folder.')
+              ? 'Seu perfil permite e você está com isso LIGADO (o padrão desta instância). Cada sessão ganha o Studio na barra inferior, com leitura e escrita na pasta da própria sessão.'
+              : 'Your profile allows this and you have it ON (this instance’s default). Each session gets the Studio in the bottom bar, reading and writing inside that session’s own folder.')
             : (pt
-              ? 'Seu perfil permite isso, e você está com isso DESLIGADO. Com o Studio desligado nem o botão aparece, e /api/fleet/tree* responde 403 — o servidor é quem decide.'
-              : 'Your profile allows this, and you have it OFF. With the Studio off not even the button appears, and /api/fleet/tree* answers 403 — the server is what decides.')}
+              ? 'Seu perfil permite isso, mas você DESLIGOU. Com o Studio desligado nem a entrada aparece, e /api/fleet/tree* responde 403 — o servidor é quem decide.'
+              : 'Your profile allows this, but you have turned it OFF. With the Studio off not even the entry appears, and /api/fleet/tree* answers 403 — the server is what decides.')}
       </div>
 
       <Divider />

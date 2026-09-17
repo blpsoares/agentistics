@@ -187,8 +187,9 @@ describe('handleSession', () => {
     // The VALUE is deliberately not asserted: it is this machine's own switch, so a test that
     // pinned it passed on a machine with the shell off and FAILED on one with it on — which is
     // what happened here the day the switch was flipped. What this route owes is the FIELD, as a
-    // boolean, separate from the capability. The rule it carries ("absent reads as OFF") is a
-    // property of `shellAllowed` and is pinned in `sessions/shell-gate.test.ts`, where it depends
+    // boolean, separate from the capability. The rule it carries — an absent preference now reads
+    // as ON (owner decision, 2026-09-14), narrowed only by `capable` and by an explicit `false` — is
+    // a property of `shellAllowed` and is pinned in `sessions/shell-gate.test.ts`, where it depends
     // on nothing but its arguments.
   })
 
