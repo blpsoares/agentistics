@@ -524,6 +524,102 @@ use it in all three headers.
 This needs no server change — `session.task` is already on the wire (`ControlSession.task`,
 `session-fleet.ts` line 596) and is exactly the fact the icon's two states are keyed on.
 
+## F. Revision (2026-09-17): subtask groups become a strict hierarchy level — SUPERSEDES §B.2–§B.5
+
+Captured from a conversation with the user that was never written down before the session that had
+it got compacted — recorded here verbatim-in-substance so the decision is not lost a second time.
+**This replaces the "shared bucket" model of §B, which has already partially shipped**
+(`Subtask.groupId`, `subtaskViews`'s effective-key bucketing, and `SubtaskTable.tsx`'s
+group-aware rollup read are merged on `dev` via PR #537/#538/#542/#543). Implementing this section
+means walking back shipped behaviour, not just finishing unstarted work — flagged explicitly so
+whoever picks this up does not treat it as a clean extension.
+
+### F.1 The model
+
+A "grupo de subtasks" is a real hierarchy level, not a label two subtasks share:
+
+```
+task
+ ├─ subtask (solta)              → sem sessão: sem métrica · com sessão: métrica ativa
+ │                                   (desvincular a sessão descontabiliza; revincular recontabiliza)
+ └─ grupo de subtasks ("guarda-chuva")
+      → SÓ O GRUPO pode receber uma sessão vinculada — nunca uma subtask dele
+      └─ subtask do grupo
+           → NUNCA recebe sessão, NUNCA contabiliza métrica própria
+           → TEM status próprio (dá % de progresso do grupo), comentários e anexos próprios
+```
+
+- **A subtask solta** keeps exactly today's already-shipped behaviour (A.2's `done_needs_session`
+  rule, metrics present only once linked) — unaffected by this revision.
+- **A grupo** appears in the subtask listing as one more row, at the same level a loose subtask
+  sits at — the user was explicit this must NOT read as a nested sub-list buried inside a row; it
+  is a peer of the loose subtasks, in the same table.
+- **A subtask that belongs to a grupo** can never be filed with a session directly — attempting to
+  do so must be refused, the same shape as `done_needs_session`/`blocked_needs_reason` (422, a named
+  reason a UI can render as a sentence, e.g. `subtask_in_group`). It still has its own `status`,
+  `assignee`, `dueDate`, comments and file attachments — those exist independent of whether it
+  ever accounted for a session — and its `status` is what a group's own progress percentage is
+  computed from (the existing `taskProgress` "round down, no bar without subtasks" rule applies at
+  this level too, read over the group's members instead of the task's subtasks).
+- **A group cannot span two parent tasks.** Every member subtask of a group must share the same
+  `taskId` as the group itself — validated at write time, the same way `blockedBy` is already
+  restricted to siblings of the same parent (`agentistics_task_subtask`'s existing constraint).
+
+### F.2 Visibility is downward-only, and the boundary is where the session is filed
+
+- A session filed on a **grupo** can see: the group itself, every member subtask under it, and
+  every comment on any of them. It can post comments on the group AND on the group's member
+  subtasks (wherever the group is open — the aside panel, the group's own view). It cannot see
+  anything belonging to sibling subtasks/groups of the same parent task, or to the parent task
+  itself.
+- A session filed on the **parent task** (today's existing "direct on task" shape, §4.1 of the
+  2026-09-10 spec) sees everything below it without exception: loose subtasks, every group, every
+  group member, and every comment at every level.
+- A session filed on a **loose subtask** sees only that subtask — unchanged from today.
+- Nothing here changes anything upward: a group member session (moot, since members can't hold
+  sessions) or a group session never sees the parent task's own fields. This is the same
+  "hierarchy is a filter, never a merge" reasoning §A.3 already established for `rowsOfTask`.
+
+### F.3 What this reverses in already-shipped code
+
+Not resolved yet — needs its own investigation pass before subtasks are filed, since the code has
+moved since §B shipped:
+
+- `subtaskViews`'s per-group bucketing (§B.3) currently UNIONS every member's sessions into one
+  rollup. Under F.1 a group's rollup should instead be the sessions filed **directly on the group's
+  own record** — simpler than the union, but a different read, and every existing grouped subtask
+  in production data (if any were created under §B before this revision) needs a decision on how it
+  migrates.
+- `SubtaskTable.tsx`/`TaskTable.tsx`'s shared-chip-list logic (§B.4, "every member of a group shows
+  the identical chip list") no longer applies — a member never has chips, because it never has a
+  session.
+- The write-side group-forming gesture (§B.5, "stamp two subtasks with the same `groupId`") assumed
+  peers joining a flat label; F.1 needs a group to be something a subtask can be **added to** as a
+  child, which likely means either (a) a group is its own subtask-shaped record with an
+  `isGroup: true` flag and members carrying a `parentGroupId` pointing at it, or (b) some other
+  representation — **not decided here**, left as the first open question for whoever specs the
+  implementation, since it changes how `patchSubtask`, `subtaskViews`, and the MCP surface all read
+  group membership.
+
+### F.4 MCP routes — explicitly required, not an afterthought
+
+The user was explicit: every action this model introduces needs an MCP-reachable equivalent,
+matching the existing pattern where `agentistics_task_subtask`/`agentistics_task_session` already
+cover the loose-subtask case. At minimum, once F.3's representation question is settled:
+creating a group under a task, adding/removing a member subtask, filing/unfiling a session on a
+group (refusing on a member), and reading a group's own rollup + member list + progress percentage
+through `agentistics_task`'s existing single-task read. None of this is scoped to exact tool
+signatures yet — that is implementation work, not this spec.
+
+### F.5 Not yet answered by this section — flag before implementing
+
+- The exact data representation (§F.3's open question).
+- Whether an existing `groupId`-based grouping (if any was created in production since §B shipped)
+  needs a migration, or whether none exist yet and this is a clean swap.
+- A human name for a group — §B.5 deliberately left this out too; nothing in this conversation
+  reopened it, so the same "identified by its members" answer likely still holds, but this was not
+  explicitly re-confirmed under the new model.
+
 ## D. What this spec does NOT decide
 
 - **C.1's "recent deliveries" list** — named as a smaller follow-up, not speced in full (§C.1).
