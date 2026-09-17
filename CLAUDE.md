@@ -474,13 +474,24 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          convention would have worked and been one refactor from breaking; a
   │                          socket cannot break, and `shell-isolation.test.ts` asserts all of it
   │                          over the module SOURCE (comments stripped first — these modules are
-  │                          REQUIRED to explain themselves in terms of the registry). **Two gates,
-  │                          and absent reads OFF**: `CAPS.localShell` decides the security answer
-  │                          and `preferences.shellEnabled` may only ever NARROW it — a raw shell is
+  │                          REQUIRED to explain themselves in terms of the registry). **Two gates**:
+  │                          `CAPS.localShell` decides the security answer and
+  │                          `preferences.shellEnabled` may only ever NARROW it — a raw shell is
   │                          strictly more powerful than the chat `chat-gate.ts` already calls the
   │                          most powerful thing this server does, because the chat at least runs a
-  │                          NAMED assistant CLI. Enforced in `index.ts` before the routes, not only
-  │                          in the UI, and a CENTRAL refuses outright. **Lifetime is a CEILING
+  │                          NAMED assistant CLI. **OWNER DECISION, 2026-09-14: an ABSENT preference
+  │                          now reads as ON** (subject to `capable`), not off — Shell moved into the
+  │                          bottom bar as one of three standing entries (`panelBar.ts`, alongside
+  │                          Claude Code and Studio) and the call is that it belongs there from the
+  │                          first run, the same way the session's own Claude Code pane always has.
+  │                          `editor-gate.ts` (the Studio) carries the identical reversal for the
+  │                          identical reason; `chat-gate.ts` and the `shareMode` migration each keep
+  │                          their OWN strict "absent reads OFF" reading, unchanged and un-argued-with
+  │                          — this is a decision about these two switches, not a new house rule. An
+  │                          explicit `false` is still respected exactly as before, and the SECURITY
+  │                          gate (`capable`) is exactly as strict as it always was. Enforced in
+  │                          `index.ts` before the routes, not only in the UI, and a CENTRAL refuses
+  │                          outright. **Lifetime is a CEILING
   │                          (`SHELL_CAP` = 8) and never a timer**: a TTL kills the `bun test` that
   │                          finished at minute 61 at an hour nobody was watching and needs a timer
   │                          running forever, while a ceiling is one check on open and only ever
