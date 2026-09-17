@@ -102,14 +102,29 @@ export function toControlSession(
   // explaining why. `!conversationLinkable` is a harness that can NEVER report one (codex, kimi,
   // gemini): true the moment the row exists, no matter its state. `conversationLinkGoneForever` is
   // narrower — a harness that CAN (antigravity, via its own process log), but only while that
-  // process is alive; a row still `state !== 'exited'` is within its own capture window (see
-  // `linkProcessConversationSoon` in `cli-start.ts`) and must not be told its link is gone, or a
-  // session a few seconds old would flash a permanent refusal it is about to outgrow.
+  // process is alive.
+  //
+  // "Alive" is read off `v.status` DIRECTLY and NOT off the collapsed `state` word, on purpose.
+  // `sessionState()` folds TWO different facts into the same `'lost'` output: `v.status === 'lost'`
+  // (`session-ref.ts`'s `!found` branch — the backend has NO record of this row at all, the
+  // ORDINARY way this happens is a reboot or a raw `tmux kill-session` outside agentop's own kill
+  // flow, and there is no pid left to ever read again) and `v.status === 'running'` with no
+  // `activity` read this tick (the backend DOES still have the pane, only this one poll could not
+  // capture it — genuinely ambiguous, and the process the fd would belong to may still be alive).
+  // Reading only `state === 'exited'` therefore missed the first, and MORE common, of the two ways
+  // a process-log harness's row ends up gone: a row still carries no honest sentence and a
+  // permanently dead Reopen button after a reboot, which is not an edge case for a machine that
+  // gets rebooted. `v.status === 'exited'` covers both the agentop-retired case (`endedAt` set,
+  // stamped by `session-view.ts`'s own `finished` check) and a pane the backend still hosts whose
+  // command already died on its own — in both, the ORIGINAL process is provably gone either way.
+  // `v.status === 'running'` with unread activity is deliberately excluded: that row's process may
+  // still be alive, so it stays quiet rather than claim a link is gone that may arrive on the very
+  // next poll.
   const conversationBlind = v.status === 'external' || v.status === 'closed' || v.conversationId || !harness
     ? undefined
     : !conversationLinkable(v.harness!)
       ? s.sessConversationBlind(harness)
-      : state === 'exited' && conversationLinkGoneForever(v.harness!)
+      : (v.status === 'exited' || v.status === 'lost') && conversationLinkGoneForever(v.harness!)
         ? s.sessConversationLost(harness)
         : undefined
   return {

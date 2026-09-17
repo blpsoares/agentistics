@@ -144,7 +144,8 @@ import {
 import { sessionRunning } from '@agentistics/tui/control/session-dimensions'
 import { controlStrings } from '@agentistics/tui/control/i18n'
 import { loadHarnessSessions } from './sessions/harness-sessions'
-import { readProcessConversation } from './sessions/process-conversation'
+import { readProcessConversation, resolveProcessLog } from './sessions/process-conversation'
+import { agyLogCollisions } from './sessions/agy-conversation'
 import { idleServers, isServerCommand } from './idle-servers'
 import { planTaskDelete, taskDeleteIsNoop } from './sessions/task-delete'
 import { memoryBudget } from './sessions/memory-budget'
@@ -1538,6 +1539,26 @@ const PROC_LINK_ATTEMPTS = 10
 const PROC_LINK_INTERVAL_MS = 1_200
 
 /**
+ * Should `linkProcessConversationSoon` run at all for this plan? PURE, so a test can assert the
+ * exact gate without spawning anything real — see FIXWAVE 1, Finding 3: the trigger call below was
+ * the one piece of this whole fix with no test anywhere, and deleting it left `bun tsc --noEmit`
+ * clean and the full server suite green.
+ *
+ * `true` only where BOTH hold: nothing already settled the link (`assignId`/`resumeId` already
+ * stamped a `conversationId` onto the plan — retrying would be pointless, and calling it anyway
+ * would cost a `/proc` sweep and a `scanProcesses()` every spawn of every harness, not only
+ * antigravity's), and the harness has a `HARNESS_PROCESS_LOGS` entry at all (today: antigravity
+ * only — claude/copilot never reach here because they always have a `conversationId`; codex/kimi/
+ * gemini have no entry and would spend the retry's whole budget finding nothing, poll after poll).
+ */
+export function needsProcessLinkRetry(
+  harness: HarnessId,
+  conversationId: string | undefined,
+): boolean {
+  return !conversationId && HARNESS_PROCESS_LOGS[harness] !== null
+}
+
+/**
  * Retry the process-log link for ONE freshly spawned row, on this machine's own schedule —
  * fire-and-forget, never awaited by the spawn response.
  *
@@ -1559,6 +1580,17 @@ const PROC_LINK_INTERVAL_MS = 1_200
  * So this machine gives the process its own several seconds, independent of any client — a session
  * created from `agentop session batch`, with no browser open at all, gets exactly the same chance a
  * dashboard tab would have given it.
+ *
+ * ## FIXWAVE 1, Finding 1 — the collision guard applies HERE too, and matters more here
+ *
+ * agy names its log by SECOND, so a `session batch` launch — several antigravity rows spawned
+ * together, each running this exact loop — is precisely the shape that collides: two of them can
+ * share one log file, and (measured live) that file's content is not reliably preserved for both
+ * writers. This loop's whole reason to exist is checking EARLIER than the ordinary poll, which
+ * makes the collision window, not just the fix's own target window, more likely to be hit here —
+ * so every attempt re-resolves EVERY live process-log-capable process this machine can see
+ * (`scanProcesses`, not only this row) and refuses rather than trusts a shared log, exactly as the
+ * poll loop now does.
  */
 function linkProcessConversationSoon(id: string, harness: HarnessId): void {
   if (!HARNESS_PROCESS_LOGS[harness]) return
@@ -1574,8 +1606,23 @@ function linkProcessConversationSoon(id: string, harness: HarnessId): void {
       const panePids = await backend.listPanePids?.().catch(() => undefined)
       const pid = panePids?.get(id)
       if (!pid) continue
+
+      // THE COLLISION GUARD — see the header above. Every live process-log-capable pid this machine
+      // can see, ours included, resolved to its log BEFORE any content is read.
+      const candidates = new Map<number, HarnessId>([[pid, harness]])
+      const { procs } = await scanProcesses().catch(() => ({ procs: [] }))
+      for (const p of procs) {
+        if (p.pid !== undefined && HARNESS_PROCESS_LOGS[p.harness]) candidates.set(p.pid, p.harness)
+      }
+      const logByPid = new Map<number, string | null>()
+      await Promise.all([...candidates].map(async ([candPid, candHarness]) => {
+        logByPid.set(candPid, await resolveProcessLog(candHarness, candPid).catch(() => null))
+      }))
+      if (agyLogCollisions(logByPid).has(pid)) continue // refuse this attempt; retry next tick
+
       const linked = await linkProcessConversation({
         id, harness, pid,
+        knownLog: logByPid.get(pid),
         readProcessConversation,
         recordConversation: (sid, conversationId, link) =>
           patchSession(sid, { conversationId, conversationLink: link }),
@@ -1666,10 +1713,10 @@ async function spawnManaged(req: {
   })
 
   // Give this harness's one exact-link chance its own several seconds, independent of whichever
-  // client happens to be polling — see the header above `linkProcessConversationSoon`. A no-op for
-  // every harness but antigravity, and for antigravity only when `assignId`/`resumeId` did not
-  // already settle it above.
-  if (!planned.plan.conversationId) linkProcessConversationSoon(id, req.harness)
+  // client happens to be polling — see the header above `linkProcessConversationSoon`.
+  if (needsProcessLinkRetry(req.harness, planned.plan.conversationId)) {
+    linkProcessConversationSoon(id, req.harness)
+  }
 
   const convId = planned.plan.conversationId ?? req.resumeId
   const liveBackend = await backend.list().catch(() => [])

@@ -5,6 +5,7 @@ import {
   bootOptionsFor,
   buildService,
   logRuntime,
+  needsProcessLinkRetry,
   parseBootState,
   parseContainerFacts,
   parseElapsedSeconds,
@@ -602,4 +603,36 @@ test('boot options are offered whatever the service state, unlike starts and res
   const running = buildService('agentistics', 'agentistics', up, BOOT_S, { bootOptions: options })
   expect(running.startOptions).toEqual([])
   expect(running.bootOptions).toHaveLength(1)
+})
+
+// FIXWAVE 1, Finding 3: `linkProcessConversationSoon` (the actual trigger call inside
+// `spawnManaged`, the one piece of the sessions-web-conversation-link fix with no test anywhere)
+// is not itself exported or easily driven without a real backend — but the DECISION of whether it
+// should run at all is pure, and this is the seam. Deleting the call site's `if
+// (needsProcessLinkRetry(...))` guard, or getting its condition wrong, is now something a test can
+// catch without spawning anything real.
+test('needsProcessLinkRetry fires only for a harness with a process-log route and no id yet', () => {
+  // antigravity: the one harness with a `HARNESS_PROCESS_LOGS` entry and no `assignId` — the exact
+  // shape the retry exists for.
+  expect(needsProcessLinkRetry('antigravity', undefined)).toBe(true)
+})
+
+test('needsProcessLinkRetry is a no-op once assignId/resumeId already settled the link', () => {
+  // claude and copilot always have a `conversationId` by the time this is asked (their SpawnSpec
+  // has `assignId`), so retrying would cost a `/proc` sweep and a `scanProcesses()` every spawn for
+  // nothing — this is what stops that, and it is asked with the id ALREADY set, the real shape
+  // `spawnManaged` calls it in.
+  expect(needsProcessLinkRetry('claude', 'c-1')).toBe(false)
+  expect(needsProcessLinkRetry('copilot', 'c-1')).toBe(false)
+  // Antigravity itself, once linked by any route (a future assignId, or an earlier attempt of this
+  // very loop), must not keep retrying either.
+  expect(needsProcessLinkRetry('antigravity', 'agy-1')).toBe(false)
+})
+
+test('needsProcessLinkRetry is a no-op for a harness with no process-log route at all', () => {
+  // codex/kimi/gemini have neither `assignId` nor a `HARNESS_PROCESS_LOGS` entry — scheduling the
+  // retry for them would spend the whole ~12s budget finding nothing, poll after poll.
+  for (const harness of ['codex', 'kimi', 'gemini'] as const) {
+    expect(needsProcessLinkRetry(harness, undefined)).toBe(false)
+  }
 })
