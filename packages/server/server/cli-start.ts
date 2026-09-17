@@ -127,7 +127,9 @@ import { markFleetPhase, timeFleetPhase } from './sessions/fleet-profile'
 // The `SessionView` -> `ControlSession` mapping, extracted so `agentop session ls` draws the same
 // rows from the same decision rather than mapping the fleet a second time.
 import { toControlSession } from './sessions/control-session'
-import { planTaskReopen, taskReopenSucceeded, type TaskReopenPlan } from './sessions/task-reopen'
+import {
+  conversationAlreadyOpen, planTaskReopen, taskReopenSucceeded, type TaskReopenPlan,
+} from './sessions/task-reopen'
 import { approvalFor, choiceKey, fieldIsOpen, isFreeTextOption, readsMarkerSelect } from './sessions/approval-spec'
 // Carrying a rename through to the harness. Shared with `agentop session rename` — one gesture, one
 // implementation, for the reason `task-reopen.ts` exists.
@@ -1736,23 +1738,57 @@ async function reopenEntries(
   let skipped = plan.skipped.length
   for (const row of plan.reopen) {
     const m = row.entry
-    const r = await spawnManaged({
-      harness: m.harness,
-      cwd: m.cwd,
-      resumeId: row.resumeId,
-      label: row.label,
-      attach: false,
-      // The task travels with the session, whichever set this reopen was chosen from: a fall does
-      // not un-file the work someone filed.
-      ...(m.task ? { task: m.task } : {}),
-    }, s)
-    if (!r.ok) { skipped++; continue }
-    opened++
-    if (r.id) await patchSession(r.id, { conversationId: row.resumeId })
-    // Retired, so a laptop closed and opened twice does not leave two dead twins and one live
-    // session standing under the same name.
-    await patchSession(m.id, { endedAt: new Date().toISOString() })
-    if (m.note && r.id) await patchSession(r.id, { note: m.note })
+    /*
+     * ONE REOPEN AT A TIME PER CONVERSATION — exactly the door `resumeSession` already locks (see
+     * `resume-lock.ts`). `plan` above is built from a SNAPSHOT: the registry and the backend as they
+     * were when this call started. Two `reopenFell` calls racing each other (a double click, two
+     * browser tabs both reacting to the same fallen group, a retry) can both read that snapshot
+     * before either has spawned or retired anything, and both would then plan to reopen the SAME
+     * conversation — measured on the isolated preview: two concurrent calls, four live rows for two
+     * fallen conversations. The lock serialises the actual spawn per `resumeId`, reusing the very
+     * lock a plain `resume` already takes for that id, so the two verbs cannot race each other
+     * either. `conversationAlreadyOpen` is the check made a SECOND time, once this row's turn comes,
+     * against a FRESH read — which is what lets the second racer see the first racer's own new row
+     * and stand down instead of starting a twin.
+     */
+    const outcome = await withResumeLock(row.resumeId, async (): Promise<
+      { kind: 'opened' } | { kind: 'held' } | { kind: 'failed' }
+    > => {
+      const freshBackend = await resolveBackend()
+      const [freshEntries, freshAlive] = await Promise.all([
+        readRegistry().catch(() => [] as ManagedSession[]),
+        freshBackend.list().catch(() => []).then(l => new Set(l.filter(b => b.alive).map(b => b.id))),
+      ])
+      if (conversationAlreadyOpen(freshEntries, freshAlive, row.resumeId, m.id)) return { kind: 'held' }
+      const r = await spawnManaged({
+        harness: m.harness,
+        cwd: m.cwd,
+        resumeId: row.resumeId,
+        label: row.label,
+        attach: false,
+        // The task travels with the session, whichever set this reopen was chosen from: a fall does
+        // not un-file the work someone filed.
+        ...(m.task ? { task: m.task } : {}),
+      }, s)
+      if (!r.ok) return { kind: 'failed' }
+      if (r.id) await patchSession(r.id, { conversationId: row.resumeId })
+      // Retired, so a laptop closed and opened twice does not leave two dead twins and one live
+      // session standing under the same name.
+      await patchSession(m.id, { endedAt: new Date().toISOString() })
+      if (m.note && r.id) await patchSession(r.id, { note: m.note })
+      return { kind: 'opened' }
+    })
+    if (outcome.kind === 'opened') opened++
+    else if (outcome.kind === 'held') {
+      // Somebody else's attempt for this exact conversation landed first, in the time between the
+      // plan being built and this row's turn under the lock. Reported the same way `planTaskReopen`
+      // reports any other twin: the work is on screen, under another row, and this was never a
+      // failure.
+      const holder = conversationHeldBy(await liveConversationHolders(await resolveBackend()), row.resumeId, m.id)
+      plan.heldElsewhere.push({ id: m.id, holder: holder ?? { id: row.resumeId, label: row.label, kind: 'managed' } })
+    } else {
+      skipped++
+    }
   }
   forgetConversations()
   return { plan, opened, skipped }
