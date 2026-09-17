@@ -1775,6 +1775,14 @@ export interface ProjectOption {
    * found on disk · `folder` any other directory found on disk · `typed` a path given in full.
    */
   source: 'cwd' | 'history' | 'repo' | 'folder' | 'typed'
+  /**
+   * True only for a LINKED worktree of a repository — never its own main checkout. Absent means
+   * "not a worktree", the same rule `projectKind` (`@agentistics/core`) reads it by. This surface
+   * (the terminal wizard) does not branch on it today; it travels because `searchProjects` is the
+   * one method the web wizard reads it from too, and `ProjectKind` in `@agentistics/core` now has
+   * a `'worktree'` member `worktree: true` resolves to there.
+   */
+  worktree?: boolean
 }
 
 export interface SpawnSessionRequest {

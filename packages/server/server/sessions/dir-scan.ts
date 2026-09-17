@@ -40,8 +40,16 @@ export interface ScannedDir {
   path: string
   /** The last segment — what the row is named and what the search ranks against. */
   name: string
-  /** True when the directory itself holds a `.git`. Ranked above a plain folder. */
+  /** True when the directory itself holds a `.git` DIRECTORY — a repository's MAIN checkout. */
   repo: boolean
+  /**
+   * True when the directory's own `.git` is a FILE rather than a directory — the marker of a
+   * LINKED worktree (its content is `gitdir: <main-checkout>/.git/worktrees/<name>`, never read
+   * here). Free: `readdir(withFileTypes: true)` already hands back a `Dirent` per entry, so telling
+   * a `.git` file from a `.git` directory costs nothing this walk was not already paying — no
+   * extra `stat`, and never a `git` process spawned per candidate (the walk visits thousands).
+   */
+  worktree: boolean
 }
 
 /**
@@ -76,11 +84,16 @@ export async function scanDirectories(
       }))
 
       for (const { dir, entries } of results) {
-        const hasGit = entries.some(e => e.name === '.git')
+        // `.git` is a DIRECTORY for a repository's own checkout and a FILE for a linked worktree
+        // — both are "there is a `.git` entry", which is all the OLD check asked, so a worktree
+        // walked in read as a repository and its main checkout's icon and tab.
+        const gitEntry = entries.find(e => e.name === '.git')
+        const hasGit = gitEntry?.isDirectory() ?? false
+        const isWorktree = gitEntry?.isFile() ?? false
         // The root itself is a legitimate place to work, but it is offered by `cwd`/history rather
         // than by the walk, so only descendants are recorded.
         if (dir !== root) {
-          out.push({ path: dir, name: baseName(dir), repo: hasGit })
+          out.push({ path: dir, name: baseName(dir), repo: hasGit, worktree: isWorktree })
         }
         if (out.length >= MAX_ENTRIES) return out
         // A repository's own subdirectories are still worth offering — a monorepo package is a real
@@ -101,6 +114,22 @@ export async function scanDirectories(
 export async function isDirectory(path: string): Promise<boolean> {
   try {
     return (await stat(path)).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Is `path` itself a linked git worktree — the same `.git`-file-vs-directory test the walk gets
+ * for free, spent here as one `stat` for a path the walk never visited (a history entry outside
+ * the scan depth or outside `$HOME`, the current directory, a typed path). Still never a `git`
+ * process: `git rev-parse --git-dir` would answer the same question at the cost of spawning one
+ * per candidate, and the caller (`project-source.ts`) may run this over every distinct directory
+ * this machine has ever worked in.
+ */
+export async function isWorktreeDir(path: string): Promise<boolean> {
+  try {
+    return (await stat(join(path, '.git'))).isFile()
   } catch {
     return false
   }

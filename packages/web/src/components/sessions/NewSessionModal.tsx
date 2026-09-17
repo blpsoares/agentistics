@@ -26,7 +26,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronLeft, ChevronRight, Check, ClipboardList, FolderClock, FolderGit2, Folder, Loader, Paperclip, Search, X } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, Check, ClipboardList, FolderClock, FolderGit2, FolderSymlink, Folder, Loader, Paperclip, Search, X } from 'lucide-react'
 import { projectKind, type ProjectKind } from '@agentistics/core'
 import {
   KIND_TABS, SEARCH_DEBOUNCE_MS, kindCount, kindEmpty, kindHint, kindLabel, kindMore, kindMoreText,
@@ -43,7 +43,7 @@ import { boardCopy } from '../tasks/copy'
 import { useFleet } from '../../lib/fleet'
 import { attachSession, useTaskList, type TaskDetail } from '../../lib/tasks'
 import { BlockedSubtaskResolve } from '../tasks/BlockedSubtaskResolve'
-import { suggestDelivery } from '../../lib/taskSuggest'
+import { deliveryHint, suggestDelivery } from '../../lib/taskSuggest'
 import {
   STEP_ORDER, clearForHarness, modelDisplay, nextStep, prevStep, stepReady, unsetAnswer,
   visibleQuestions, type MissingAnswer, type StepId, type WizardDraft, type WizardHarness,
@@ -77,6 +77,8 @@ interface ProjectOption {
   repo?: string
   detail: string
   source: string
+  /** True only for a LINKED worktree — never its own main checkout. See `ProjectKind`. */
+  worktree?: boolean
 }
 
 export interface NewSessionModalProps {
@@ -161,16 +163,6 @@ export function NewSessionModal({ lang, onClose, onStarted, initialTask, initial
   const [blockedDetail, setBlockedDetail] = useState<TaskDetail | null>(null)
   /** Open when the delivery picker is up. */
   const [pickingTask, setPickingTask] = useState(false)
-  /**
-   * The suggestion has been dismissed for this spawn.
-   *
-   * Kept apart from `task === ''`: clearing must STAY cleared, and without this the effect below
-   * would helpfully put the suggestion back the moment the field went empty — a field that refuses
-   * to be emptied is worse than one that was never filled.
-   */
-  const [suggestionDismissed, setSuggestionDismissed] = useState(false)
-  /** True while the value in the field is the one the machine proposed, not one a person picked. */
-  const [taskWasSuggested, setTaskWasSuggested] = useState(false)
   const [model, setModel] = useState('')
   const [effort, setEffort] = useState('')
   const [prompt, setPrompt] = useState('')
@@ -198,33 +190,23 @@ export function NewSessionModal({ lang, onClose, onStarted, initialTask, initial
   )
 
   /**
-   * Changing the FOLDER re-arms the suggestion, because a dismissal was about the folder that was
-   * selected when it was made. A person's own PICK survives it — the effect below refuses to write
-   * over a value they chose — so this only ever revives a proposal, never replaces an answer.
+   * The suggestion worth OFFERING right now, as a clickable hint — never written into the field on
+   * its own. See `deliveryHint`'s own note for the bug this replaced: an effect used to fill the
+   * field from the suggestion and, on resolving it to a real task, seed `subtaskTarget` too —
+   * silently FILING the session under a delivery nobody had chosen.
    */
-  useEffect(() => {
-    setSuggestionDismissed(false)
-  }, [cwd])
+  const hint = deliveryHint(task, suggestion)
 
   /**
-   * Fill the field FROM the suggestion — never over a person's own choice, and never again once
-   * they have cleared it for this folder.
-   *
-   * A suggestion is only ever a TITLE guess, but when it happens to name a real, already-created
-   * task, resolving that id and seeding `subtaskTarget` (no subtask) is what turns "looks filed"
-   * into actually filed — the same root cause and the same fix as `initialTaskId` above. See spec
-   * 2026-09-11 §C.2.
+   * Accept the hint — the same act as picking it from `TaskPicker`, just one click closer: it
+   * resolves to a real, already-created task (the only kind `suggestDelivery` ever names), so the
+   * session is actually FILED, not merely labelled. See spec 2026-09-11 §C.2.
    */
-  useEffect(() => {
-    if (suggestionDismissed) return
-    if (task && !taskWasSuggested) return
-    const next = suggestion?.title ?? ''
-    if (next === task) return
-    setTask(next)
-    setTaskWasSuggested(next !== '')
-    const matchedId = next ? taskRows?.find(r => r.task.title === next)?.task.id : undefined
+  function acceptHint(h: NonNullable<typeof hint>): void {
+    setTask(h.title)
+    const matchedId = taskRows?.find(r => r.task.title === h.title)?.task.id
     setSubtaskTarget(matchedId ? { taskId: matchedId } : null)
-  }, [suggestion, suggestionDismissed, task, taskWasSuggested, taskRows])
+  }
 
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -295,8 +277,16 @@ export function NewSessionModal({ lang, onClose, onStarted, initialTask, initial
    * a row can never be counted under one kind here and budgeted under another there.
    */
   const byKind = useMemo(() => {
-    const out: Record<ProjectKind, ProjectOption[]> = { repo: [], project: [], folder: [] }
-    for (const p of projects) out[projectKind({ source: p.source, remote: p.repo })].push(p)
+    const out: Record<ProjectKind, ProjectOption[]> = { repo: [], worktree: [], project: [], folder: [] }
+    for (const p of projects) {
+      out[projectKind({ source: p.source, remote: p.repo, worktree: p.worktree })].push(p)
+    }
+    // Worktrees read better GROUPED by the repository they belong to, so the siblings of one
+    // checkout sit together rather than scattered across the tab by unrelated recency — "labelled
+    // with its repository" alone still leaves them in an order that says nothing about it. A
+    // worktree with no known repo (the walk found it, but no session ever recorded its remote)
+    // sorts last, under an empty key, rather than mixing in among named ones.
+    out.worktree.sort((a, b) => (a.repo ?? '￿').localeCompare(b.repo ?? '￿'))
     return out
   }, [projects])
 
@@ -913,16 +903,23 @@ export function NewSessionModal({ lang, onClose, onStarted, initialTask, initial
               )}
             </div>
 
-            {/* THE THREE KINDS, AND ALL. A repository, a project and a plain folder were one list
-                separated by an icon; the tabs are the division said in words, and the counts are
-                what make an empty tab readable as "nothing of this kind matched" rather than as a
-                broken filter. `projectKind` is `@agentistics/core`'s, so these buckets and the
-                server's per-kind budget can never disagree about what a row is.
+            {/* THE FOUR KINDS, AND ALL. A repository, a worktree, a project and a plain folder
+                were one list separated by an icon; the tabs are the division said in words, and
+                the counts are what make an empty tab readable as "nothing of this kind matched"
+                rather than as a broken filter. `projectKind` is `@agentistics/core`'s, so these
+                buckets and the server's per-kind budget can never disagree about what a row is.
                 All is the default and keeps the server's own ranking — the tabs FILTER it, they
                 never re-order it. */}
             <div role="tablist" style={{
               display: 'flex', gap: 3, marginBottom: 8, padding: 3, borderRadius: 9,
               background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+              // FIVE equal-flex tabs at 390px truncated every label to a couple of letters
+              // ("Tu…", "Wor…") — technically no page scroll, but unreadable, which is not what
+              // "may scroll inside itself" asked for. On mobile each tab keeps its NATURAL width
+              // (measured, not shrunk) and the strip scrolls horizontally INSIDE ITSELF instead —
+              // the page as a whole must never gain a horizontal scrollbar over this row, but this
+              // row may have its own.
+              overflowX: isMobile ? 'auto' : 'visible',
             }}>
               {KIND_TABS.map(id => {
                 const on = kindTab === id
@@ -934,15 +931,17 @@ export function NewSessionModal({ lang, onClose, onStarted, initialTask, initial
                     aria-selected={on}
                     onClick={() => setKindTab(id)}
                     style={{
-                      flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
                       gap: 5, minHeight: 30, borderRadius: 7, border: 'none', cursor: 'pointer',
                       background: on ? 'var(--bg-surface)' : 'transparent',
                       color: on ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
                       fontFamily: 'inherit', fontSize: 11.5, fontWeight: on ? 650 : 500,
-                      minWidth: 0,
+                      ...(isMobile
+                        ? { flexShrink: 0, padding: '0 10px', whiteSpace: 'nowrap' }
+                        : { flex: 1, minWidth: 0 }),
                     }}
                   >
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span style={isMobile ? undefined : { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {kindLabel(id, pt)}
                     </span>
                     {/* The count is DIMMED and never coloured: it is a size, not a state. */}
@@ -993,8 +992,12 @@ export function NewSessionModal({ lang, onClose, onStarted, initialTask, initial
                         found as a plain folder: that one has a `.git` and no RECORDED remote, and
                         the absence of a remote is not the absence of a repository. */}
                     {(() => {
-                      const kind = projectKind({ source: p.source, remote: p.repo })
+                      const kind = projectKind({ source: p.source, remote: p.repo, worktree: p.worktree })
                       if (kind === 'repo') return <FolderGit2 size={15} style={{ color: 'var(--accent-purple)', flexShrink: 0 }} />
+                      // A DIFFERENT mark from `repo`, on purpose — it is PART of a repository, not
+                      // a repository of its own, and drawing it with the same icon is exactly the
+                      // "worktree offered as a repository" bug this tab exists to fix.
+                      if (kind === 'worktree') return <FolderSymlink size={15} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
                       if (kind === 'project') return <FolderClock size={15} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
                       return <Folder size={15} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
                     })()}
@@ -1040,40 +1043,31 @@ export function NewSessionModal({ lang, onClose, onStarted, initialTask, initial
               <ChevronDown size={14} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
             </button>
             {/*
-              * The reason, and the way out. A field that fills itself in without saying why is a
-              * field nobody trusts, and one that cannot be emptied is worse than one that was never
-              * filled — so the sentence and the [×] always travel together.
+              * The hint. The field NEVER fills itself in — see `deliveryHint` — so this is the
+              * only way the suggestion reaches the field at all: a click, exactly like picking it
+              * from `TaskPicker`. It disappears the moment the field holds anything, chosen or
+              * typed, which is also why there is no [×] to dismiss it any more — there is nothing
+              * here that was ever applied without being asked for.
               */}
-            {taskWasSuggested && suggestion && task === suggestion.title && (
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 6, marginTop: 6,
-                fontSize: 11, color: 'var(--text-tertiary)',
-              }}>
-                <span style={{ flex: 1 }}>
+            {hint && (
+              <button
+                type="button"
+                onClick={() => acceptHint(hint)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, width: '100%',
+                  padding: '5px 8px', borderRadius: 6, textAlign: 'left', cursor: 'pointer',
+                  background: 'var(--bg-elevated)', border: '1px dashed var(--border-subtle)',
+                  fontSize: 11, color: 'var(--text-secondary)', fontFamily: 'inherit',
+                  minHeight: isMobile ? 44 : undefined, boxSizing: 'border-box',
+                }}
+              >
+                <ClipboardList size={12} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {pt
-                    ? `sugerida: ${suggestion.sameFolder} ${suggestion.sameFolder === 1 ? 'sessão desta pasta está' : 'sessões desta pasta estão'} nesta entrega`
-                    : `suggested: ${suggestion.sameFolder} session${suggestion.sameFolder === 1 ? '' : 's'} in this folder ${suggestion.sameFolder === 1 ? 'is' : 'are'} filed here`}
+                    ? `Usar "${hint.title}" — ${hint.sameFolder} ${hint.sameFolder === 1 ? 'sessão desta pasta está' : 'sessões desta pasta estão'} nesta entrega`
+                    : `Use "${hint.title}" — ${hint.sameFolder} session${hint.sameFolder === 1 ? '' : 's'} in this folder ${hint.sameFolder === 1 ? 'is' : 'are'} filed here`}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTask(''); setSubtaskTarget(null)
-                    setTaskWasSuggested(false); setSuggestionDismissed(true)
-                  }}
-                  title={pt ? 'Não usar a sugestão' : 'Do not use the suggestion'}
-                  // `.ag-tap-icon` PROJECTS the 44px a finger needs around a 22px glyph, rather
-                  // than painting a 44x44 box three times the size of what is in it.
-                  className="ag-tap-icon"
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    width: 22, height: 22, flexShrink: 0,
-                    background: 'transparent', border: 'none', borderRadius: 4,
-                    color: 'var(--text-tertiary)', cursor: 'pointer',
-                  }}
-                >
-                  <X size={13} />
-                </button>
-              </div>
+              </button>
             )}
           </Field>
 
@@ -1084,9 +1078,6 @@ export function NewSessionModal({ lang, onClose, onStarted, initialTask, initial
               onPick={pick => {
                 setTask(pick.taskTitle)
                 setSubtaskTarget({ taskId: pick.taskId, subtaskId: pick.subtaskId })
-                // A person chose it, so the effect above must stop proposing over the top of it.
-                setTaskWasSuggested(false)
-                setSuggestionDismissed(true)
                 setPickingTask(false)
               }}
               onClose={() => setPickingTask(false)}
