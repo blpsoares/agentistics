@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { BAND_CONTROL_H, BandLabeledButton, BandSegment, BandSegmentTab } from './bandControls'
+import { panelBarEntries } from '../../lib/panelBar'
+import {
+  BAND_CONTROL_H, BandLabeledButton, BandOverflowMenu, BandSegment, BandSegmentTab, PanelBar,
+} from './bandControls'
 
 /**
  * Design item 3 (screenshot 1: "the buttons are non-standard sizes and it is very confusing") —
@@ -89,5 +92,166 @@ describe('BandLabeledButton — pressed is optional, and only rendered when give
     )
     expect(on).toContain('aria-pressed="true"')
     expect(off).toContain('aria-pressed="false"')
+  })
+})
+
+/**
+ * PanelBar — the ONE panel switcher (design item 1), now rendered inside the bottom band's own bar
+ * instead of the fixed header. These assertions used to live in `App.test.tsx` against the header's
+ * own `SessionHeaderSwitcher`; they moved here with the component — see that file's own header on
+ * why. `panelBarEntries` itself is pinned in `lib/panelBar.test.ts`; what is tested here is that the
+ * COMPONENT actually threads the computed `on`/`studioAt` into the markup (`aria-selected`, the tag
+ * text) rather than, say, always rendering `false`.
+ */
+
+const ALL_GATES = { editorEnabled: true, shellEnabled: true, relayed: false, hardwareOffered: true }
+
+function switcher(
+  rightOccupant: 'contents' | 'studio' | 'cli' | 'shell' | 'hardware' | null,
+  bottomOccupant: 'cli' | 'shell' | 'studio' | null,
+  studioSeen: boolean,
+  opts?: { lang?: 'en' | 'pt'; compact?: boolean },
+): string {
+  return renderToStaticMarkup(
+    <PanelBar
+      entries={panelBarEntries(rightOccupant, bottomOccupant, ALL_GATES)}
+      lang={opts?.lang ?? 'en'}
+      studioSeen={studioSeen}
+      harness="claude"
+      onPick={() => {}}
+      {...(opts?.compact !== undefined ? { compact: opts.compact } : {})}
+    />,
+  )
+}
+
+describe('PanelBar — exactly one lit tab (two with Studio at the bottom), and the first-open dot', () => {
+  /** Plant: force every entry's `on` to `false` regardless of `entries`. The first assertion then
+   *  fails (Studio active should read `aria-selected="true"`); force it to `true` instead and the
+   *  second one fails (nothing active should read `aria-selected="true"` nowhere at all). */
+  test('aria-selected follows which entry is active, in both directions', () => {
+    expect(switcher('studio', null, true)).toContain('aria-selected="true"')
+    const nothingActive = switcher(null, null, true)
+    expect(nothingActive).not.toContain('aria-selected="true"')
+    expect(nothingActive.match(/aria-selected="false"/g)?.length).toBe(5)
+  })
+
+  test('exactly one tab is ever lit, matching the design\'s "never more than one lit control"', () => {
+    const html = switcher('studio', null, true)
+    expect(html.match(/aria-selected="true"/g)?.length).toBe(1)
+    expect(html.match(/aria-selected="false"/g)?.length).toBe(4)
+  })
+
+  // Design item 1: the band's own occupant switcher merges into this bar, so cli/shell must ALSO
+  // light for the bottom slot (unlike contents/hardware, which stay right-slot-only).
+  test('Claude Code lit as the bottom band\'s own occupant, with nothing on the right', () => {
+    const html = switcher(null, 'cli', true)
+    expect(html.match(/aria-selected="true"/g)?.length).toBe(1)
+    expect(html).toContain('aria-selected="true"')
+  })
+
+  // Owner follow-up: "the Studio must be ACTIVE from the moment it is open... with a small tag
+  // saying where it is open". Studio docked at the bottom while Contents holds the right slot is
+  // the one case two tabs read `on` at once.
+  test('Studio at the bottom, Contents on the right: BOTH lit, Studio carries the "embaixo"/"bottom" tag', () => {
+    const html = switcher('contents', 'studio', true)
+    expect(html.match(/aria-selected="true"/g)?.length).toBe(2)
+    expect(html).toContain('Studio · bottom')
+  })
+
+  test('Studio in the right slot carries the "side" tag', () => {
+    expect(switcher('studio', null, true)).toContain('Studio · side')
+  })
+
+  test('Studio shown nowhere carries no tag at all', () => {
+    const html = switcher('contents', null, true)
+    expect(html).not.toContain('Studio ·')
+    expect(html).toContain('>Studio<')
+  })
+
+  test('the tag is in Portuguese too', () => {
+    const html = switcher('contents', 'studio', true, { lang: 'pt' })
+    expect(html).toContain('Studio · embaixo')
+  })
+
+  test('the dot is present on a fresh origin (studioSeen false) and gone once it has fired', () => {
+    // Checked with nothing active, where nothing else in the markup draws `--anthropic-orange` — the
+    // ON tokens themselves use it too, which would confound this assertion.
+    expect(switcher(null, null, false)).toContain('var(--anthropic-orange)')
+    expect(switcher(null, null, true)).not.toContain('var(--anthropic-orange)')
+  })
+
+  /** Item 1/3 (previous pass): ONE segmented control, the same visual language as the band's own
+   *  `Claude Code | Shell | Studio` segment — `var(--bg-surface)`/`var(--text-primary)` for the lit
+   *  tab, never a bespoke orange-bordered pill per entry. */
+  test('the ON treatment matches the band segment\'s own tab styling, not a bespoke pill', () => {
+    const html = switcher('studio', null, true)
+    expect(html).toContain('background:var(--bg-surface)')
+    expect(html).toContain('color:var(--text-primary)')
+    expect(html).not.toContain('rgba(232,146,90,0.08)')
+  })
+
+  /** Item 1/3: the five entries render inside ONE `role="tablist"` wrapper — never five separate
+   *  bordered pills each carrying their own border/background. */
+  test('one wrapper, one role="tablist" — not five separate pill buttons', () => {
+    const html = switcher('studio', null, true)
+    expect(html.match(/role="tablist"/g)?.length).toBe(1)
+    expect(html.match(/role="tab"/g)?.length).toBe(5)
+  })
+
+  test('the entries render in the design\'s fixed order — Conteúdo · Studio · Claude Code · Shell · Hardware', () => {
+    const html = switcher('studio', null, true)
+    const order = [...html.matchAll(/<span>([^<]+)<\/span>/g)].map(m => m[1])
+    expect(order).toEqual(['Contents', 'Studio · side', 'Claude Code', 'Shell', 'Hardware'])
+  })
+})
+
+/**
+ * `compact` (design item 7: "below ~1100px wide collapse tab labels to icons with tooltips, the lit
+ * tab keeps its label and the Studio location tag"). The full text is asserted via the VISUALLY
+ * HIDDEN span (still there for the accessible name) rather than its absence, since the tooltip
+ * (`title`) already carries it too and a test that only checked "the visible word is gone" cannot
+ * tell an intentional compact icon from a broken label prop.
+ */
+describe('PanelBar — compact mode collapses UNLIT labels to icons, never the lit one', () => {
+  test('wide (compact false): every entry\'s full text is plainly visible', () => {
+    const html = switcher('studio', null, true, { compact: false })
+    expect(html).not.toContain('clip:rect(0,0,0,0)')
+  })
+
+  test('compact: the four unlit entries each get a visually-hidden label', () => {
+    const html = switcher('studio', null, true, { compact: true })
+    expect(html.match(/clip:rect\(0,0,0,0\)/g)?.length).toBe(4)
+  })
+
+  // Plant: drop the `compact && !on` guard so EVERY entry (lit included) hides its label. The lit
+  // Studio tab's own text would then be wrapped in the visually-hidden style too, and this fails.
+  test('compact: the lit Studio tab\'s label stays a plain, non-hidden span', () => {
+    const html = switcher('studio', null, true, { compact: true })
+    expect(html).toContain('<span>Studio · side</span>')
+  })
+})
+
+/**
+ * BandOverflowMenu — the "⋯" that holds a bottom bar's secondary actions (design item 7). Closed by
+ * default; absent entirely with no entries, rather than a trigger that opens onto nothing.
+ */
+describe('BandOverflowMenu', () => {
+  test('absent entirely when there are no entries', () => {
+    const html = renderToStaticMarkup(<BandOverflowMenu label="More actions" entries={[]} />)
+    expect(html).toBe('')
+  })
+
+  test('renders the trigger, closed, with the given entries not yet in the markup', () => {
+    const html = renderToStaticMarkup(
+      <BandOverflowMenu
+        label="More actions"
+        entries={[{ id: 'move', label: 'Move to the right', icon: <span />, onSelect: () => {} }]}
+      />,
+    )
+    expect(html).toContain('aria-haspopup="menu"')
+    expect(html).toContain('aria-expanded="false"')
+    // Closed: the menu itself (and its entries) are not rendered until opened.
+    expect(html).not.toContain('role="menu"')
+    expect(html).not.toContain('Move to the right')
   })
 })

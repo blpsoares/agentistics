@@ -1,29 +1,30 @@
 /**
- * sessionHeaderSwitcher.ts — which entries the Sessions workspace's ONE header tab group offers, in
- * what order, and which is lit (design item 2, screenshot 6; owner follow-up, screenshot 5 — "I want
- * them all in ONE tab menu, and the Studio must be ACTIVE from the moment it is open, ... with a
- * small tag saying where it is open").
+ * panelBar.ts — which entries the ONE panel switcher offers, in what order, and which is lit
+ * (design item 1, owner's screenshot: "the top bar becomes clean and dedicated to the title etc").
  *
- * The right slot used to be reached through THREE separate header controls (a Contents icon
- * button, a Studio button, a hardware chip) plus the aside's OWN internal tab row drawing the same
- * four choices a second time — which is how two of them ended up lit at once (screenshot 3): the
- * Contents button read its own `open` flag while the aside's row had already switched the slot to
- * Studio. One row, one selector (`rightSlotShowing`/`isPanelShown` in `panelSlots.ts`), fixes both:
- * there is now exactly one place that decides which entry is `on`.
+ * This used to be the FIXED HEADER's own tab group (`sessionHeaderSwitcher.ts`, the previous UX
+ * pass's design item 2). The owner's drawing moves the whole group DOWN into the bottom band — it
+ * already carried its own `Claude Code | Shell | Studio` occupant switcher (`bandSegment.ts`), so
+ * the two are now ONE control rather than a header row plus a band segment saying overlapping
+ * things. `bandSegment.ts`/`bandSegmentEntries` is retired with it: a bar that already offers every
+ * entry the old band segment offered, plus Contents and Hardware, is the merge, not a second copy
+ * beside it.
  *
- * `contents`/`cli`/`shell`/`hardware` are lit exactly when they occupy the RIGHT slot — unchanged.
- * `studio` is DIFFERENT: it is lit whenever the Studio is on screen in EITHER slot (`isPanelShown`),
- * because the Studio is a standing feature the reader keeps open, not a thing that only counts while
- * it happens to be on the right. That is also why it is the ONE entry that can carry a `studioAt`
- * tag — where it currently sits — and the one case where TWO entries may read `on` at once: Studio
- * docked at the BOTTOM while something else occupies the RIGHT slot. Every other combination still
- * lights at most one entry, because a slot can hold only one panel at a time.
+ * `contents`/`hardware` are RIGHT-SLOT-ONLY panels (`panelSlots.ts`'s own `allowed`), so for them
+ * "lit" still means exactly what it meant in the header: occupying the right slot. `studio` is lit
+ * whenever it is on screen in EITHER slot, tagged with where — unchanged from the header's own rule.
+ *
+ * `cli`/`shell` are NEW here: because this bar now lives INSIDE the bottom band itself, and the band
+ * IS the door to whichever of them it is currently showing, they must read `on` for the BOTTOM slot
+ * too, or the band's own occupant would show no lit tab at all the moment this bar replaced its old
+ * segment (which always lit the occupant, right or wrong slot never entered into it). Lit in EITHER
+ * slot, exactly like Studio, but with no location tag — nobody asked for one on these two.
  *
  * Pure and React-free so the ORDER, PRESENCE and TAG rules can be tested without mounting anything —
  * the same shape `panelSlots.ts`'s own `allowed`/`gateOpen` take.
  */
 
-export type HeaderSwitcherPanel = 'contents' | 'studio' | 'cli' | 'shell' | 'hardware'
+export type PanelBarId = 'contents' | 'studio' | 'cli' | 'shell' | 'hardware'
 
 /** Where the Studio currently sits, for the tab's own tag — `'side'` for the right slot (rendered
  *  "lateral"/"side"), `'bottom'` for the bottom band ("embaixo"/"bottom"). Named after the SLOT's
@@ -31,7 +32,7 @@ export type HeaderSwitcherPanel = 'contents' | 'studio' | 'cli' | 'shell' | 'har
  *  to import that one just to rename its values at the call site. */
 export type StudioLocation = 'side' | 'bottom'
 
-export interface HeaderSwitcherGates {
+export interface PanelBarGates {
   /** `appCtx.editorEnabled` — the server's own answer, never re-derived. */
   editorEnabled: boolean
   /** `appCtx.shellEnabled` — ditto. */
@@ -43,10 +44,10 @@ export interface HeaderSwitcherGates {
   hardwareOffered: boolean
 }
 
-export interface HeaderSwitcherEntry {
-  id: HeaderSwitcherPanel
-  /** Is this the panel the right slot is currently showing — or, for `studio` alone, is it on
-   *  screen in EITHER slot? */
+export interface PanelBarEntry {
+  id: PanelBarId
+  /** Is this panel on screen right now — in the right slot for `contents`/`hardware`, in EITHER
+   *  slot for `studio`/`cli`/`shell`? */
   on: boolean
   /** Present only on the `studio` entry, and only while it is `on` — where it sits right now. */
   studioAt?: StudioLocation
@@ -54,20 +55,20 @@ export interface HeaderSwitcherEntry {
 
 /**
  * The entries to render, in a FIXED order (Conteúdo · Studio · Claude Code · Shell · Hardware —
- * design item 2's own listing), each carrying whether it should render at all, whether it is the lit
+ * design item 1's own listing), each carrying whether it should render at all, whether it is the lit
  * one, and — for Studio — where it sits.
  *
  * `rightOccupant` is `rightSlotShowing(layout, contentsOpen)` — what the RIGHT slot itself is
- * showing, exactly as before. `bottomOccupant` is `layout.bottom` — the bottom band's own occupant,
- * needed only to tell whether the Studio has moved down there instead. ABSENT, never greyed, for a
- * closed gate — the same rule `panelSlots.allowed`/`gateOpen` already apply to the slot itself.
+ * showing. `bottomOccupant` is `layout.bottom` — the bottom band's own occupant. ABSENT, never
+ * greyed, for a closed gate — the same rule `panelSlots.allowed`/`gateOpen` already apply to the
+ * slot itself.
  */
-export function headerSwitcherEntries(
-  rightOccupant: HeaderSwitcherPanel | null,
-  bottomOccupant: HeaderSwitcherPanel | null,
-  gates: HeaderSwitcherGates,
-): HeaderSwitcherEntry[] {
-  const order: { id: HeaderSwitcherPanel; shown: boolean }[] = [
+export function panelBarEntries(
+  rightOccupant: PanelBarId | null,
+  bottomOccupant: PanelBarId | null,
+  gates: PanelBarGates,
+): PanelBarEntry[] {
+  const order: { id: PanelBarId; shown: boolean }[] = [
     { id: 'contents', shown: true },
     { id: 'studio', shown: gates.editorEnabled },
     { id: 'cli', shown: !gates.relayed },
@@ -80,7 +81,11 @@ export function headerSwitcherEntries(
     if (e.id === 'studio') {
       return studioAt !== undefined ? { id: e.id, on: true, studioAt } : { id: e.id, on: false }
     }
-    return { id: e.id, on: rightOccupant === e.id }
+    // contents/hardware can never occupy `bottomOccupant` in a real SlotLayout (`panelSlots.allowed`
+    // refuses the placement outright), so this reads exactly as "lit in the right slot" for them —
+    // the same rule as before — while giving cli/shell the either-slot reading this file's header
+    // describes, from one line rather than two branches.
+    return { id: e.id, on: rightOccupant === e.id || bottomOccupant === e.id }
   })
 }
 
@@ -89,4 +94,19 @@ export function headerSwitcherEntries(
 export function studioLocationLabel(at: StudioLocation, pt: boolean): string {
   if (at === 'side') return pt ? 'lateral' : 'side'
   return pt ? 'embaixo' : 'bottom'
+}
+
+/**
+ * THE COMPACT BREAKPOINT (design item 7: "below ~1100px wide collapse tab labels to icons with
+ * tooltips, the lit tab keeps its label and the Studio location tag") — the bar's own measured
+ * width, from `useElementWidth`, never the window's (see that hook's own header on why).
+ *
+ * `0` (not yet measured) reads as WIDE, never compact: the very first frame has nothing to measure,
+ * and starting compact-then-widening is a more visible flash than starting wide-then-narrowing on a
+ * genuinely narrow bar, which a `ResizeObserver` corrects within one frame regardless.
+ */
+export const BAND_BAR_COMPACT_BREAKPOINT = 1100
+
+export function bandBarCompact(width: number): boolean {
+  return width > 0 && width < BAND_BAR_COMPACT_BREAKPOINT
 }

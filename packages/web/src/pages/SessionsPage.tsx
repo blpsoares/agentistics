@@ -23,10 +23,11 @@ import {
 } from 'react'
 import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import {
-  ChevronLeft, Cpu, FileText, FolderTree, MessagesSquare, PanelBottomOpen, Plus, TerminalSquare,
+  ChevronLeft, Cpu, FileText, FolderTree, MessagesSquare, Plus, TerminalSquare,
   X as XIcon,
 } from 'lucide-react'
 import { StudioHost, type StudioHostProps } from '../components/sessions/StudioHost'
+import { ResizeGrip } from '../components/ResizeGrip'
 import {
   isPanelShown, mountPanel, resolveForGates, resolveForViewport, rightSlotShowing, usePanelSlots,
   type PanelGates,
@@ -525,7 +526,7 @@ export default function SessionsPage() {
    * a different, relayed session, reloading on a machine where the preference has changed. Neither
    * resolution rewrites storage; turning the gate back on restores the layout exactly as it was left.
    */
-  const { layout: rawSlotLayout, openPanel: openSlotPanel, closePanel: closeSlotPanel, movePanel: moveSlotPanel } = usePanelSlots()
+  const { layout: rawSlotLayout, openPanel: openSlotPanel, closePanel: closeSlotPanel } = usePanelSlots()
   const panelGates: PanelGates = { editorEnabled, shellEnabled, relayed }
   const slotLayout = resolveForGates(resolveForViewport(rawSlotLayout, isMobile), panelGates)
   const rightIsStudio = slotLayout.right === 'studio'
@@ -767,9 +768,6 @@ export default function SessionsPage() {
   const hardwareOffered = !isCentral
   const rightActivePanel: 'studio' | 'cli' | 'shell' | 'hardware' | null = rightIsStudio
     ? 'studio' : rightIsCli ? 'cli' : rightIsShell ? 'shell' : rightIsHardware ? 'hardware' : null
-  /** `hardware` never moves to the bottom band — `panelSlots.ts` refuses the placement outright
-   *  (right-only), so offering the button there would be a control whose one outcome is nothing. */
-  const canMoveToBottom = rightActivePanel === 'studio' || rightActivePanel === 'cli' || rightActivePanel === 'shell'
   // The 44px mobile touch target is PROJECTED by the `.ag-tap-icon` class already on both buttons
   // below (`index.css`'s invisible-hitbox rule), never painted here — a literal `width/height:
   // isMobile ? 44` on an icon button is the exact shape `touchTarget.lint.test.ts` refuses: the
@@ -829,36 +827,23 @@ export default function SessionsPage() {
   ) : null
 
   /**
-   * THE DESKTOP TOOLBAR — all that is left once the picker moved into the header (item 2) and the
-   * close button became redundant with clicking the header's own lit tab: "move to bottom", with a
-   * conventional icon PLUS a visible label (item 5, screenshot 4 — an icon-only control here was
-   * reported as confusing). Absent when there is nothing to move (Contents never goes to the bottom;
-   * `hardware` is right-only) rather than present and refusing.
+   * DESKTOP HAS NO TOOLBAR HERE ANY MORE (owner feedback, 2026-09-17: "there must be exactly ONE
+   * panel switcher on desktop … no tab row inside the right aside"). This used to be a "Move to the
+   * bottom" button (`rightSlotToolbar`) that called `moveSlotPanel` directly — a SECOND, DISCONNECTED
+   * control that could move a panel in `panelSlots.ts` without ShellBand ever learning the stream it
+   * should now be showing (`ShellBand`'s own `target` is a separate local preference,
+   * `chooseTarget`-driven — see that component's own header), which is exactly how pressing it read
+   * as "this just closes the right aside": the store moved the panel correctly, but the docked band
+   * kept showing whatever it last had a `target` for, or nothing.
+   *
+   * The move gesture now lives in the ONE panel bar's own overflow menu — computed once by
+   * `SessionPanel.tsx` (`moveDownEntries`, where the docked band's own `chooseTarget` is in scope to
+   * call) and rendered by whichever band is docked (`ShellBand`/`StudioBand`/`PanelBarBand`), so a
+   * move can never again land in the store without the screen that has to display it hearing about
+   * it. CLOSING a right-slot panel needs no replacement here: it was already reachable by clicking
+   * the same (lit) entry in that one bar (`onPanelBarPick`), never through this toolbar.
    */
-  const rightSlotToolbar = (!isMobile && canMoveToBottom && rightActivePanel) ? (
-    <div style={{
-      display: 'flex', justifyContent: 'flex-end', flexShrink: 0,
-      padding: '4px 8px', borderBottom: '1px solid var(--border)',
-    }}>
-      <button
-        onClick={() => moveSlotPanel(rightActivePanel, 'bottom')}
-        title={pt ? 'Mover este painel para a faixa inferior' : 'Move this panel to the bottom band'}
-        aria-label={pt ? 'Mover para baixo' : 'Move to the bottom'}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 6, height: 26, padding: '0 10px',
-          borderRadius: 7, border: '1px solid var(--border-subtle)', cursor: 'pointer',
-          fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
-          background: 'var(--bg-elevated)', color: 'var(--text-secondary)',
-        }}
-      >
-        <PanelBottomOpen size={13} />
-        {pt ? 'Mover para baixo' : 'Move to the bottom'}
-      </button>
-    </div>
-  ) : null
-
-  /** Whichever of the two headers this viewport uses — never both. */
-  const rightSlotHeader = isMobile ? rightSwitcherMobile : rightSlotToolbar
+  const rightSlotHeader = isMobile ? rightSwitcherMobile : null
 
   /** What the right box actually shows: the Studio's own target (StudioHost re-parents its carrier
    *  into it) while `panelSlots` says so; `cli`/`shell` render their own `TerminalRegion`/`ShellBand`
@@ -965,6 +950,12 @@ export default function SessionsPage() {
       // The terminal's own screen. A route, so it survives a reload and can be sent to somebody.
       onOpenTerminal={() => navigate(dedicatedTerminalPath(selected.id))}
       onOpenShellFullscreen={() => navigate(dedicatedTerminalPath(selected.id, 'shell'))}
+      // Hardware is meaningless (and refused) on a central — the same fact `hardwareOffered` already
+      // names for this page's own mobile switcher.
+      hardwareOffered={hardwareOffered}
+      // The Studio entry's first-open dot — one flag, read wherever the bar renders it.
+      studioSeen={ctx.studioSeen}
+      onTaskLinked={refresh}
     />
   )
 
@@ -1789,8 +1780,12 @@ export default function SessionsPage() {
       </div>
       {/* The handle. Four pixels of hit area over a one-pixel rule — the rule is what you see, the
           area is what you can grab, and matching them makes a divider people miss. It goes with the
-          panel: a grab handle for something that is halfway out of the room resizes nothing. */}
+          panel: a grab handle for something that is halfway out of the room resizes nothing.
+          `ResizeGrip` (design item 6) paints the small pill that says so without touching the hit
+          area itself — `.ag-resize-handle` is what gives it something to key its hover/drag state
+          off, in `index.css`. */}
         {split && asideIn ? <div
+          className="ag-resize-handle"
           onMouseDown={e => {
             // From the width on screen, not the remembered one: a clamped panel would otherwise
             // jump to its stored width the moment the handle is touched.
@@ -1802,7 +1797,7 @@ export default function SessionsPage() {
             width: 4, flexShrink: 0, cursor: 'col-resize', background: 'transparent',
             borderLeft: '1px solid var(--border)',
           }}
-        /> : null}
+        ><ResizeGrip orientation="vertical" /></div> : null}
       {/* THE ONE PANE. See the block comment at the top of this section. */}
       {artShell === 'none' ? null : (
         <div style={artOuter} ref={rightAsideRef}>
