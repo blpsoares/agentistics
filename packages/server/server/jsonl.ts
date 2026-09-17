@@ -373,6 +373,15 @@ export async function parseSessionJsonl(
   }
   let cacheReadTokens = 0, cacheCreationTokens = 0
   /**
+   * The TTL split of `cacheCreationTokens` — see `ModelUsage.cacheCreation1hInputTokens`. Summed
+   * from `message.usage.cache_creation.{ephemeral_1h,ephemeral_5m}_input_tokens`, under the SAME
+   * dedupe gate as every other usage counter. `sawCacheCreationBreakdown` tracks whether at least
+   * one counted line carried the nested object at all — an older transcript format has none, and
+   * these stay unwritten rather than a guessed 0/0 split.
+   */
+  let cacheCreation1hTokens = 0, cacheCreation5mTokens = 0
+  let sawCacheCreationBreakdown = false
+  /**
    * How full the window was on the LAST turn — a gauge, reassigned rather than accumulated.
    *
    * The three input-side counters of one `usage` record ARE the prompt that turn sent: `input_tokens`
@@ -550,11 +559,20 @@ export async function parseSessionJsonl(
       // walk summed per LINE, so a real session's tokens — and the cost priced from them — read
       // 60-90 % high; see `usage-dedupe.ts` for the three sessions that proved it.
       if (msg?.usage && countUsage(msg.id, countedUsageIds)) {
-        const u = msg.usage as Record<string, number>
+        const u = msg.usage as Record<string, number> & { cache_creation?: Record<string, unknown> }
         inputTokens         += u.input_tokens ?? 0
         outputTokens        += u.output_tokens ?? 0
         cacheReadTokens     += u.cache_read_input_tokens ?? 0
         cacheCreationTokens += u.cache_creation_input_tokens ?? 0
+        // The TTL split of THIS line's cache-write portion, when the record states it — see
+        // `usage.cache_creation` on `message.usage`. Under the SAME dedupe gate as every other
+        // counter here, so a repeated line cannot double either portion.
+        const ttl = u.cache_creation
+        if (ttl && typeof ttl === 'object') {
+          sawCacheCreationBreakdown = true
+          cacheCreation1hTokens += typeof ttl.ephemeral_1h_input_tokens === 'number' ? ttl.ephemeral_1h_input_tokens : 0
+          cacheCreation5mTokens += typeof ttl.ephemeral_5m_input_tokens === 'number' ? ttl.ephemeral_5m_input_tokens : 0
+        }
         // The SAME four counters, against the day this turn happened on. A turn with no readable
         // timestamp contributes to the lifetime totals and to no day — it cannot be placed, and
         // placing it on the session's start day would be inventing the one fact this exists to
@@ -722,6 +740,18 @@ export async function parseSessionJsonl(
     output_tokens: outputTokens,
     cache_read_input_tokens: cacheReadTokens,
     cache_creation_input_tokens: cacheCreationTokens,
+    // BOTH-OR-NEITHER, and only when the running split RECONCILES exactly against the total this
+    // session already reports — see `SessionMeta.cache_creation_1h_input_tokens`. A transcript
+    // that mixed pre- and post-breakdown usage lines (or any line whose ephemeral fields did not
+    // parse as numbers) would sum to less than `cacheCreationTokens`, and writing a partial split
+    // as if it were the whole session's would price the unaccounted remainder at $0 instead of the
+    // conservative 5-minute rate a MISSING split already falls back to.
+    ...(sawCacheCreationBreakdown && cacheCreation1hTokens + cacheCreation5mTokens === cacheCreationTokens
+      ? {
+          cache_creation_1h_input_tokens: cacheCreation1hTokens,
+          cache_creation_5m_input_tokens: cacheCreation5mTokens,
+        }
+      : {}),
     // Absent rather than zero when nothing was measured — a confident "0% of the window" on a
     // session that simply recorded no usage is the same lie `HARNESS_CAPABILITIES` prevents.
     ...(contextTokens > 0 ? { context_tokens: contextTokens } : {}),

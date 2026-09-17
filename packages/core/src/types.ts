@@ -16,6 +16,18 @@ export interface ModelUsage {
   outputTokens: number
   cacheReadInputTokens: number
   cacheCreationInputTokens: number
+  /**
+   * The TTL split of `cacheCreationInputTokens` — Claude Code writes both on every usage line
+   * (`message.usage.cache_creation.ephemeral_1h_input_tokens` / `ephemeral_5m_input_tokens`), and a
+   * 1-hour-TTL write is billed at 2x base input while a 5-minute one is billed at 1.25x (see
+   * `MODEL_PRICING`'s `cacheWrite1h`). Optional and BOTH-OR-NEITHER: a record with no breakdown
+   * (an older transcript, a harness other than Claude, `emptyModelUsage()`) has neither field, and
+   * `calcCost` then prices the whole of `cacheCreationInputTokens` at the 5-minute rate — the
+   * conservative reading, never a guessed split. When present, `cacheCreation1hInputTokens +
+   * cacheCreation5mInputTokens === cacheCreationInputTokens`.
+   */
+  cacheCreation1hInputTokens?: number
+  cacheCreation5mInputTokens?: number
   webSearchRequests: number
   costUSD: number
 }
@@ -229,6 +241,15 @@ export interface SessionMeta {
   /** Only populated for `_source: 'jsonl' | 'subdir'` — parsed directly from JSONL usage. */
   cache_read_input_tokens?: number
   cache_creation_input_tokens?: number
+  /**
+   * The TTL split of `cache_creation_input_tokens` — see `ModelUsage.cacheCreation1hInputTokens`.
+   * Claude Code only, and BOTH-OR-NEITHER: `jsonl.ts` writes these only when every counted usage
+   * line's `cache_creation.ephemeral_*_input_tokens` reconciled exactly against
+   * `cache_creation_input_tokens`; otherwise it writes neither, and pricing falls back to the
+   * conservative 5-minute rate for the whole counter.
+   */
+  cache_creation_1h_input_tokens?: number
+  cache_creation_5m_input_tokens?: number
   /**
    * How many tokens were in the context window on the session's LAST turn — the measurement behind
    * the context gauge. Gated by `HARNESS_CAPABILITIES.contextWindow`.
@@ -810,7 +831,12 @@ export interface Filters {
 export type Lang = 'pt' | 'en'
 export type Theme = 'dark' | 'light'
 
-export const MODEL_PRICING: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
+/**
+ * Base rates, one number per model — `cacheWrite` is the 5-minute-TTL cache-write price (1.25x
+ * base input, verified against the table this table's own header already cites). The 1-hour-TTL
+ * rate is derived from these below rather than hand-typed per row; see `MODEL_PRICING`.
+ */
+const BASE_MODEL_PRICING: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
   // Current models — verified against platform.claude.com/docs/en/about-claude/pricing 2026-07-27.
   'claude-fable-5':             { input: 10,   output: 50,   cacheRead: 1.00, cacheWrite: 12.50 },
   'claude-mythos-5':            { input: 10,   output: 50,   cacheRead: 1.00, cacheWrite: 12.50 },
@@ -863,6 +889,30 @@ export const MODEL_PRICING: Record<string, { input: number; output: number; cach
   'gpt-5-mini':     { input: 0.25, output: 2,  cacheRead: 0.025, cacheWrite: 0.25 },
   'gpt-5':          { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 1.25 },
 }
+
+/**
+ * `MODEL_PRICING`, with each row's 1-hour-TTL cache-write rate (`cacheWrite1h`) added.
+ *
+ * Anthropic's prompt-caching pricing: cache writes cost **1.25x base input for a 5-minute TTL,
+ * 2x base input for a 1-hour TTL** (platform.claude.com/docs/en/about-claude/pricing → Prompt
+ * caching; cross-checked against the `claude-api` skill's bundled `shared/prompt-caching.md` §
+ * Economics, verified 2026-09-17). `BASE_MODEL_PRICING.cacheWrite` above already encodes the
+ * 1.25x rate, so `cacheWrite1h` is `input * 2` here — derived in ONE place rather than hand-typed
+ * per row, which is what let a stale product-wide assumption (every cache write billed at 1.25x)
+ * go unnoticed: `ephemeral_1h_input_tokens` was 78,3 % of measured cache-write volume on this
+ * machine and none of it was priced at its real rate. See `packages/server/server/jsonl.ts` for
+ * where the two portions are read off the transcript, and `calcCost` for how each is priced.
+ *
+ * Gemini and OpenAI rows have no 1-hour cache tier and never populate the breakdown fields that
+ * would select this rate (see the "unused in practice" notes above), so `cacheWrite1h` on those
+ * rows is inert — deriving it uniformly is simpler than special-casing providers that never read
+ * it, and it costs nothing to be wrong-but-unused there.
+ */
+export const MODEL_PRICING: Record<string, {
+  input: number; output: number; cacheRead: number; cacheWrite: number; cacheWrite1h: number
+}> = Object.fromEntries(
+  Object.entries(BASE_MODEL_PRICING).map(([id, p]) => [id, { ...p, cacheWrite1h: p.input * 2 }]),
+)
 
 /**
  * Price for a model id. Resolution order — deliberate, and independent of key order:
@@ -944,7 +994,8 @@ export function getModelPrice(modelId: string) {
   }
   const hit = forwardKey || reverseKey
   if (hit) return MODEL_PRICING[hit]!
-  return { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }
+  // Sonnet-class fallback, cacheWrite1h at the same 2x-base-input rate every table row derives.
+  return { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 }
 }
 
 /** Empty per-model usage accumulator. */
@@ -966,7 +1017,8 @@ export function emptyModelUsage(): ModelUsage {
  */
 export function sessionModelUsage(
   s: Pick<SessionMeta, 'model' | 'model_usage' | 'input_tokens' | 'output_tokens'
-    | 'cache_read_input_tokens' | 'cache_creation_input_tokens'>,
+    | 'cache_read_input_tokens' | 'cache_creation_input_tokens'
+    | 'cache_creation_1h_input_tokens' | 'cache_creation_5m_input_tokens'>,
   fallbackModel?: string,
 ): [string, ModelUsage][] {
   const breakdown = s.model_usage
@@ -981,6 +1033,11 @@ export function sessionModelUsage(
     outputTokens: s.output_tokens ?? 0,
     cacheReadInputTokens: s.cache_read_input_tokens ?? 0,
     cacheCreationInputTokens: s.cache_creation_input_tokens ?? 0,
+    // BOTH-OR-NEITHER, passed through exactly as `jsonl.ts` wrote them — see
+    // `ModelUsage.cacheCreation1hInputTokens`. Absent on any session `jsonl.ts` could not
+    // reconcile, and on every non-Claude harness.
+    cacheCreation1hInputTokens: s.cache_creation_1h_input_tokens,
+    cacheCreation5mInputTokens: s.cache_creation_5m_input_tokens,
     webSearchRequests: 0,
     costUSD: 0,
   }]]
@@ -997,13 +1054,27 @@ export function sessionCostUSD(
   return entries.reduce((sum, [model, u]) => sum + calcCost(u, model), 0)
 }
 
+/**
+ * `usage.cacheCreationInputTokens` is billed at TWO different rates depending on the TTL the write
+ * requested — see `ModelUsage.cacheCreation1hInputTokens`. When the record states the split
+ * (BOTH-OR-NEITHER), each portion is priced at its own rate; when it does not, the whole counter is
+ * priced at the 5-minute rate, exactly as before this field existed — the conservative reading, and
+ * the only one that is not a guess (see `MODEL_PRICING`'s `cacheWrite1h` for the source of the 2x
+ * rate).
+ */
 export function calcCost(usage: ModelUsage, modelId: string): number {
   const price = getModelPrice(modelId)
+  const hasTtlBreakdown = usage.cacheCreation1hInputTokens !== undefined
+    || usage.cacheCreation5mInputTokens !== undefined
+  const cacheWriteCost = hasTtlBreakdown
+    ? ((usage.cacheCreation1hInputTokens ?? 0) / 1_000_000) * price.cacheWrite1h
+      + ((usage.cacheCreation5mInputTokens ?? 0) / 1_000_000) * price.cacheWrite
+    : (usage.cacheCreationInputTokens / 1_000_000) * price.cacheWrite
   return (
     (usage.inputTokens / 1_000_000) * price.input +
     (usage.outputTokens / 1_000_000) * price.output +
     (usage.cacheReadInputTokens / 1_000_000) * price.cacheRead +
-    (usage.cacheCreationInputTokens / 1_000_000) * price.cacheWrite
+    cacheWriteCost
   )
 }
 

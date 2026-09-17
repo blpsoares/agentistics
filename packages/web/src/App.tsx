@@ -2569,7 +2569,13 @@ export default function AppLayout() {
         if (rates.brlRate && rates.brlRate > 1) setBrlRate(rates.brlRate)
         if (rates.pricing) {
           for (const [id, price] of Object.entries(rates.pricing)) {
-            MODEL_PRICING[id] = price
+            // `/api/rates` states the 5-minute-TTL rate only (see `rates.ts`, which skips the
+            // page's 1h column). The 1-hour rate is derived here the same way MODEL_PRICING's own
+            // built-in table derives it: 2x base input, never fetched or guessed — see
+            // `packages/core/src/types.ts`'s `cacheWrite1h`. Without this, a live/community/
+            // official price replacing the built-in row would silently drop the field and price
+            // every 1h-TTL cache write at `undefined` (NaN) the moment `/api/rates` responds.
+            MODEL_PRICING[id] = { ...price, cacheWrite1h: price.input * 2 }
           }
         }
       })
