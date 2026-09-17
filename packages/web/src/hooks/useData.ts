@@ -90,6 +90,17 @@ export interface ClaudeDaySession {
  * session's whole lifetime leaks into a window that never asked for it. Absent from the map means
  * "nothing in scope can answer for this day", never a zero: the caller falls back to
  * `apportionModelUsage` for those.
+ *
+ * KNOWN LIMITATION, not fixed here: a session with NO `daily` that straddles midnight UTC files
+ * its WHOLE lifetime total on its start day (the branch below), same as everywhere else this file
+ * applies that fallback — `reconciliation.md`'s Defect D, an explicitly ruled-in limit, not
+ * Defect A. If `dailyModelTokens` also carries a (correctly split) entry for the NEXT day, that
+ * next day is priced by `apportionModelUsage` on top of a start day that already contains its
+ * share — over-counting the overlap. `reconcileClaudeDayCoverage` cannot catch this: it only ever
+ * demotes a day whose exact total is SIGNIFICANTLY LESS than the cache's, and a day carrying an
+ * adjacent day's tokens too is never less. See `useData.test.ts`'s
+ * "a no-daily session straddling midnight" test, which documents the current (over-counting)
+ * behaviour rather than asserting it away.
  */
 export function claudeExactUsageByDay(
   sessions: readonly ClaudeDaySession[],
@@ -140,6 +151,66 @@ export function claudeExactUsageByDay(
     }
   }
   return byDay
+}
+
+/**
+ * "Covered" (`claudeExactUsageByDay`) means "at least one in-scope session touches this day" — and
+ * that is a claim about PRESENCE, not about the LOCAL STORE being COMPLETE for that day. Claude
+ * Code's 30-day retention can delete a transcript before this product ever computed the session
+ * into `~/.agentistics/sessions/**`, `archiveMode` is not always `consolidate`/`full`, and even
+ * then "the member's deep history exists ONLY aggregated... the individual session docs cover a
+ * fraction of it" (see CLAUDE.md's team-mode section). A thin session sitting alone on a day
+ * `dailyModelTokens` recorded as enormous is not evidence the day was quiet — it is evidence the
+ * local store is missing the rest of it, and pricing THAT as if it were the whole day is worse
+ * than the apportioned guess it replaced: it looks exact and it is not.
+ *
+ * So a day with an entry in `dailyModelTokens` is trusted only when the sessions' own total for
+ * that day is not SIGNIFICANTLY LESS than that entry's total — the same total
+ * `apportionModelUsage` would otherwise have split. `CLAUDE_DAY_COVERAGE_RATIO` is deliberately
+ * loose enough to tolerate the ordinary drift between two INDEPENDENTLY computed totals — Claude
+ * Code's own cache versus this product's session parser measured ~0.002% apart on the 246b2b32
+ * fixture (the session total came out slightly ABOVE the cache's there, which passes trivially at
+ * any ratio ≤ 1) — while still catching what the reviewed case represents: a store missing SIX
+ * ORDERS OF MAGNITUDE of a day's real activity is not rounding noise. A ratio close to 1.0 would
+ * demote genuinely complete days over that ordinary drift and lose the fix `claudeExactUsageByDay`
+ * exists for; nothing in this repo suggests that drift ever reaches double digits, so 0.9 leaves
+ * ample room on the complete side without leaving the gap the reviewer measured open on the other.
+ *
+ * A day with NO entry in `dailyModelTokens` has nothing to cross-check against — the OLD
+ * apportionment loop could not have produced anything for it either (it only ever iterates that
+ * same array), so trusting the session there is no worse than the pre-Defect-A behaviour and is
+ * left alone.
+ *
+ * Does NOT catch the over-counting case named in `claudeExactUsageByDay`'s header (a no-`daily`
+ * session straddling midnight): that day's exact total is never LESS than the cache's, since it
+ * contains an adjacent day's tokens IN ADDITION to its own — this check only ever demotes a day
+ * for having too little, never for having too much.
+ */
+export const CLAUDE_DAY_COVERAGE_RATIO = 0.9
+
+export function reconcileClaudeDayCoverage(
+  exactByDay: ReadonlyMap<string, Record<string, import('@agentistics/core').ModelUsage>>,
+  dailyModelTokens: readonly { date: string; tokensByModel: Record<string, number> }[],
+  ratio: number = CLAUDE_DAY_COVERAGE_RATIO,
+): Map<string, Record<string, import('@agentistics/core').ModelUsage>> {
+  const cacheTotalByDay = new Map<string, number>()
+  for (const day of dailyModelTokens) {
+    if (typeof day.date !== 'string' || day.date.length < 10) continue
+    const key = day.date.slice(0, 10)
+    const total = Object.values(day.tokensByModel ?? {}).reduce((s, n) => s + (n || 0), 0)
+    cacheTotalByDay.set(key, (cacheTotalByDay.get(key) ?? 0) + total)
+  }
+
+  const out = new Map<string, Record<string, import('@agentistics/core').ModelUsage>>()
+  for (const [day, perModel] of exactByDay) {
+    const cacheTotal = cacheTotalByDay.get(day)
+    if (cacheTotal === undefined) { out.set(day, perModel); continue } // nothing to cross-check
+    const exactTotal = Object.values(perModel).reduce((s, u) => s + usageTokenTotal(u), 0)
+    if (cacheTotal <= 0 || exactTotal >= cacheTotal * ratio) out.set(day, perModel)
+    // else: the store answers for too little of this day — fall back to apportionment, and let
+    // the caller count it as estimated. Never repaired by inventing the missing sessions.
+  }
+  return out
 }
 
 /**
@@ -1714,7 +1785,13 @@ export function computeDerivedStats(
     const claudeSessionsInScope: ClaudeDaySession[] = rangeBounded
       ? selectedSessions.filter(s => (s.harness ?? 'claude') === 'claude')
       : []
-    const exactClaudeUsageByDay = claudeExactUsageByDay(claudeSessionsInScope, rangeDays, modelSet)
+    // Presence of a session on a day is not proof the local store is COMPLETE for that day — see
+    // `reconcileClaudeDayCoverage`'s header. Every consumer below reads through the RECONCILED
+    // map, never the raw one.
+    const exactClaudeUsageByDay = reconcileClaudeDayCoverage(
+      claudeExactUsageByDay(claudeSessionsInScope, rangeDays, modelSet),
+      filteredDailyModelTokens,
+    )
     // How many of the window's days still had to be priced by `apportionModelUsage` because no
     // in-scope session could answer for them. Surfaced on the cost KPI so an estimate never reads
     // as a measurement — see `costEstimateNote`. Stays 0 outside the date-filtered branch below.

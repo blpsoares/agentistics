@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals, apportionModelUsage, summarizeApiCostByDay, computeDerivedStats, resolvePresenceScope, claudeExactUsageByDay } from './useData'
+import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals, apportionModelUsage, summarizeApiCostByDay, computeDerivedStats, resolvePresenceScope, claudeExactUsageByDay, reconcileClaudeDayCoverage } from './useData'
 import type { ClaudeDaySession } from './useData'
 import { EMPTY_TOKENS, mergeStatsCaches, totalTokens, calcCost } from '@agentistics/core'
 import type { RepoSortKey, RepoStat } from './useData'
@@ -1450,6 +1450,69 @@ describe('claudeExactUsageByDay', () => {
   })
 })
 
+/**
+ * reconcileClaudeDayCoverage — CRITICAL fix: presence of a session on a day is not proof the
+ * local store is COMPLETE for that day. This is what stops `claudeExactUsageByDay` from pricing a
+ * day exactly off a thin, incomplete session set while `dailyModelTokens` says far more happened.
+ */
+describe('reconcileClaudeDayCoverage', () => {
+  const usage = (total: number): import('@agentistics/core').ModelUsage => ({
+    inputTokens: total, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+    webSearchRequests: 0, costUSD: 0,
+  })
+
+  test('a genuinely covered day (session total >= cache total) stays exact', () => {
+    const exact = new Map([['2026-07-22', { 'claude-opus-4-8': usage(387_731_938) }]])
+    const cache = [{ date: '2026-07-22', tokensByModel: { 'claude-opus-4-8': 387_724_500 } }]
+    const out = reconcileClaudeDayCoverage(exact, cache)
+    expect(out.has('2026-07-22')).toBe(true)
+    expect(out.get('2026-07-22')).toEqual(exact.get('2026-07-22')!)
+  })
+
+  test('THE CRITICAL CASE — a thin session (1,000 tokens) beside a cache total of 400,000,000 is demoted', () => {
+    // Presence of ONE session must never stand in for "this day is accounted for": the store is
+    // missing 399,999,000 tokens of real activity that `dailyModelTokens` says happened.
+    const exact = new Map([['2025-01-15', { 'claude-opus-4-8': usage(1_000) }]])
+    const cache = [{ date: '2025-01-15', tokensByModel: { 'claude-opus-4-8': 400_000_000 } }]
+    const out = reconcileClaudeDayCoverage(exact, cache)
+    expect(out.has('2025-01-15')).toBe(false)
+  })
+
+  test('a day with NO cache entry has nothing to cross-check — the session is trusted', () => {
+    const exact = new Map([['2026-07-25', { 'claude-opus-4-8': usage(500) }]])
+    const out = reconcileClaudeDayCoverage(exact, [])
+    expect(out.has('2026-07-25')).toBe(true)
+  })
+
+  test('a day at exactly the ratio boundary passes; just under it is demoted', () => {
+    const cache = [{ date: '2026-08-01', tokensByModel: { m: 1_000 } }]
+    const atBoundary = new Map([['2026-08-01', { m: usage(900) }]]) // 900 / 1000 = 0.9
+    const belowBoundary = new Map([['2026-08-01', { m: usage(899) }]])
+    expect(reconcileClaudeDayCoverage(atBoundary, cache, 0.9).has('2026-08-01')).toBe(true)
+    expect(reconcileClaudeDayCoverage(belowBoundary, cache, 0.9).has('2026-08-01')).toBe(false)
+  })
+
+  test('a custom ratio is honoured', () => {
+    const cache = [{ date: '2026-08-02', tokensByModel: { m: 1_000 } }]
+    const half = new Map([['2026-08-02', { m: usage(500) }]])
+    expect(reconcileClaudeDayCoverage(half, cache, 0.4).has('2026-08-02')).toBe(true)
+    expect(reconcileClaudeDayCoverage(half, cache, 0.6).has('2026-08-02')).toBe(false)
+  })
+
+  test('a zero (or negative) cache total never demotes — nothing to be short of', () => {
+    const exact = new Map([['2026-08-03', { m: usage(5) }]])
+    const cache = [{ date: '2026-08-03', tokensByModel: { m: 0 } }]
+    expect(reconcileClaudeDayCoverage(exact, cache).has('2026-08-03')).toBe(true)
+  })
+
+  test('several models on the cache side sum before the comparison', () => {
+    const exact = new Map([['2026-08-04', { a: usage(600), b: usage(300) }]]) // 900 total
+    const cache = [{ date: '2026-08-04', tokensByModel: { a: 500, b: 500 } }] // 1000 total, 90%
+    expect(reconcileClaudeDayCoverage(exact, cache, 0.9).has('2026-08-04')).toBe(true)
+    expect(reconcileClaudeDayCoverage(exact, cache, 0.91).has('2026-08-04')).toBe(false)
+  })
+})
+
 // summarizeApiCostByDay — the residue is a difference, never a reconciliation
 describe('summarizeApiCostByDay', () => {
   const days = {
@@ -2152,6 +2215,92 @@ describe('computeDerivedStats — date-filtered cost prices from the sessions\' 
     expect(d.totalCostUSD).toBeCloseTo(realCost, 6)
     expect(d.apiCostByDay.days.claude?.['2026-07-22']?.costUSD).toBeCloseTo(realCost, 6)
     expect(d.apiCostByDay.days.claude?.['2026-07-22']?.costUSD).not.toBeCloseTo(apportionedCost, 1)
+  })
+
+  /**
+   * THE CRITICAL CASE — a reviewer of this branch proved that "at least one session touches this
+   * day" was being read as "this day is fully accounted for". A 1,000-token session sitting alone
+   * beside a `dailyModelTokens` entry recording 400,000,000 real tokens that same day used to be
+   * priced as if the 1,000 were the whole day: `costEstimatedDays` read 0 and 399,999,000 tokens
+   * (and their cost) evaporated — worse than the original bug, because it now carried a
+   * measurement's confidence. `reconcileClaudeDayCoverage` is the guard against exactly this.
+   */
+  test('a THIN local store beside a much larger cache total falls back to apportionment, and counts as estimated', () => {
+    const thinSession: SessionMeta = {
+      session_id: 'thin', harness: 'claude', project_path: '/p', model: MODEL,
+      start_time: '2025-01-15T09:00:00.000Z', end_time: '2025-01-15T09:05:00.000Z',
+      input_tokens: 500, output_tokens: 500, cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+    } as unknown as SessionMeta
+    const CACHE_TOTAL = 400_000_000
+    const data = {
+      statsCache: {
+        ...baseCache,
+        dailyModelTokens: [{ date: '2025-01-15', tokensByModel: { [MODEL]: CACHE_TOTAL } }],
+      },
+      sessions: [thinSession], allSessions: [], projects: [], harnesses: ['claude'],
+    } as unknown as import('@agentistics/core').AppData
+    const filter = { ...oneDayFilter, customStart: '2025-01-15', customEnd: '2025-01-15' } as import('@agentistics/core').Filters
+
+    const d = computeDerivedStats(data, filter)!
+
+    // The demoted day is reported as estimated — never silently absorbed.
+    expect(d.costEstimatedDays).toBe(1)
+    // Priced through `apportionModelUsage`, from the CACHE's real total — not the thin session's.
+    // `apportionModelUsage` rounds each of the four counters independently (documented, and
+    // asserted with the same tolerance in its own describe block above), so the recomposed total
+    // can land within a couple of tokens of the exact figure rather than hitting it precisely.
+    expect(Math.abs(totalTokens(d.tokenTotals) - CACHE_TOTAL)).toBeLessThanOrEqual(2)
+    expect(totalTokens(d.tokenTotals)).not.toBe(1_000) // the session's own (wrong) total
+    const apportionedCost = calcCost(apportionModelUsage(CACHE_TOTAL, oldSplitGlobal), MODEL)
+    expect(d.totalCostUSD).toBeCloseTo(apportionedCost, 6)
+  })
+
+  /**
+   * KNOWN LIMITATION, documented rather than fixed (out of scope for Defect A — this is
+   * `reconciliation.md`'s Defect D): a no-`daily` session straddling midnight UTC files its WHOLE
+   * lifetime total on its start day. If `dailyModelTokens` also carries a correctly-split entry
+   * for the NEXT day, that next day is apportioned ON TOP of a start day that already contains
+   * its share — the overlap is counted twice. `reconcileClaudeDayCoverage` cannot catch this (it
+   * only ever demotes a day for having too LITTLE, and a day carrying an adjacent day's tokens too
+   * is never less than the cache's own total for it). This test locks in the CURRENT behaviour so
+   * a change to the day-fallback mechanics does not silently make it worse, and its comment is the
+   * "test and comment naming the case" the review asked for in place of a fix.
+   */
+  test('a no-daily session straddling midnight: start day is exact (and over-inclusive), next day still apportions', () => {
+    const straddler: SessionMeta = {
+      session_id: 'straddler', harness: 'claude', project_path: '/p', model: MODEL,
+      start_time: '2026-07-22T23:00:00.000Z', end_time: '2026-07-23T01:00:00.000Z',
+      // Its LIFETIME total — genuinely spans both days, but there is no `daily` to split it with.
+      input_tokens: 1_707, output_tokens: 1_311_921,
+      cache_read_input_tokens: 347_733_854, cache_creation_input_tokens: 38_684_456,
+    } as unknown as SessionMeta
+    const day2Total = 50_000_000 // dailyModelTokens' OWN, correctly-split figure for the 23rd
+    const data = {
+      statsCache: {
+        ...baseCache,
+        dailyModelTokens: [
+          { date: '2026-07-22', tokensByModel: { [MODEL]: OLD_SPLIT_TOTAL } },
+          { date: '2026-07-23', tokensByModel: { [MODEL]: day2Total } },
+        ],
+      },
+      sessions: [straddler], allSessions: [], projects: [], harnesses: ['claude'],
+    } as unknown as import('@agentistics/core').AppData
+    const twoDayFilter = { ...oneDayFilter, customStart: '2026-07-22', customEnd: '2026-07-23' } as import('@agentistics/core').Filters
+
+    const d = computeDerivedStats(data, twoDayFilter)!
+
+    // Day 1 (start day) is treated as covered and priced from the session's WHOLE lifetime total
+    // — including the portion that actually happened on day 2.
+    expect(d.apiCostByDay.days.claude?.['2026-07-22']?.tokens).toBe(REAL_TOTAL)
+    // Day 2 is NOT covered by the straddler (it only ever files on its start day) and still
+    // apportions from the cache's own day-2 total — on top of day 1 already containing it.
+    expect(d.costEstimatedDays).toBe(1)
+    const day2ApportionedCost = calcCost(apportionModelUsage(day2Total, oldSplitGlobal), MODEL)
+    expect(d.apiCostByDay.days.claude?.['2026-07-23']?.costUSD).toBeCloseTo(day2ApportionedCost, 6)
+    // Documented consequence: the window's total counts day 2's tokens twice (once folded into
+    // day 1's exact figure, once from day 2's own apportionment) — the known over-count this test
+    // exists to name, not to hide.
+    expect(totalTokens(d.tokenTotals)).toBe(REAL_TOTAL + day2Total)
   })
 })
 
