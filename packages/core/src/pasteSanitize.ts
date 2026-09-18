@@ -90,7 +90,10 @@ function stripBracketedPasteMarkers(text: string): string {
 /** Every C0 control byte and DEL, EXCEPT the three a legitimate paste carries: `\t` (0x09), `\n`
  *  (0x0A) and `\r` (0x0D). This also matches a bare `\x1b` that was not part of a 6-byte marker —
  *  see the module header for why that is exactly the second half of the guarantee. */
-const OTHER_CONTROL_BYTES = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g
+// C0 controls except \t \n \r, DEL, and the C1 range U+0080–U+009F: U+009B is the 8-bit CSI, the
+// single-character spelling of ESC [, which a terminal configured for 8-bit controls would parse as the
+// start of a sequence — so a paste could still carry one after every ESC was removed.
+const OTHER_CONTROL_BYTES = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g
 
 /**
  * The one function both the server (`input-protocol.ts`) and the client

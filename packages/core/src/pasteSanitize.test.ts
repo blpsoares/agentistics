@@ -112,3 +112,10 @@ describe('sanitizePasteText — the 64 KiB boundary', () => {
     expect(out).toBe('X'.repeat(Math.floor(65536 / unit.length)))
   })
 })
+
+test('the C1 control range is removed too, including the 8-bit CSI', () => {
+  expect(sanitizePasteText('a\u009b201~touch /tmp/x\rb')).toBe('a201~touch /tmp/x\rb')
+  expect(sanitizePasteText('x\u0080\u0085\u009fy')).toBe('xy')
+  expect(sanitizePasteText('ação é ü ñ — “aspas” 日本')).toBe('ação é ü ñ — “aspas” 日本')
+})
+
