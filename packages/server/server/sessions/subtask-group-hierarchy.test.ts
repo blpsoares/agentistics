@@ -234,3 +234,52 @@ test('attachSession SUCCEEDS filing directly on the GROUP itself, exactly like a
   `)
   expect(out).toEqual({ result: { ok: true } })
 })
+
+/**
+ * Deleting a GROUP must not permanently orphan its members — they become ordinary loose subtasks
+ * again (§F.1: a member without a group is exactly what a loose subtask is), written atomically
+ * with the deletion so a crash between the two can never leave a member pointing at an id nothing
+ * names. Unlike `attemptViews`'s handling of a dangling `attemptId` (folded into a documented
+ * "unattributed" bucket), a dangling `parentGroupId` had NO fallback at all before this fix:
+ * `subtaskViews`'s member-exclusion filter would keep excluding the row forever with no UI/API
+ * path back.
+ */
+test('removeSubtask on a GROUP clears parentGroupId on its former members — they become ordinary loose subtasks', async () => {
+  const out = await run(`
+    ${task('t1')}
+    ${subtask('g1', 't1', 'isGroup: true,')}
+    ${subtask('m1', 't1', "parentGroupId: 'g1',")}
+    ${subtask('m2', 't1', "parentGroupId: 'g1',")}
+    const removed = await web.removeSubtask('g1')
+    const after = await store.read()
+    const ids = after.subtasks.map(s => s.id).sort()
+    const m1 = after.subtasks.find(s => s.id === 'm1')
+    const m2 = after.subtasks.find(s => s.id === 'm2')
+    console.log(JSON.stringify({
+      removed, ids,
+      m1HasParentGroupId: 'parentGroupId' in m1,
+      m2HasParentGroupId: 'parentGroupId' in m2,
+    }))
+  `)
+  expect(out).toEqual({
+    removed: true,
+    ids: ['m1', 'm2'], // g1 itself is gone
+    m1HasParentGroupId: false,
+    m2HasParentGroupId: false,
+  })
+})
+
+test('removeSubtask on a GROUP leaves an UNRELATED group\'s members alone', async () => {
+  const out = await run(`
+    ${task('t1')}
+    ${subtask('g1', 't1', 'isGroup: true,')}
+    ${subtask('g2', 't1', 'isGroup: true,')}
+    ${subtask('m1', 't1', "parentGroupId: 'g1',")}
+    ${subtask('m2', 't1', "parentGroupId: 'g2',")}
+    await web.removeSubtask('g1')
+    const after = await store.read()
+    const m2 = after.subtasks.find(s => s.id === 'm2')
+    console.log(JSON.stringify({ m2ParentGroupId: m2.parentGroupId ?? null }))
+  `)
+  expect(out).toEqual({ m2ParentGroupId: 'g2' })
+})

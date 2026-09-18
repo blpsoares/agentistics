@@ -456,7 +456,21 @@ export function createTaskStore(file: string): TaskStore {
       return enqueue(async () => {
         const book = await read()
         if (!book.subtasks.some(t => t.id === id)) return false
-        await write({ ...book, subtasks: book.subtasks.filter(t => t.id !== id) })
+        // A GROUP's former MEMBERS become ordinary loose subtasks again — the natural fallback,
+        // since a member without a group is exactly what a loose subtask is (§F.1). Done in the
+        // SAME write as the deletion, under the same lock, or a crash between the two could leave a
+        // member pointing at an id nothing names — permanently, since nothing else ever clears
+        // `parentGroupId` and `subtaskViews`'s member-exclusion filter would keep excluding it
+        // forever with no UI/API path back (unlike `attemptViews`'s handling of a dangling
+        // `attemptId`, which folds an orphan into a documented "unattributed" bucket rather than
+        // losing track of it). Only a record whose `parentGroupId` names THIS id is touched — every
+        // other subtask, member of another group or not, is passed through untouched.
+        await write({
+          ...book,
+          subtasks: book.subtasks
+            .filter(t => t.id !== id)
+            .map(t => (t.parentGroupId === id ? { ...t, parentGroupId: undefined } : t)),
+        })
         return true
       })
     },
