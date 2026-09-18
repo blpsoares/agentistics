@@ -161,7 +161,15 @@ export function sanitizeSubtaskBlockedBy(o: {
  *  - the subtask BEING PATCHED is itself a group (`isGroup: true`) — a group can never be a member
  *    of another group (§F.1);
  *  - the named group does not exist, is not actually a group, is the subtask itself, or belongs to
- *    a different task (a group cannot span two parent tasks — §F.1's last rule).
+ *    a different task (a group cannot span two parent tasks — §F.1's last rule);
+ *  - the subtask being joined ALREADY has at least one session filed on it (`subtask_has_sessions`)
+ *    — a MEMBER gets no rollup bucket of its own at all (`task-report.ts`'s `subtaskViews` excludes
+ *    it outright, since it can never receive a session either), so a session already sitting on it
+ *    would silently drop out of every visible per-subtask/per-group breakdown the instant it joins,
+ *    while the task's own total (computed independently, over every row) still counts it — the two
+ *    would then disagree with nothing on screen explaining the gap. Refusing here is the same shape
+ *    as `done_needs_session`/`blocked_needs_reason`: a piece of work this request cannot do, not a
+ *    resource that is missing.
  */
 export interface GroupSibling {
   id: string
@@ -177,12 +185,25 @@ export function checkParentGroup(o: {
   parentGroupId: string
   /** The task's subtasks, to resolve the named group against — same-task scoping happens here. */
   siblings: readonly GroupSibling[]
-}): { ok: true } | { ok: false; reason: 'invalid_group' } {
+  /**
+   * Whether the subtask BEING PATCHED already has at least one session filed on it. The caller
+   * resolves this against the live row set (the same set `done_needs_session` already reads),
+   * because this module is pure and holds no session data of its own. Optional and defaulting to
+   * `false` so a caller that has not resolved the row set — or a test exercising only the reference
+   * rule — is unaffected.
+   */
+  hasSession?: boolean
+}): { ok: true } | { ok: false; reason: 'invalid_group' | 'subtask_has_sessions' } {
   if (o.isGroup) return { ok: false, reason: 'invalid_group' }
   const group = o.siblings.find(s => s.id === o.parentGroupId)
   if (!group || group.id === o.subtaskId || group.isGroup !== true || group.taskId !== o.taskId) {
     return { ok: false, reason: 'invalid_group' }
   }
+  // Checked LAST, after the reference itself is confirmed real: a bogus/self/cross-task reference
+  // names nothing to join in the first place, and that is the more fundamental reason — reporting
+  // `subtask_has_sessions` over a reference that could never have succeeded either way would send
+  // the caller to detach a session for a join that was always going to be refused.
+  if (o.hasSession) return { ok: false, reason: 'subtask_has_sessions' }
   return { ok: true }
 }
 

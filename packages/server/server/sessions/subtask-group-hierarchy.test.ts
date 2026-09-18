@@ -147,6 +147,43 @@ test('patchSubtask refuses `invalid_group` when the subtask being patched is its
   expect(out).toEqual({ result: { ok: false, message: 'invalid_group' } })
 })
 
+/**
+ * §F.1: a MEMBER gets no rollup bucket of its own at all (`task-report.ts`'s `subtaskViews`
+ * excludes it outright), so a session already filed on the subtask being joined would silently
+ * drop out of every visible per-subtask/per-group breakdown the instant it joins, while the
+ * task's own total (computed independently, over every row) keeps counting it — the two would
+ * then disagree with nothing on screen explaining the gap. `checkParentGroup` refuses the join
+ * outright instead (`subtask_has_sessions`).
+ */
+test('patchSubtask joins a group when the subtask has ZERO sessions filed on it', async () => {
+  const out = await run(`
+    ${task('t1')}
+    ${subtask('g1', 't1', 'isGroup: true,')}
+    ${subtask('m1', 't1')}
+    const result = await web.patchSubtask('m1', { parentGroupId: 'g1' })
+    const after = await store.read()
+    const row = after.subtasks.find(s => s.id === 'm1')
+    console.log(JSON.stringify({ result, parentGroupId: row.parentGroupId ?? null }))
+  `)
+  expect(out).toEqual({ result: { ok: true }, parentGroupId: 'g1' })
+})
+
+test('patchSubtask REFUSES joining a group when the subtask already has a session filed on it — subtask_has_sessions', async () => {
+  const out = await run(`
+    ${task('t1')}
+    ${subtask('g1', 't1', 'isGroup: true,')}
+    ${subtask('m1', 't1')}
+    ${session('sess1', "taskId: 't1', subtaskId: 'm1',")}
+    const result = await web.patchSubtask('m1', { parentGroupId: 'g1' })
+    const after = await store.read()
+    const row = after.subtasks.find(s => s.id === 'm1')
+    console.log(JSON.stringify({ result, parentGroupId: row.parentGroupId ?? null }))
+  `)
+  expect(out).toEqual({
+    result: { ok: false, message: 'subtask_has_sessions' }, parentGroupId: null,
+  })
+})
+
 test('an empty string LEAVES the group — the key is gone from the record, not written empty', async () => {
   const out = await run(`
     ${task('t1')}

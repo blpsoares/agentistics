@@ -224,6 +224,36 @@ describe('checkParentGroup — where a MEMBER may point its parentGroupId (§F.1
       siblings: twoGroups,
     })).toEqual({ ok: false, reason: 'invalid_group' })
   })
+
+  describe('`hasSession` — joining a group must not orphan a session already filed on the subtask', () => {
+    it('accepts an otherwise-valid join when `hasSession` is false (or omitted)', () => {
+      expect(checkParentGroup({
+        subtaskId: 'm1', taskId: 't1', isGroup: false, parentGroupId: 'g1',
+        siblings: SIBLINGS_WITH_GROUP, hasSession: false,
+      })).toEqual({ ok: true })
+      // Omitted entirely — defaults to false, so every pre-existing call site above is unaffected.
+      expect(checkParentGroup({
+        subtaskId: 'm1', taskId: 't1', isGroup: false, parentGroupId: 'g1',
+        siblings: SIBLINGS_WITH_GROUP,
+      })).toEqual({ ok: true })
+    })
+
+    it('refuses an otherwise-valid join with `subtask_has_sessions` when `hasSession` is true', () => {
+      expect(checkParentGroup({
+        subtaskId: 'm1', taskId: 't1', isGroup: false, parentGroupId: 'g1',
+        siblings: SIBLINGS_WITH_GROUP, hasSession: true,
+      })).toEqual({ ok: false, reason: 'subtask_has_sessions' })
+    })
+
+    it('a subtask that is itself a group is still `invalid_group` even with a session, never subtask_has_sessions', () => {
+      // `isGroup` is checked first: whether it happens to carry a session is moot when it could
+      // never be a member to begin with, and the caller should learn the more fundamental reason.
+      expect(checkParentGroup({
+        subtaskId: 'g1', taskId: 't1', isGroup: true, parentGroupId: 'g1',
+        siblings: SIBLINGS_WITH_GROUP, hasSession: true,
+      })).toEqual({ ok: false, reason: 'invalid_group' })
+    })
+  })
 })
 
 describe('filedUnder', () => {

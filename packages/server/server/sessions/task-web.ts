@@ -14,8 +14,8 @@ import { scopeMetas, type TaskFilter } from './task-filter'
 import { getCommitsInWindow } from '../git'
 import { readPreferences, writePreferences } from '../preferences'
 import {
-  legacyTaskId, migratePriority, newCommentId, newEventId, newFileId, newLinkId, newSubtaskId,
-  newTaskId, statusAfterAttach, subtaskDone,
+  isGroupMember, legacyTaskId, migratePriority, newCommentId, newEventId, newFileId, newLinkId,
+  newSubtaskId, newTaskId, statusAfterAttach, subtaskDone,
   type Task, type TaskEvent, type TaskStatus,
 } from './task-model'
 import { boardProgress, DEFAULT_LEASE_MS, planNext } from './task-next'
@@ -401,7 +401,19 @@ export async function addSubtask(
  * `parentGroupId` (joining/leaving a group, §F.1) is checked BEFORE any of the above: a bad
  * reference is refused outright (`invalid_group`) rather than silently dropped, because joining a
  * group is a deliberate act and a caller who asked to join something needs to know it did not
- * happen — see `checkParentGroup`.
+ * happen — see `checkParentGroup`. Joining a group is ALSO refused when the subtask already has a
+ * session filed on it (`subtask_has_sessions`) — a MEMBER never gets a rollup bucket of its own
+ * (`subtaskViews` excludes it outright), so that session's cost would silently drop out of every
+ * visible breakdown the instant it joins, while the task's own total keeps counting it.
+ *
+ * The `done_needs_session` gate below is SKIPPED for a group MEMBER (`Subtask.parentGroupId` set):
+ * `task-attach.ts`'s `planAttach` unconditionally refuses filing a session on a member
+ * (`subtask_in_group`), so a member can never satisfy "a session filed under this specific
+ * subtask" — checking it here would make `done` permanently unreachable for every member and
+ * defeat the whole point of `groupProgress` (§F.1): a member earns `done` through its own
+ * completion (comments/attachments/status), never through a session it can never carry. A subtask
+ * that is itself a GROUP (`isGroup: true`) keeps the gate unchanged — it is filed on exactly like a
+ * loose subtask and still needs one of its own to close.
  */
 export async function patchSubtask(subtaskId: string, patch: {
   title?: string
@@ -421,11 +433,18 @@ export async function patchSubtask(subtaskId: string, patch: {
   /**
    * Join (a group's own subtask id) or leave (`null`) a group — §F.1. Refused with
    * `invalid_group` when the id does not name an actual group of this SAME task, or when this
-   * subtask is itself a group (a group can never be a member) — see `checkParentGroup`.
+   * subtask is itself a group (a group can never be a member); refused with
+   * `subtask_has_sessions` when this subtask already has a session filed on it — see
+   * `checkParentGroup`.
    */
   parentGroupId?: string | null
 }): Promise<
-  { ok: true } | { ok: false; message: 'no_such_subtask' | 'done_needs_session' | 'invalid_group' }
+  {
+    ok: true
+  } | {
+    ok: false
+    message: 'no_such_subtask' | 'done_needs_session' | 'invalid_group' | 'subtask_has_sessions'
+  }
 > {
   const w = await loadTaskWorld()
   const found = w.book.subtasks.find(t => t.id === subtaskId)
@@ -440,13 +459,18 @@ export async function patchSubtask(subtaskId: string, patch: {
         isGroup: found.isGroup === true,
         parentGroupId: wanted,
         siblings: w.book.subtasks,
+        // Same predicate `done_needs_session` below reads off the same `w.rows` — a session filed
+        // on this subtask id, regardless of what it is filed under right now.
+        hasSession: w.rows.some(r => r.subtaskId === found.id),
       })
-      if (!check.ok) return { ok: false, message: 'invalid_group' }
+      if (!check.ok) return { ok: false, message: check.reason }
     }
   }
 
   const status = patch.status ?? found.status
-  if (status === 'done' && found.status !== 'done') {
+  // See this function's own docblock: a group MEMBER can never hold a session, so the gate is
+  // unreachable for it by construction and is skipped rather than left to refuse forever.
+  if (status === 'done' && found.status !== 'done' && !isGroupMember(found)) {
     const hasSession = w.rows.some(r => r.subtaskId === subtaskId)
     if (!hasSession) return { ok: false, message: 'done_needs_session' }
   }
@@ -492,7 +516,12 @@ export async function removeSubtask(subtaskId: string): Promise<boolean> {
 
 /** The tick, expressed as what it means: a move to `done`, or back to `todo`. */
 export async function setSubtaskDone(subtaskId: string, done: boolean): Promise<
-  { ok: true } | { ok: false; message: 'no_such_subtask' | 'done_needs_session' | 'invalid_group' }
+  {
+    ok: true
+  } | {
+    ok: false
+    message: 'no_such_subtask' | 'done_needs_session' | 'invalid_group' | 'subtask_has_sessions'
+  }
 > {
   return await patchSubtask(subtaskId, { status: done ? 'done' : 'todo' })
 }

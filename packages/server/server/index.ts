@@ -1738,9 +1738,10 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           if (body.remove === true) return json({ ok: await mod.removeSubtask(body.id) })
           // A bare `{id, done}` is the tick; anything else is a column edit. Both land on
           // `patchSubtask`, which derives `done` from `status` so the two cannot disagree.
-          // `done_needs_session`/`invalid_group` are 422, the same shape `sessions`'s `blocked`
-          // answers with above — each names a piece of work this request cannot do, not a resource
-          // that is missing. `no_such_subtask` stays 404: the id named nothing.
+          // `done_needs_session`/`invalid_group`/`subtask_has_sessions` are 422, the same shape
+          // `sessions`'s `blocked` answers with above — each names a piece of work this request
+          // cannot do, not a resource that is missing. `no_such_subtask` stays 404: the id named
+          // nothing.
           if (typeof body.done === 'boolean' && Object.keys(body).length === 2) {
             const result = await mod.setSubtaskDone(body.id, body.done)
             return json(result, result.ok ? 200 : (result.message === 'done_needs_session' ? 422 : 404))
@@ -1775,6 +1776,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             result.ok
               ? 200
               : (result.message === 'done_needs_session' || result.message === 'invalid_group'
+                  || result.message === 'subtask_has_sessions'
                 ? 422
                 : 404),
           )
