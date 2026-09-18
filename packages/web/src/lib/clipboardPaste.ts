@@ -1,3 +1,4 @@
+import { sanitizePasteText } from '@agentistics/core'
 /**
  * clipboardPaste.ts — the mobile key strip's `paste` button: read the clipboard, send it as ONE
  * paste. Not pure (it touches `navigator.clipboard`), which is why `keyStrip.ts`'s own
@@ -43,7 +44,10 @@ export async function pasteFromClipboard(sendPaste: (text: string) => void): Pro
   } catch {
     return 'denied'
   }
-  if (!text) return 'empty'
-  sendPaste(text)
+  // The same shared sanitizer the DOM paste path applies — a courtesy here; the server is the
+  // boundary and sanitizes again. What is left empty after it is an empty paste, not a send.
+  const clean = sanitizePasteText(text)
+  if (!clean) return 'empty'
+  sendPaste(clean)
   return 'sent'
 }

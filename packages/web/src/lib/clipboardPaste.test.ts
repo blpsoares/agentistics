@@ -41,6 +41,20 @@ describe('pasteFromClipboard — the strip button, and I1: a denied permission m
     expect(sent).toEqual(['hello from the clipboard'])
   })
 
+  it('the clipboard text is sanitized before it is sent — a bracketed-paste breakout never leaves the browser', async () => {
+    g.navigator = { clipboard: { readText: async () => 'a\x1b[201~touch /tmp/x\rb' } }
+    const sent: string[] = []
+    expect(await pasteFromClipboard(t => { sent.push(t) })).toBe('sent')
+    expect(sent).toEqual(['a' + 'touch /tmp/x\rb'])
+  })
+
+  it('a clipboard that is only control bytes is an empty paste, not a send', async () => {
+    g.navigator = { clipboard: { readText: async () => '\x1b\x03\x9b' } }
+    const sent: string[] = []
+    expect(await pasteFromClipboard(t => { sent.push(t) })).toBe('empty')
+    expect(sent).toEqual([])
+  })
+
   it('an empty clipboard sends nothing and reports "empty" — not a failure', async () => {
     g.navigator = { clipboard: { readText: async () => '' } }
     const sent: string[] = []
