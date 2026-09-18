@@ -369,22 +369,27 @@ export async function removeComment(commentId: string): Promise<boolean> {
  * Add a subtask — loose by default, or a GROUP (§F.1) when `o.isGroup` is true. `isGroup` is decided
  * only here: nothing today offers a way to convert an existing subtask into a group afterwards (or
  * a group back into a loose subtask), so a group's shape is fixed at creation.
+ *
+ * Returns the new subtask's id, or `null` on failure — the "create a group with…" gesture needs the
+ * id back to join both the picked sibling and the row it was started from to it in the same flow
+ * (`patchSubtask({ parentGroupId })`), which a bare boolean could not carry.
  */
 export async function addSubtask(
   ref: string, title: string, o: { isGroup?: boolean } = {},
-): Promise<boolean> {
+): Promise<string | null> {
   const t = title.trim()
-  if (!t) return false
+  if (!t) return null
   const w = await loadTaskWorld()
   const task = findTask(ref, w.book.tasks)
-  if (!task) return false
+  if (!task) return null
   const now = new Date().toISOString()
+  const id = newSubtaskId()
   await w.store.upsertSubtask({
-    id: newSubtaskId(), taskId: task.id, title: t,
+    id, taskId: task.id, title: t,
     status: 'todo', done: false, createdAt: now, updatedAt: now,
     ...(o.isGroup === true ? { isGroup: true } : {}),
   })
-  return true
+  return id
 }
 
 /**

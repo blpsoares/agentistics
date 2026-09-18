@@ -22,7 +22,7 @@
 
 import { useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowLeft, Check, CornerDownRight, ExternalLink, Plus, Search, Unlink, X } from 'lucide-react'
+import { ArrowLeft, Check, CornerDownRight, ExternalLink, Plus, Search, Unlink, Users, X } from 'lucide-react'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { overlayPadding } from '../../lib/mobileOverlay'
 import { useDismissOverlay } from '../../lib/dismissOverlay'
@@ -31,6 +31,7 @@ import {
   type AttachRefusalReason, type Subtask, type TaskListRow,
 } from '../../lib/tasks'
 import { BlockedSubtaskResolve } from './BlockedSubtaskResolve'
+import { classifyForFiling, type FilingRow } from './subtaskFiling'
 import { STATUS, button, field, microLabel, pill, surface, type BoardStatus } from './board'
 import { boardCopy, statusLabel, type Lang } from './copy'
 import { BetaTag } from '../BetaTag'
@@ -198,8 +199,13 @@ export function SessionFiling(p: SessionFilingProps) {
     </div>
   )
 
-  /** One row of the subtask list — a radio, because exactly one of them is true. */
-  const subtaskRow = (st: Subtask) => {
+  /**
+   * One PICKABLE row of the subtask list — a radio, because exactly one of them is true. Covers
+   * both a loose subtask and a GROUP (§F.1: a group is a normal filing target, just like a loose
+   * subtask), which is why it takes a `group` flag rather than being two near-identical copies —
+   * the only difference is the small marker that tells the two apart.
+   */
+  const subtaskRow = (st: Subtask, opts?: { group?: boolean }) => {
     const on = here === st.id
     return (
       <button
@@ -222,15 +228,68 @@ export function SessionFiling(p: SessionFilingProps) {
           border: `1px solid ${on ? 'var(--anthropic-orange)' : 'var(--border)'}`,
           background: on ? 'radial-gradient(circle, var(--anthropic-orange) 0 3px, transparent 4px)' : 'transparent',
         }} />
-        <CornerDownRight size={11} style={{ opacity: 0.6, flexShrink: 0 }} />
+        {opts?.group
+          ? <Users size={11} style={{ opacity: 0.7, flexShrink: 0 }} />
+          : <CornerDownRight size={11} style={{ opacity: 0.6, flexShrink: 0 }} />}
         <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {st.title}
         </span>
-        <span style={{ marginLeft: 'auto', ...microLabel, fontSize: 9.5 }}>
+        {opts?.group && (
+          <span style={{ ...pill('var(--text-tertiary)'), fontSize: 9, padding: '1px 6px', flexShrink: 0 }}>
+            {pt ? 'grupo' : 'group'}
+          </span>
+        )}
+        <span style={{ marginLeft: 'auto', ...microLabel, fontSize: 9.5, flexShrink: 0 }}>
           {statusLabel(st.status, p.lang)}
         </span>
       </button>
     )
+  }
+
+  /**
+   * A group MEMBER (§F.1) — never pickable, the server refuses it outright (`subtask_in_group`).
+   * Drawn inert (dimmed, no radio, `disabled`) rather than omitted: the reader still sees this piece
+   * of work exists and where it sits, but nothing here invites a click that would only round-trip to
+   * a refusal. The explanation is ON the row (not only in a hover `title`, which a phone never
+   * shows) — naming the group is what makes "why can't I pick this" answer itself.
+   */
+  const memberRow = (st: Subtask, groupTitle: string | undefined) => (
+    <div
+      key={st.id}
+      aria-disabled="true"
+      title={pt
+        ? `Faz parte do grupo${groupTitle ? ` "${groupTitle}"` : ''} — sessões vão no grupo, não aqui.`
+        : `Part of the group${groupTitle ? ` "${groupTitle}"` : ''} — sessions go to the group, not here.`}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
+        minHeight: isMobile ? 44 : 32, padding: isMobile ? '8px 10px' : '6px 9px',
+        borderRadius: 7, fontSize: 12.5, border: '1px solid transparent',
+        color: 'var(--text-tertiary)', opacity: 0.6, cursor: 'not-allowed',
+      }}
+    >
+      <span style={{ width: 12, flexShrink: 0 }} />
+      <CornerDownRight size={11} style={{ opacity: 0.5, flexShrink: 0 }} />
+      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {st.title}
+      </span>
+      <span style={{
+        marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0,
+        ...pill('var(--text-tertiary)'), fontSize: 9, padding: '1px 6px', maxWidth: 130,
+      }}>
+        <Users size={9} style={{ flexShrink: 0 }} />
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {groupTitle ?? (pt ? 'grupo' : 'group')}
+        </span>
+      </span>
+    </div>
+  )
+
+  /** Render one classified row (`subtaskFiling.ts`) — a loose subtask and a group share the
+   *  pickable row; a group member gets its own inert one. */
+  const filingRow = (row: FilingRow) => {
+    if (row.kind === 'group') return subtaskRow(row.subtask, { group: true })
+    if (row.kind === 'member') return memberRow(row.subtask, row.groupTitle)
+    return subtaskRow(row.subtask)
   }
 
   /**
@@ -297,7 +356,7 @@ export function SessionFiling(p: SessionFilingProps) {
 
         <div style={{ display: 'grid', gap: 2, maxHeight: 260, overflowY: 'auto' }}>
           {directRow()}
-          {(detail?.subtasks ?? []).map(subtaskRow)}
+          {classifyForFiling(detail?.subtasks ?? []).map(filingRow)}
         </div>
 
         {(detail?.subtasks.length ?? 0) === 0 && !adding && (

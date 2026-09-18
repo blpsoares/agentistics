@@ -402,10 +402,16 @@ export function useTaskDetail(ref: string | undefined, filters?: Filters) {
  * A status write the server can refuse for a NAMED reason — same shape `attachSession` uses for
  * `blocked`. `done_needs_session` is `task-web.ts`'s refusal of a `done` with no session filed
  * under the task or subtask yet; the caller opens the matching dialog rather than reporting a bare
- * failure, so the rule reads as a question and not as a bug. A refusal with no `reason` is anything
- * else (a bad ref, a network hiccup) — nothing this shape names, so there is nothing to ask about.
+ * failure, so the rule reads as a question and not as a bug. `invalid_group`/`subtask_has_sessions`/
+ * `group_field_conflict` are `patchSubtask`'s own refusals of a bad `parentGroupId` write (§F.1 of
+ * docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md) — see `checkParentGroup`
+ * (`task-attach.ts`). A refusal with no `reason` is anything else (a bad ref, a network hiccup) —
+ * nothing this shape names, so there is nothing to ask about.
  */
-export type StatusRefusalReason = 'done_needs_session'
+export type StatusRefusalReason =
+  | 'done_needs_session' | 'invalid_group' | 'subtask_has_sessions' | 'group_field_conflict'
+const STATUS_REFUSAL_REASONS: readonly StatusRefusalReason[] =
+  ['done_needs_session', 'invalid_group', 'subtask_has_sessions', 'group_field_conflict']
 export type StatusWriteResult = { ok: true } | { ok: false; reason?: StatusRefusalReason }
 
 async function postStatus(path: string, body: unknown): Promise<StatusWriteResult> {
@@ -416,12 +422,14 @@ async function postStatus(path: string, body: unknown): Promise<StatusWriteResul
       body: JSON.stringify(body),
     })
     if (res.ok) return { ok: true }
-    // A 422 is the server refusing a `blocked` with nothing to say, or a `done` with no session
-    // filed — both name a piece of work this request cannot do YET. Read the body for WHICH one;
-    // anything else stays a bare refusal.
+    // A 422 is the server refusing a `blocked` with nothing to say, a `done` with no session
+    // filed, or a group write it cannot honor — every one of them names a piece of work this
+    // request cannot do YET. Read the body for WHICH one; anything else stays a bare refusal.
     if (res.status === 422) {
       const refused = await res.json().catch(() => null) as { message?: string } | null
-      if (refused?.message === 'done_needs_session') return { ok: false, reason: 'done_needs_session' }
+      if (refused?.message && (STATUS_REFUSAL_REASONS as readonly string[]).includes(refused.message)) {
+        return { ok: false, reason: refused.message as StatusRefusalReason }
+      }
     }
     return { ok: false }
   } catch {
@@ -495,8 +503,28 @@ export const editTask = (ref: string, patch: TaskFieldPatch) =>
 export const addComment = (ref: string, author: string, body: string) =>
   post(`/api/tasks/${encodeURIComponent(ref)}/comments`, { author, body })
 
-export const addSubtask = (ref: string, title: string) =>
-  post(`/api/tasks/${encodeURIComponent(ref)}/subtasks`, { title })
+/**
+ * Add a subtask — loose by default, or a GROUP (§F.1) when `isGroup` is true — and return its new
+ * id, or `null` on failure. The id is what the group-forming gesture needs next: minting the group
+ * is only step one of "create a group with…", which then joins both this row and the picked
+ * sibling to it via `patchSubtask({ parentGroupId })`.
+ */
+export async function addSubtask(
+  ref: string, title: string, o: { isGroup?: boolean } = {},
+): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(ref)}/subtasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, ...(o.isGroup ? { isGroup: true } : {}) }),
+    })
+    if (!res.ok) return null
+    const body = await res.json().catch(() => null) as { id?: unknown } | null
+    return typeof body?.id === 'string' ? body.id : null
+  } catch {
+    return null
+  }
+}
 
 export const setSubtaskDone = (ref: string, id: string, done: boolean) =>
   postStatus(`/api/tasks/${encodeURIComponent(ref)}/subtasks`, { id, done })
@@ -610,13 +638,22 @@ export const editComment = (ref: string, id: string, body: string) =>
 export const removeComment = (ref: string, id: string) =>
   post(`/api/tasks/${encodeURIComponent(ref)}/comments`, { id, remove: true })
 
-export const patchSubtask = (
-  ref: string,
-  id: string,
-  patch: Partial<Pick<Subtask,
-    'title' | 'status' | 'assignee' | 'dueDate' | 'startDate' | 'sessionId' | 'notes' | 'blockedBy'
-  >>,
-) => postStatus(`/api/tasks/${encodeURIComponent(ref)}/subtasks`, { id, ...patch })
+/**
+ * A subtask patch, plus the one field `Partial<Subtask>` cannot express: `parentGroupId` is
+ * `string | undefined` on the record itself (absent = "leave it alone" everywhere else in this
+ * app), but joining/leaving a group (§F.1) needs a THIRD state — `null` CLEARS it (leave the
+ * group) — so it is typed apart rather than folded into `Partial<Pick<Subtask, …>>`.
+ */
+export type SubtaskPatch = Partial<Pick<Subtask,
+  'title' | 'status' | 'assignee' | 'dueDate' | 'startDate' | 'sessionId' | 'notes' | 'blockedBy'
+>> & {
+  /** Join (a group's own subtask id) or leave (`null`) a group — see `checkParentGroup`
+   *  (`task-attach.ts`). Absent leaves membership alone. */
+  parentGroupId?: string | null
+}
+
+export const patchSubtask = (ref: string, id: string, patch: SubtaskPatch) =>
+  postStatus(`/api/tasks/${encodeURIComponent(ref)}/subtasks`, { id, ...patch })
 
 export const removeSubtask = (ref: string, id: string) =>
   post(`/api/tasks/${encodeURIComponent(ref)}/subtasks`, { id, remove: true })
