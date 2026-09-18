@@ -513,6 +513,53 @@ export function emptyClaudeParse(): ClaudeParseState {
 }
 
 /**
+ * A copy of `state`, deep enough that folding into the copy can never mutate the original.
+ *
+ * `foldClaudeParse` (and the folds it delegates to) writes into most of this shape IN PLACE rather
+ * than reassigning — `state.daily`'s own `SessionDayUsage` records (and their `hours` bucket), the
+ * `Map`/`Set` accumulators, the plain-object tallies, and the three nested walks (`active`,
+ * `compact`, `agents.pendingAgents`/`agents.recordedAgentIds`) are all mutated through methods or
+ * key assignment, not replaced — so a shallow `{ ...state }` would still share every one of those
+ * containers with the original, and folding into the "copy" would fold into the original too.
+ *
+ * This exists so a fold can be tried without committing it: clone first, fold the clone, and only
+ * then let the caller publish it — see `transcript-state.ts`'s append path, which must leave the
+ * retained walk completely untouched when a fold throws partway through, so the next poll retries
+ * the identical read rather than doubling whatever had already been folded.
+ */
+export function cloneClaudeParseState(state: ClaudeParseState): ClaudeParseState {
+  const daily = new Map<string, SessionDayUsage>()
+  for (const [key, day] of state.daily) {
+    daily.set(key, { ...day, hours: day.hours ? { ...day.hours } : day.hours })
+  }
+  return {
+    ...state,
+    daily,
+    countedUsageIds: new Set(state.countedUsageIds),
+    claudeFilesModified: new Set(state.claudeFilesModified),
+    languageSet: new Set(state.languageSet),
+    toolUseIdToName: new Map(state.toolUseIdToName),
+    editLines: { ...state.editLines },
+    toolCounts: { ...state.toolCounts },
+    toolOutputTokens: { ...state.toolOutputTokens },
+    agentFileReads: { ...state.agentFileReads },
+    toolErrorCategories: { ...state.toolErrorCategories },
+    messageHours: [...state.messageHours],
+    userMessageTimestamps: [...state.userMessageTimestamps],
+    userResponseTimes: [...state.userResponseTimes],
+    active: { ...state.active },
+    compact: { ...state.compact },
+    skillUses: { ...state.skillUses },
+    agents: {
+      pendingAgents: new Map(state.agents.pendingAgents),
+      invocations: [...state.agents.invocations],
+      recordedAgentIds: new Set(state.agents.recordedAgentIds),
+    },
+    modelFirst200: state.modelFirst200,
+  }
+}
+
+/**
  * Advance `state` over `lines`, in transcript order. Mutates `state`; returns nothing.
  *
  * The body is `parseSessionJsonl`'s own loop, unchanged except that its locals now live on

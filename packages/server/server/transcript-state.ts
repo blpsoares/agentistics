@@ -19,7 +19,7 @@
 
 import { open } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
-import { emptyClaudeParse, foldClaudeParse, iterLines, type ClaudeParseState } from './jsonl'
+import { cloneClaudeParseState, emptyClaudeParse, foldClaudeParse, iterLines, type ClaudeParseState } from './jsonl'
 import {
   anchorHex, consumedEnd, cursorFrom, evictTranscriptStates, planTranscriptRead,
   type RereadReason, type TranscriptCursor,
@@ -135,7 +135,7 @@ async function readTranscript(path: string, now: number): Promise<TranscriptRead
 
     if (plan.mode === 'append' && prev) {
       const length = plan.to - plan.readFrom
-      const buf = Buffer.alloc(length)
+      const buf = Buffer.allocUnsafe(length)
       const chunk = buf.subarray(0, await readFully(fh, buf, plan.readFrom))
       // THE ANCHOR. The bytes immediately before the cursor are re-read as part of this same read
       // and must be the ones it was taken behind; anything else means the file was rewritten rather
@@ -145,10 +145,20 @@ async function readTranscript(path: string, now: number): Promise<TranscriptRead
       if (anchorOk) {
         const fresh = chunk.subarray(plan.verifyBytes)
         const consumed = consumedEnd(fresh)
+        // Fold into a CLONE, never `prev.state` directly. `foldClaudeParse` mutates in place and is
+        // not guaranteed against throwing on a malformed line; folding the shared object and only
+        // THEN discovering the fold failed would leave `prev.state` partially updated while
+        // `prev.cursor` (assigned only below, after the fold returns) stayed put — so the next poll
+        // would replan the identical append from the unmoved cursor and fold the same bytes AGAIN
+        // into the already-mutated state, silently double-counting everything it touched. Committing
+        // the clone and the new cursor together, only after the fold has returned without throwing,
+        // is what makes this step atomic: a throw here leaves `prev` exactly as it was.
+        const next = consumed > 0 ? cloneClaudeParseState(prev.state) : prev.state
         if (consumed > 0) {
-          foldClaudeParse(prev.state, iterLines(fresh.subarray(0, consumed).toString('utf-8')))
+          foldClaudeParse(next, iterLines(fresh.subarray(0, consumed).toString('utf-8')))
         }
         const offset = plan.lineFrom + consumed
+        prev.state = next
         prev.cursor = cursorFrom(chunk, plan.readFrom + chunk.length, offset, stat)
         prev.usedMs = now
         sweep(now)
@@ -162,7 +172,7 @@ async function readTranscript(path: string, now: number): Promise<TranscriptRead
     }
 
     const reason: RereadReason = plan.mode === 'full' ? plan.reason : 'no-cursor'
-    const buf = Buffer.alloc(stat.size)
+    const buf = Buffer.allocUnsafe(stat.size)
     const chunk = buf.subarray(0, await readFully(fh, buf, 0))
     const consumed = consumedEnd(chunk)
     const state = emptyClaudeParse()

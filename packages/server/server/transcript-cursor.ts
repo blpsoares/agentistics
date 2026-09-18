@@ -113,9 +113,11 @@ export function planTranscriptRead(
   stat: TranscriptStat,
 ): TranscriptReadPlan {
   if (!prev) return { mode: 'full', reason: 'no-cursor' }
-  // A cursor past the end of the file describes a file that is gone. `shrank` covers it: both mean
-  // "these are not the bytes the cursor was taken over", and both are answered by reading it whole.
-  if (stat.size < prev.size || stat.size < prev.offset) return { mode: 'full', reason: 'shrank' }
+  // A file smaller than the cursor described is not the one the cursor was taken over. `offset <=
+  // size` always holds on a `TranscriptCursor` (see its own doc comment), so `stat.size <
+  // prev.offset` can never be true unless `stat.size < prev.size` already is — checking only the
+  // latter is the same test without a clause that looks like it guards an independent case.
+  if (stat.size < prev.size) return { mode: 'full', reason: 'shrank' }
   if (stat.size === prev.size) {
     return stat.mtimeMs === prev.mtimeMs
       ? { mode: 'unchanged' }

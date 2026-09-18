@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile, appendFile, truncate } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { claudeTranscriptState, resetTranscriptStates, retainedTranscriptStates } from './transcript-state'
-import { finishClaudeSession, parseSessionJsonl } from './jsonl'
+import { cloneClaudeParseState, emptyClaudeParse, finishClaudeSession, foldClaudeParse, iterLines, parseSessionJsonl } from './jsonl'
 import { finishActiveTime } from '@agentistics/core'
 
 const dirs: string[] = []
@@ -291,5 +291,83 @@ describe('claudeTranscriptState', () => {
     await appendFile(f, assistant('m8', '2026-09-10T10:40:00.000Z', 7, 8))
     const all = await Promise.all(Array.from({ length: 10 }, () => claudeTranscriptState(f)))
     for (const r of all) expect(r!.state.inputTokens).toBe(97)
+  })
+
+  test('a fold that THROWS leaves the retained walk exactly as it was, and a clean retry recovers exactly once', async () => {
+    const f = join(await tempDir(), 's.jsonl')
+    await writeFile(f, TRANSCRIPT)
+    const first = await claudeTranscriptState(f)
+    expect(first!.state.userMsgs).toBe(2)
+
+    // A genuinely malformed line, not a mocked one: `JSON.parse('null')` succeeds — `null` is valid
+    // JSON — and returns the value `null`. The very first thing `foldClaudeParse` does with an entry
+    // (`foldCompactEntry` reading `e.type`) then throws `TypeError: Cannot read properties of null`.
+    // The GOOD line ahead of it folds completely before the throw, which is the shape most likely to
+    // corrupt state: some of the new bytes really were counted before the failure.
+    const goodLine = user('2026-09-10T10:08:00.000Z', 'terceiro')
+    await appendFile(f, goodLine + 'null\n')
+
+    // The throw is swallowed by `readTranscript`'s own catch, same as an unreadable file.
+    expect(await claudeTranscriptState(f)).toBeNull()
+    // Retrying the IDENTICAL bytes must fail identically, every time — which is only true if the
+    // previous failed attempt left `prev.state` and `prev.cursor` completely untouched. Before this
+    // fix, the good line was folded straight into the shared `prev.state` ahead of the throw, so a
+    // second attempt would fold it again on top of the already-corrupted object.
+    expect(await claudeTranscriptState(f)).toBeNull()
+    expect(await claudeTranscriptState(f)).toBeNull()
+
+    // Now the file is fixed — the offending line dropped — without the cursor ever having moved.
+    await writeFile(f, TRANSCRIPT + goodLine)
+    const recovered = await claudeTranscriptState(f)
+    expect(recovered!.info.mode).toBe('append')
+    // Exactly ONE more user message. Before the fix this reads 5 (2 original + 3 double/triple
+    // counts of `goodLine` from the three discarded attempts that each mutated `prev.state` in
+    // place before throwing); after the fix, a discarded attempt never touches `prev.state` at all.
+    expect(recovered!.state.userMsgs).toBe(3)
+    expect(recovered!.state.inputTokens).toBe(90)
+  })
+})
+
+describe('cloneClaudeParseState', () => {
+  test('folding into the clone never mutates the source, across every container the state carries', () => {
+    const source = emptyClaudeParse()
+    foldClaudeParse(source, iterLines(TRANSCRIPT))
+    const before = JSON.parse(JSON.stringify(source, (_k, v) => {
+      if (v instanceof Map) return [...v.entries()]
+      if (v instanceof Set) return [...v]
+      return v
+    }))
+
+    const clone = cloneClaudeParseState(source)
+    // Grow the clone with more of the same shapes the source already carries — a fresh usage
+    // record, a fresh tool call, a fresh day, a fresh skill, a fresh agent launch — so every
+    // Map/Set/array/plain-object field is exercised, not only the ones `foldClaudeParse` happened
+    // to touch on `TRANSCRIPT`.
+    foldClaudeParse(clone, iterLines(
+      assistant('mZ', '2026-09-12T00:00:00.000Z', 5, 6) +
+      JSON.stringify({
+        type: 'assistant', timestamp: '2026-09-12T00:00:01.000Z', cwd: '/w',
+        message: {
+          id: 'mZZ', model: 'claude-opus-5', usage: {}, content: [
+            { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'git commit -m x' } },
+            { type: 'tool_use', id: 't2', name: 'Skill', input: { skill: 'brainstorming' } },
+            { type: 'tool_use', id: 't3', name: 'Edit', input: { file_path: 'a.ts', old_string: 'a', new_string: 'ab' } },
+          ],
+        },
+      }) + '\n' +
+      JSON.stringify({
+        type: 'user', timestamp: '2026-09-12T00:00:02.000Z', cwd: '/w',
+        message: { content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true }] },
+        toolUseResult: { agentId: 'agent-1' },
+      }) + '\n',
+    ))
+
+    expect(clone).not.toBe(source)
+    const after = JSON.parse(JSON.stringify(source, (_k, v) => {
+      if (v instanceof Map) return [...v.entries()]
+      if (v instanceof Set) return [...v]
+      return v
+    }))
+    expect(after).toEqual(before)
   })
 })
