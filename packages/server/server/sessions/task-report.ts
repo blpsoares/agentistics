@@ -14,7 +14,7 @@ import type {
 } from './task-model'
 import { groupMembers, legacyTaskId } from './task-model'
 import { rollupAttempt, type AttemptRollup, type RollupSession } from './task-rollup'
-import { taskStats, type TaskStats } from './task-stats'
+import { scopedTaskStats, taskStats, type TaskStats } from './task-stats'
 import type { ManagedSession } from './types'
 
 /** A rollup row: an attempt, or the sessions of a task that name no attempt. */
@@ -213,6 +213,14 @@ export interface SubtaskView {
    * (`id: null`) bucket — neither has members to compute a percentage over.
    */
   groupProgress?: TaskProgress
+  /**
+   * The same delivery-evidence numbers `TaskDetail.stats` carries for the whole task, re-partitioned
+   * to this bucket's own rows — files/errors/lines/tokens/commits/models/harnesses/duration. `null`
+   * when nothing is filed under this bucket yet (see `scopedTaskStats`'s own null-vs-empty-block
+   * distinction), never a block whose every field happens to be null. See
+   * docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md §C.5.
+   */
+  stats: TaskStats | null
 }
 
 /**
@@ -250,20 +258,29 @@ export function subtaskViews(
   // subtask exactly as before, a group by the same rule (its rollup is simply the rows filed on
   // its own id, since no member can ever carry one).
   const bucketable = mine.filter(s => !s.parentGroupId)
-  const views: SubtaskView[] = bucketable.map(s => ({
-    id: s.id,
-    rollup: rollupAttempt({
-      sessions: rollupSessionsFor(rows.filter(r => r.subtaskId === s.id), metas, costOf),
-    }),
-    ...(s.isGroup === true
-      ? { groupProgress: groupProgress(groupMembers(s.id, mine).map(m => m.done)) }
-      : {}),
-  }))
+  const views: SubtaskView[] = bucketable.map(s => {
+    const mineRows = rows.filter(r => r.subtaskId === s.id)
+    return {
+      id: s.id,
+      rollup: rollupAttempt({ sessions: rollupSessionsFor(mineRows, metas, costOf) }),
+      stats: scopedTaskStats({
+        rows: mineRows, metas, createdAt: task.createdAt,
+        ...(task.deliveredAt ? { deliveredAt: task.deliveredAt } : {}),
+      }),
+      ...(s.isGroup === true
+        ? { groupProgress: groupProgress(groupMembers(s.id, mine).map(m => m.done)) }
+        : {}),
+    }
+  })
   const direct = rows.filter(r => !r.subtaskId)
   if (direct.length > 0) {
     views.push({
       id: null,
       rollup: rollupAttempt({ sessions: rollupSessionsFor(direct, metas, costOf) }),
+      stats: scopedTaskStats({
+        rows: direct, metas, createdAt: task.createdAt,
+        ...(task.deliveredAt ? { deliveredAt: task.deliveredAt } : {}),
+      }),
     })
   }
   return views
