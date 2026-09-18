@@ -250,7 +250,11 @@ const TOOLS: Tool[] = [
         ref: { type: "string" },
         title: { type: "string" },
         id: { type: "string" },
-        done: { type: "boolean" },
+        done: {
+          type: "boolean",
+          description:
+            "Send ALONE with `id` (no other field) for the tick — `{id, done}` is a fast path straight to the done/todo transition. Sent TOGETHER with `parentGroupId` (or any other named field below) in the same call, `done` is silently dropped rather than applied — this tool forwards only the named fields when one is present. Send them as two separate calls instead: join/leave the group first, then set `done` in its own call.",
+        },
         status: {
           type: "string",
           enum: ["backlog", "todo", "in_progress", "blocked", "in_review", "done", "abandoned"],
@@ -272,7 +276,7 @@ const TOOLS: Tool[] = [
         parentGroupId: {
           type: "string",
           description:
-            "Join this subtask (named by `id`) to the group whose id this names — a group of the SAME parent task. Pass an empty string to leave the current group. Refused (422, `invalid_group`) if the id is not an actual group of this task, or if this subtask is itself a group. Refused (422, `subtask_has_sessions`) if this subtask already has a session filed on it — detach it first.",
+            "Join this subtask (named by `id`) to the group whose id this names — a group of the SAME parent task. Pass an empty string to leave the current group. Refused (422, `invalid_group`) if the id is not an actual group of this task, or if this subtask is itself a group. Refused (422, `subtask_has_sessions`) if this subtask already has a session filed on it — detach it first. **Do not send `done` in this same call** — see `done`'s own description; make it a second call.",
         },
       },
       required: ["ref"],
@@ -670,6 +674,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         // was silently dropped — a subtask genuinely can be blocked by a sibling (`Subtask.blockedBy`,
         // enforced server-side in `patchSubtask`/`task-attach.ts`), this tool just never offered it.
         const blockedBy = Array.isArray(a?.blockedBy) ? { blockedBy: a.blockedBy } : {};
+        // NOTE: when ANY named column (incl. `parentGroupId`) is present, this branch never
+        // forwards `done` at all — a caller combining `parentGroupId` with `done: true` in one call
+        // gets no error and `done` is just dropped. The same is true of every other named column
+        // (`status`, `assignee`, …); fixing that general mechanism is a bigger, separate change and
+        // deliberately out of scope here. The `parentGroupId`/`done` case is instead documented as a
+        // limitation on both fields' own tool-schema descriptions above: callers are told to send
+        // them as two separate calls.
         const payload = a?.id !== undefined
           ? (named.length > 0 || Array.isArray(a?.blockedBy)
             ? { id: a.id, ...Object.fromEntries(named.map(c => [c, a[c]])), ...blockedBy }
