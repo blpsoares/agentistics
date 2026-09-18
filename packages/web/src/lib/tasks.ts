@@ -219,6 +219,13 @@ export interface TaskFile {
 export interface SubtaskView {
   id: string | null
   rollup: AttemptRollup
+  /**
+   * The same delivery-evidence numbers `TaskDetail.stats` carries for the whole task, re-partitioned
+   * to this bucket's own rows. `null` when nothing is filed under this bucket yet — never a block
+   * whose every field happens to be null. See
+   * docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md §C.5.
+   */
+  stats: TaskStats | null
 }
 
 export interface TaskDetail {

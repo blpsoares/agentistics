@@ -1,12 +1,21 @@
 import { test, expect } from 'bun:test'
-import { costCaveat, costCellFor, isUntracked, rollupKeyOf, subtaskRollupOf, tokensCellFor } from './subtaskRollup'
-import type { AttemptRollup, Subtask, SubtaskView } from '../../lib/tasks'
+import { costCaveat, costCellFor, isUntracked, rollupKeyOf, subtaskRollupOf, subtaskStatsOf, tokensCellFor } from './subtaskRollup'
+import type { AttemptRollup, Subtask, SubtaskView, TaskStats } from '../../lib/tasks'
 
 function rollup(over: Partial<AttemptRollup> = {}): AttemptRollup {
   return {
     sessionsUsed: 1, sessionsLinked: 1, provenance: { assigned: 1, observed: 0, none: 0 },
     rounds: 3, activeMinutes: 10, tokens: 1000, costUSD: 1.5,
     costMeasuredSessions: 0, costEstimatedSessions: 1, credits: null, mixedCurrency: false,
+    ...over,
+  }
+}
+
+function stats(over: Partial<TaskStats> = {}): TaskStats {
+  return {
+    models: [], harnesses: [], tokens: null, agentRuns: null, filesModified: null,
+    linesAdded: null, linesRemoved: null, commits: null, toolErrors: null, deliveryMs: null,
+    firstSessionAt: null, lastSessionAt: null,
     ...over,
   }
 }
@@ -29,17 +38,20 @@ test('rollupKeyOf: a grouped subtask is bucketed under the group id, never its o
 
 test('subtaskRollupOf: finds the bucket by subtask id', () => {
   const r = rollup({ costUSD: 7 })
-  const views: SubtaskView[] = [{ id: 's1', rollup: r }, { id: 's2', rollup: rollup({ costUSD: 3 }) }]
+  const views: SubtaskView[] = [
+    { id: 's1', rollup: r, stats: null },
+    { id: 's2', rollup: rollup({ costUSD: 3 }), stats: null },
+  ]
   expect(subtaskRollupOf(views, sub('s1'))).toBe(r)
 })
 
 test('subtaskRollupOf: undefined when the server has no bucket for this subtask', () => {
-  const views: SubtaskView[] = [{ id: 's1', rollup: rollup() }]
+  const views: SubtaskView[] = [{ id: 's1', rollup: rollup(), stats: null }]
   expect(subtaskRollupOf(views, sub('unknown'))).toBeUndefined()
 })
 
 test('subtaskRollupOf: the id:null direct-branch bucket is not confused with a real subtask', () => {
-  const views: SubtaskView[] = [{ id: null, rollup: rollup({ costUSD: 99 }) }]
+  const views: SubtaskView[] = [{ id: null, rollup: rollup({ costUSD: 99 }), stats: null }]
   expect(subtaskRollupOf(views, sub('s1'))).toBeUndefined()
 })
 
@@ -47,7 +59,10 @@ test('subtaskRollupOf: two subtasks sharing a groupId read the SAME bucket, keye
   // The server collapses a group into ONE view keyed by the group id (task-report.ts's `keyOf`),
   // so neither member's own id appears in the list at all.
   const shared = rollup({ costUSD: 8, sessionsUsed: 2, sessionsLinked: 2 })
-  const views: SubtaskView[] = [{ id: 'g1', rollup: shared }, { id: 's3', rollup: rollup({ costUSD: 1 }) }]
+  const views: SubtaskView[] = [
+    { id: 'g1', rollup: shared, stats: null },
+    { id: 's3', rollup: rollup({ costUSD: 1 }), stats: null },
+  ]
   const a = subtaskRollupOf(views, sub('s1', 'g1'))
   const b = subtaskRollupOf(views, sub('s2', 'g1'))
   expect(a).toBe(shared)
@@ -62,13 +77,19 @@ test('subtaskRollupOf: a grouped subtask never falls back to a bucket under its 
   // id is not the effective key and reading it would be a second, smaller sum.
   const own = rollup({ costUSD: 1 })
   const group = rollup({ costUSD: 9 })
-  const views: SubtaskView[] = [{ id: 's1', rollup: own }, { id: 'g1', rollup: group }]
+  const views: SubtaskView[] = [
+    { id: 's1', rollup: own, stats: null },
+    { id: 'g1', rollup: group, stats: null },
+  ]
   expect(subtaskRollupOf(views, sub('s1', 'g1'))).toBe(group)
 })
 
 test('subtaskRollupOf: an ungrouped subtask beside a group is unaffected', () => {
   const mine = rollup({ costUSD: 4 })
-  const views: SubtaskView[] = [{ id: 'g1', rollup: rollup({ costUSD: 8 }) }, { id: 's3', rollup: mine }]
+  const views: SubtaskView[] = [
+    { id: 'g1', rollup: rollup({ costUSD: 8 }), stats: null },
+    { id: 's3', rollup: mine, stats: null },
+  ]
   expect(subtaskRollupOf(views, sub('s3'))).toBe(mine)
 })
 
@@ -84,6 +105,42 @@ test('isUntracked: a bucket with sessionsUsed 0 is untracked', () => {
 
 test('isUntracked: a bucket with at least one session filed is tracked', () => {
   expect(isUntracked(rollup({ sessionsUsed: 1 }))).toBe(false)
+})
+
+// --- subtaskStatsOf ----------------------------------------------------------------------------
+// Mirrors `subtaskRollupOf`'s own tests: same key resolution, over the evidence-numbers field
+// instead of the cost/session rollup. See docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md
+// §C.5.
+
+test('subtaskStatsOf: finds the bucket by subtask id', () => {
+  const s = stats({ filesModified: 7 })
+  const views: SubtaskView[] = [
+    { id: 's1', rollup: rollup(), stats: s },
+    { id: 's2', rollup: rollup(), stats: stats({ filesModified: 3 }) },
+  ]
+  expect(subtaskStatsOf(views, sub('s1'))).toBe(s)
+})
+
+test('subtaskStatsOf: undefined when the server has no bucket at all for this subtask', () => {
+  const views: SubtaskView[] = [{ id: 's1', rollup: rollup(), stats: stats() }]
+  expect(subtaskStatsOf(views, sub('unknown'))).toBeUndefined()
+})
+
+test('subtaskStatsOf: null when the bucket exists but nothing is filed under it yet — different from undefined', () => {
+  const views: SubtaskView[] = [{ id: 's1', rollup: rollup(), stats: null }]
+  expect(subtaskStatsOf(views, sub('s1'))).toBeNull()
+})
+
+test('subtaskStatsOf: two subtasks sharing a groupId read the SAME stats bucket, keyed by the group', () => {
+  const shared = stats({ filesModified: 10 })
+  const views: SubtaskView[] = [
+    { id: 'g1', rollup: rollup(), stats: shared },
+    { id: 's3', rollup: rollup(), stats: stats({ filesModified: 1 }) },
+  ]
+  const a = subtaskStatsOf(views, sub('s1', 'g1'))
+  const b = subtaskStatsOf(views, sub('s2', 'g1'))
+  expect(a).toBe(shared)
+  expect(b).toBe(shared)
 })
 
 // --- costCellFor -----------------------------------------------------------------------------
