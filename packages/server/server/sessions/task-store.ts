@@ -20,6 +20,7 @@
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { normalizeStagedSession } from '@agentistics/core'
 import { withFileLock } from './file-lock'
 import { migratePriority, migrateStatus, subtaskDone } from './task-model'
 import { heldByOther } from './task-next'
@@ -309,6 +310,11 @@ function sanitizeSubtask(raw: unknown): Subtask | null {
     // `false` written by an older client is read the same as absent rather than as a distinct value.
     ...(t.isGroup === true ? { isGroup: true } : {}),
     ...(str(t.parentGroupId) ? { parentGroupId: str(t.parentGroupId)! } : {}),
+    // A staged session draft (t-918cc82233) — same reason the hierarchy fields above are carried
+    // here explicitly: written by `patchSubtask` and dropped silently by the next `read()` unless
+    // this whitelist parses it back. `normalizeStagedSession` is total and never repairs a
+    // half-read draft, the same rule `normalizeSessionPresets` applies to a saved preset.
+    ...(normalizeStagedSession(t.stagedSession) ? { stagedSession: normalizeStagedSession(t.stagedSession)! } : {}),
   }
 }
 

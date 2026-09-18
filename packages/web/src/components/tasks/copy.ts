@@ -135,6 +135,41 @@ export interface BoardCopy {
   /** The description's own collapse/expand, when it has no markdown headings to fold by. */
   showAllDescription: string
   showLessDescription: string
+  /**
+   * The staged-session draft, composed ahead of time on a loose subtask or a group and fired later
+   * (t-918cc82233) — see `@agentistics/core`'s `stagedSession.ts`. Never offered on a group MEMBER.
+   */
+  staged: {
+    compose: string
+    edit: string
+    fire: string
+    ready: string
+    prompt: string
+    promptPlaceholder: string
+    harness: string
+    harnessAsk: string
+    model: string
+    effort: string
+    cwd: string
+    cwdAsk: string
+    attachments: string
+    attach: string
+    existing: string
+    noFiles: string
+    save: string
+    cancel: string
+    discard: string
+    discardTitle: string
+    discardMessage: string
+    promptRequired: string
+    cwdInvalid: string
+    launchTitle: string
+    launchIntro: string
+    launch: string
+    launching: string
+    preparing: string
+    networkError: string
+  }
 }
 
 const EN: BoardCopy = {
@@ -232,6 +267,37 @@ const EN: BoardCopy = {
   blockedBy: 'Blocked by',
   showAllDescription: 'Show all',
   showLessDescription: 'Show less',
+  staged: {
+    compose: 'Stage a session',
+    edit: 'Edit staged session',
+    fire: 'Fire',
+    ready: 'Ready to fire',
+    prompt: 'First message',
+    promptPlaceholder: 'What the session should do…',
+    harness: 'Assistant (optional)',
+    harnessAsk: 'Asked when fired',
+    model: 'Model (optional)',
+    effort: 'Effort (optional)',
+    cwd: 'Folder (optional)',
+    cwdAsk: 'Left blank, asked when fired — an absolute path',
+    attachments: 'Attachments',
+    attach: 'Attach',
+    existing: 'Add an existing file',
+    noFiles: 'No files on this delivery yet.',
+    save: 'Save draft',
+    cancel: 'Cancel',
+    discard: 'Discard draft',
+    discardTitle: 'Discard this staged session?',
+    discardMessage: 'The prompt and its attachments are removed. Nothing already running is affected.',
+    promptRequired: 'Write the first message.',
+    cwdInvalid: 'The folder must be an absolute path (starting with /).',
+    launchTitle: 'Fire staged session',
+    launchIntro: 'This starts a real assistant now, billed like any other session, and files it under this exact subtask automatically.',
+    launch: 'Fire',
+    launching: 'Starting…',
+    preparing: 'Preparing attachments…',
+    networkError: 'Network error talking to this machine.',
+  },
 }
 
 const PT: BoardCopy = {
@@ -331,6 +397,37 @@ const PT: BoardCopy = {
   blockedBy: 'Bloqueada por',
   showAllDescription: 'Mostrar tudo',
   showLessDescription: 'Mostrar menos',
+  staged: {
+    compose: 'Preparar sessão',
+    edit: 'Editar sessão em espera',
+    fire: 'Disparar',
+    ready: 'Pronta pra disparar',
+    prompt: 'Primeira mensagem',
+    promptPlaceholder: 'O que a sessão deve fazer…',
+    harness: 'Assistente (opcional)',
+    harnessAsk: 'Perguntado ao disparar',
+    model: 'Modelo (opcional)',
+    effort: 'Esforço (opcional)',
+    cwd: 'Pasta (opcional)',
+    cwdAsk: 'Em branco, é perguntada ao disparar — caminho absoluto',
+    attachments: 'Anexos',
+    attach: 'Anexar',
+    existing: 'Adicionar um arquivo existente',
+    noFiles: 'Nenhum arquivo nesta entrega ainda.',
+    save: 'Salvar rascunho',
+    cancel: 'Cancelar',
+    discard: 'Descartar rascunho',
+    discardTitle: 'Descartar esta sessão em espera?',
+    discardMessage: 'A mensagem e os anexos são removidos. Nada que já está rodando é afetado.',
+    promptRequired: 'Escreva a primeira mensagem.',
+    cwdInvalid: 'A pasta precisa ser um caminho absoluto (começando com /).',
+    launchTitle: 'Disparar sessão em espera',
+    launchIntro: 'Isso inicia um assistente de verdade agora, cobrado como qualquer outra sessão, e a filia automaticamente a esta subtarefa.',
+    launch: 'Disparar',
+    launching: 'Iniciando…',
+    preparing: 'Preparando anexos…',
+    networkError: 'Erro de rede ao falar com esta máquina.',
+  },
 }
 
 export function boardCopy(lang: Lang): BoardCopy {

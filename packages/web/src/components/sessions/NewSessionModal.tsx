@@ -126,9 +126,20 @@ export interface NewSessionModalProps {
     effort?: string
     label?: string
   }
+  /**
+   * The exact SUBTASK (or group) this session is being started for, alongside `initialTaskId` — the
+   * staged-session compose flow's fallback path (t-918cc82233), reached when a draft is missing
+   * something `/api/fleet/new` requires (a harness, a folder). Seeds `subtaskTarget` with the pair,
+   * so the automatic attach below files the result under the exact subtask the draft lived on rather
+   * than a bare task-level attach. Ignored without `initialTaskId` — a subtask cannot be named
+   * without the delivery it belongs to.
+   */
+  initialSubtaskId?: string
 }
 
-export function NewSessionModal({ lang, onClose, onStarted, initialTask, initialTaskId, initialPreset }: NewSessionModalProps) {
+export function NewSessionModal({
+  lang, onClose, onStarted, initialTask, initialTaskId, initialSubtaskId, initialPreset,
+}: NewSessionModalProps) {
   const pt = lang === 'pt'
   const [harnesses, setHarnesses] = useState<HarnessOption[] | null>(null)
   const [projects, setProjects] = useState<ProjectOption[]>([])
@@ -170,7 +181,7 @@ export function NewSessionModal({ lang, onClose, onStarted, initialTask, initial
    * created. See spec 2026-09-11 §C.2.
    */
   const [subtaskTarget, setSubtaskTarget] = useState<{ taskId: string; subtaskId?: string } | null>(
-    initialTaskId ? { taskId: initialTaskId } : null,
+    initialTaskId ? { taskId: initialTaskId, ...(initialSubtaskId ? { subtaskId: initialSubtaskId } : {}) } : null,
   )
   /** Set when that automatic attach comes back refused because the subtask is still blocked. */
   const [subtaskBlocked, setSubtaskBlocked] = useState<

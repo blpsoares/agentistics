@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { Filters, TaskPriorityId, TaskProgress } from '@agentistics/core'
+import type { Filters, StagedSessionDraft, TaskPriorityId, TaskProgress } from '@agentistics/core'
 import { getDateRangeFilter } from '../hooks/useData'
 
 export type LinkProvenance = 'assigned' | 'observed' | 'none'
@@ -225,6 +225,13 @@ export interface Subtask {
    * `Subtask.parentGroupId` (`task-model.ts`).
    */
   parentGroupId?: string
+  /**
+   * A dormant session draft composed ahead of time on this subtask/group (t-918cc82233) — see
+   * `@agentistics/core`'s `stagedSession.ts`. Absent means no draft. Mirror of the server's
+   * `Subtask.stagedSession` (`task-model.ts`); never present on a group MEMBER
+   * (`isGroupMember`/`parentGroupId` set) — the server refuses that write outright.
+   */
+  stagedSession?: StagedSessionDraft
 }
 export interface TaskFile {
   id: string; taskId: string; name: string; size: number
@@ -650,6 +657,73 @@ export const patchSubtask = (ref: string, id: string, patch: SubtaskPatch) =>
 
 export const removeSubtask = (ref: string, id: string) =>
   post(`/api/tasks/${encodeURIComponent(ref)}/subtasks`, { id, remove: true })
+
+/**
+ * Save (or replace) a subtask/group's staged session draft (t-918cc82233).
+ *
+ * A structured result, not a bare boolean: the one refusal worth naming is `subtask_in_group` — the
+ * target is a group MEMBER, which can never hold a session and therefore never a draft either (see
+ * `task-attach.ts`'s identical refusal for filing a real one). The UI should never actually reach
+ * this for a member row (the compose control is withheld there), so this is defence in depth.
+ */
+export type StagedSessionWriteResult = { ok: true } | { ok: false; reason?: 'subtask_in_group' }
+
+export async function saveStagedSession(
+  ref: string, subtaskId: string, draft: StagedSessionDraft,
+): Promise<StagedSessionWriteResult> {
+  try {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(ref)}/subtasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: subtaskId, stagedSession: draft }),
+    })
+    if (res.ok) return { ok: true }
+    if (res.status === 422) {
+      const body = await res.json().catch(() => null) as { message?: string } | null
+      if (body?.message === 'subtask_in_group') return { ok: false, reason: 'subtask_in_group' }
+    }
+    return { ok: false }
+  } catch {
+    return { ok: false }
+  }
+}
+
+/** Discard a subtask/group's staged draft, keeping the subtask itself untouched. */
+export const clearStagedSession = (ref: string, subtaskId: string) =>
+  post(`/api/tasks/${encodeURIComponent(ref)}/subtasks`, { id: subtaskId, stagedSession: null })
+
+/**
+ * Turn a staged draft's `attachmentIds` (TaskFile ids) into real local paths the new session can be
+ * pointed at — the same `/api/fleet/attach` store the ordinary composer uses, so a freshly spawned
+ * session reads these exactly as it would read anything else attached through the chat.
+ *
+ * One attachment that cannot be read (deleted since the draft was composed, a transient network
+ * error) is SKIPPED rather than failing the whole fire — a session started with N-1 of N attachments
+ * is still the session that was asked for; one started with none because of a single bad file is not.
+ */
+export async function materializeStagedAttachments(
+  lang: 'pt' | 'en', attachmentIds: readonly string[], files: readonly TaskFile[],
+): Promise<string[]> {
+  const paths: string[] = []
+  for (const fileId of attachmentIds) {
+    const meta = files.find(f => f.id === fileId)
+    if (!meta) continue
+    try {
+      const got = await fetch(fileUrl(fileId))
+      if (!got.ok) continue
+      const blob = await got.blob()
+      const form = new FormData()
+      form.append('file', new File([blob], meta.name))
+      const res = await fetch(`/api/fleet/attach?lang=${lang}`, { method: 'POST', body: form })
+      if (!res.ok) continue
+      const body = await res.json() as { ok: boolean; path?: string }
+      if (body.ok && body.path) paths.push(body.path)
+    } catch {
+      // One bad attachment must not sink the rest — see this function's own note.
+    }
+  }
+  return paths
+}
 
 /**
  * TAKE a task, or give it back.
