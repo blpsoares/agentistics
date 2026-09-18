@@ -1776,11 +1776,12 @@ export interface ProjectOption {
    */
   source: 'cwd' | 'history' | 'repo' | 'folder' | 'typed'
   /**
-   * True only for a LINKED worktree of a repository — never its own main checkout. Absent means
-   * "not a worktree", the same rule `projectKind` (`@agentistics/core`) reads it by. This surface
-   * (the terminal wizard) does not branch on it today; it travels because `searchProjects` is the
-   * one method the web wizard reads it from too, and `ProjectKind` in `@agentistics/core` now has
-   * a `'worktree'` member `worktree: true` resolves to there.
+   * True only for a LINKED worktree of a repository — never its own main checkout, and never a
+   * git SUBMODULE (also a `.git` FILE, but its content names `.git/modules/`, not
+   * `.git/worktrees/` — see `dir-scan.ts`'s `classifyGitFile`). Absent means "not a worktree", the
+   * same rule `projectKind` (`@agentistics/core`) reads it by. The terminal wizard reads it too
+   * (`SessionWizard.tsx`'s `sourceWord`, ahead of the `source` checks — a worktree still carries
+   * `source: 'repo'`), so a worktree row is no longer labelled "git repo" there either.
    */
   worktree?: boolean
 }
