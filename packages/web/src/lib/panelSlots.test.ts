@@ -179,6 +179,34 @@ describe('movePanel', () => {
     expect(next.bottom).toBeNull()
     expect(next.bottomOpen).toBe(false)
   })
+
+  // Owner feedback, 2026-09-17: "pressing 'Mover para baixo' only CLOSES the right aside instead of
+  // moving that panel to the bottom band … add a panelSlots test per panel for both directions".
+  // The exhaustive loop above already walks this table, but a bug reported by name deserves a test
+  // that reads back as the same sentence — a reader checking the fix does not have to run the loop
+  // in their head to see that "Studio, right to bottom" is covered. The FIX itself was never in this
+  // pure function (verified live: it was the docked band's own local `target` preference going
+  // stale when a move landed in `panelSlots` from OUTSIDE that band's own click handler — see
+  // `ShellBand.tsx`'s own header and its new `useEffect`), but that is exactly why this module's own
+  // contract has to be pinned in the open: if `movePanel` itself ever regressed, the wiring fix
+  // would have nothing correct to react to.
+  for (const panel of ['studio', 'cli', 'shell'] as const) {
+    test(`${panel}: right → bottom actually moves it, never just vacates the right slot`, () => {
+      const start = openPanel(EMPTY_SLOT_LAYOUT, panel, 'right')
+      const next = movePanel(start, panel, 'bottom')
+      expect(next.right).toBeNull()
+      expect(next.bottom).toBe(panel)
+      expect(isPanelShown(next, panel)).toBe(true)
+    })
+
+    test(`${panel}: bottom → right actually moves it, never just closes the band`, () => {
+      const start = openPanel(EMPTY_SLOT_LAYOUT, panel, 'bottom')
+      const next = movePanel(start, panel, 'right')
+      expect(next.bottom).toBeNull()
+      expect(next.right).toBe(panel)
+      expect(isPanelShown(next, panel)).toBe(true)
+    })
+  }
 })
 
 describe('isPanelShown', () => {

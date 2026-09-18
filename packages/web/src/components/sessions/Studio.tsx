@@ -115,6 +115,7 @@ import { useStudioSearchRequest } from '../../lib/studioSearchRequest'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { ConfirmModal } from '../../pages/settings/primitives'
 import { BetaTag } from '../BetaTag'
+import { ResizeGrip } from '../ResizeGrip'
 import { FileIcon, fileIconHueOnActiveTab, fileIconId } from './fileIcon'
 import { RepoFileEditor } from './RepoFileEditor'
 import { RepoSearchView } from './RepoSearchView'
@@ -1626,6 +1627,10 @@ export function TreeDivider({ width, available, lang, reverse = false, onResize,
       aria-valuemin={TREE_MIN}
       aria-valuemax={max}
       tabIndex={0}
+      // `.ag-resize-handle` (design item 6) is on top of, not instead of, this divider's own
+      // background wash on hover/focus — the wash marks the whole strip, the grip marks the exact
+      // spot to grab, and the two read as one control together.
+      className="ag-resize-handle"
       onMouseDown={e => {
         e.preventDefault()
         drag.current = { x: e.clientX, w: width }
@@ -1654,6 +1659,7 @@ export function TreeDivider({ width, available, lang, reverse = false, onResize,
         position: 'absolute', top: 0, bottom: 0, left: 2, width: 1,
         background: 'var(--border)', pointerEvents: 'none',
       }} />
+      <ResizeGrip orientation="vertical" />
     </div>
   )
 }

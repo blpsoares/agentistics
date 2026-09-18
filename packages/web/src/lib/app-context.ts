@@ -184,21 +184,32 @@ export interface AppContext {
 
   /** What `/api/shell/*` will ACTUALLY answer: `CAPS.localShell` AND the user's own switch. It is
    *  separate from `capabilities.localShell` (the profile alone) for the reason `chatEnabled` is:
-   *  Settings has to be able to say "your profile allows this, you have it off". Undefined on an
-   *  older server that has no switch — read as OFF, because a raw shell is opt-in and absence is
-   *  never consent (`shell-gate.ts`), which is the OPPOSITE of the reading chat takes for its own
-   *  flag and deliberately so: chat was on before it had a switch, and this never was. */
+   *  Settings has to be able to say "your profile allows this, you have it off". `shell-gate.ts`
+   *  itself now reads an ABSENT preference as ON (owner decision, 2026-09-14 — Studio and Shell ship
+   *  on by default, still narrowed by `capable` and by an explicit `false`); this field's own
+   *  `undefined` is a DIFFERENT absence — the context has not loaded yet, or an older server sends
+   *  no such field at all — and reads as OFF here for the ordinary reason any not-yet-known value
+   *  does: `SessionsPage`/`SessionPanel` gate on `=== true`, never on "not `=== false`". */
   shellEnabled?: boolean
 
   /** What `/api/fleet/tree*` will ACTUALLY answer: `CAPS.localShell` AND the user's own switch,
    *  resolved by the server (`sessions/editor-gate.ts`) and reported by `GET /api/team/session`.
    *  The UI may NEVER re-derive it from `capabilities.localShell` + a preference — the resolved
-   *  flag is the one answer, exactly as `shellEnabled` is for the shell. Undefined reads as OFF,
-   *  for that same reason: a read/write file editor is opt-in and absence is never consent. It also
-   *  has a CENTRAL subtracted from it before it is published (`lib/editorGate.ts`) — the whole
-   *  `/api/fleet` prefix is refused there, and a consumer must not have to know that. When this is
-   *  not `true` the Studio is ABSENT, never a greyed-out entry. */
+   *  flag is the one answer, exactly as `shellEnabled` is for the shell. `editor-gate.ts` reads an
+   *  ABSENT preference as ON now (owner decision, 2026-09-14, matching `shellEnabled` above); this
+   *  field's own `undefined` is the context-not-loaded-yet / older-server case and reads as OFF for
+   *  the same reason `shellEnabled`'s does. It also has a CENTRAL subtracted from it before it is
+   *  published (`lib/editorGate.ts`) — the whole `/api/fleet` prefix is refused there, and a
+   *  consumer must not have to know that. When this is not `true` the Studio is ABSENT, never a
+   *  greyed-out entry. */
   editorEnabled?: boolean
+
+  /** The Studio panel's first-open dot, cleared for good the first time it opens in ANY slot —
+   *  `panelBar.ts`'s own `PanelBar` reads it wherever the bar renders (`ShellBand`'s desktop bar,
+   *  `StudioBand`'s bar, or the no-terminal fallback band). Kept on `AppContext` rather than local
+   *  to one of those, because `usePanelSlots()`'s `isPanelShown` is what clears it and that must
+   *  stay true regardless of which surface actually opened the Studio. */
+  studioSeen: boolean
 
   /** Re-reads `/api/team/session` and re-publishes everything above from a fresh answer — the ONE
    *  way `SessionsSettings` can make `editorEnabled` (and `shellEnabled`, `chatEnabled`, …) catch up

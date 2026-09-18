@@ -14,7 +14,7 @@ import type {
 } from './task-model'
 import { legacyTaskId } from './task-model'
 import { rollupAttempt, type AttemptRollup, type RollupSession } from './task-rollup'
-import { taskStats, type TaskStats } from './task-stats'
+import { scopedTaskStats, taskStats, type TaskStats } from './task-stats'
 import type { ManagedSession } from './types'
 
 /** A rollup row: an attempt, or the sessions of a task that name no attempt. */
@@ -205,6 +205,14 @@ export interface SubtaskView {
    *  member. */
   id: string | null
   rollup: AttemptRollup
+  /**
+   * The same delivery-evidence numbers `TaskDetail.stats` carries for the whole task, re-partitioned
+   * to this bucket's own rows — files/errors/lines/tokens/commits/models/harnesses/duration. `null`
+   * when nothing is filed under this bucket yet (see `scopedTaskStats`'s own null-vs-empty-block
+   * distinction), never a block whose every field happens to be null. See
+   * docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md §C.5.
+   */
+  stats: TaskStats | null
 }
 
 /**
@@ -243,21 +251,30 @@ export function subtaskViews(
     if (members) members.push(s)
     else groups.set(key, [s])
   }
-  const views: SubtaskView[] = [...groups.entries()].map(([key, members]) => ({
-    id: key,
+  const views: SubtaskView[] = [...groups.entries()].map(([key, members]) => {
     // A session's `subtaskId` can name ANY member of the group — the union of their rows is what
-    // the group's bucket rolls up, so the same session is never counted once per member.
-    rollup: rollupAttempt({
-      sessions: rollupSessionsFor(
-        rows.filter(r => members.some(m => m.id === r.subtaskId)), metas, costOf,
-      ),
-    }),
-  }))
+    // the group's bucket rolls up, so the same session is never counted once per member. The
+    // evidence numbers below are re-partitioned over the IDENTICAL row set, or a grouped subtask's
+    // stats block would disagree with the rollup sitting right beside it.
+    const mine = rows.filter(r => members.some(m => m.id === r.subtaskId))
+    return {
+      id: key,
+      rollup: rollupAttempt({ sessions: rollupSessionsFor(mine, metas, costOf) }),
+      stats: scopedTaskStats({
+        rows: mine, metas, createdAt: task.createdAt,
+        ...(task.deliveredAt ? { deliveredAt: task.deliveredAt } : {}),
+      }),
+    }
+  })
   const direct = rows.filter(r => !r.subtaskId)
   if (direct.length > 0) {
     views.push({
       id: null,
       rollup: rollupAttempt({ sessions: rollupSessionsFor(direct, metas, costOf) }),
+      stats: scopedTaskStats({
+        rows: direct, metas, createdAt: task.createdAt,
+        ...(task.deliveredAt ? { deliveredAt: task.deliveredAt } : {}),
+      }),
     })
   }
   return views

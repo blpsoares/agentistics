@@ -1,4 +1,7 @@
-import type { ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Cpu, FileText, FolderTree, MoreHorizontal, TerminalSquare } from 'lucide-react'
+import { studioLocationLabel, type PanelBarEntry, type PanelBarId } from '../../lib/panelBar'
+import { targetLabel } from '../../lib/terminalTarget'
 
 /**
  * bandControls.tsx — ONE height, ONE padding, ONE icon/label size for every control drawn on the
@@ -28,6 +31,14 @@ import type { ReactNode } from 'react'
 /** The one height every desktop control in this family shares. Mobile targets are always 44px
  *  (the house rule), never this figure — every component below takes `isMobile` and switches. */
 export const BAND_CONTROL_H = 26
+
+/** The standard clip-to-nothing technique — a node stays in the accessibility tree (and so in the
+ *  element's accessible NAME) while painting no pixels. Used by `PanelBar`'s `compact` mode: an
+ *  unlit tab's full label is still what a screen reader announces, only no longer beside the icon. */
+const VISUALLY_HIDDEN: React.CSSProperties = {
+  position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,
+  overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0,
+}
 
 const pillBase: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5, flexShrink: 0,
@@ -96,6 +107,105 @@ export function BandSegment({ label, isMobile, children }: {
   )
 }
 
+/**
+ * PanelBar — the ONE panel switcher (design item 1: "the drawing moves the header's panel tab menu
+ * ... DOWN into the bottom terminal bar, where Claude Code | Shell | Studio already lives"). It used
+ * to be `App.tsx`'s `SessionHeaderSwitcher`, rendered in the fixed header; it now renders inside the
+ * bottom band's own bar (`ShellBand`'s desktop bar and `StudioBand`'s bar both mount it), which is
+ * why it lives here rather than in a page file — both bands import this component, neither imports
+ * the other.
+ *
+ * `entries`/`onPick` decide everything about WHAT is offered and WHAT clicking it does — this
+ * component only draws them, through `panelBarEntries` (`lib/panelBar.ts`) and whatever plumbing the
+ * caller wires the click to. The first-open dot (`studioSeen`) stays on the Studio entry's icon
+ * alone, exactly as it did in the header.
+ */
+export function PanelBar({
+  entries, lang, studioSeen, harness, onPick, compact = false,
+}: {
+  entries: readonly PanelBarEntry[]
+  lang: 'pt' | 'en'
+  studioSeen: boolean
+  /** Names the CLI segment after what is actually on that session's screen (`targetLabel`), the same
+   *  way the band's own old occupant switcher always did. */
+  harness?: string
+  onPick: (id: PanelBarId) => void
+  /**
+   * BELOW ~1100PX (design item 7, `lib/panelBar.ts`'s own `bandBarCompact`), every UNLIT tab drops
+   * its visible word and keeps only its icon — the tooltip (`title`) still carries the full
+   * sentence, so nothing is lost, only unlabelled until hovered or focused. The LIT tab (and, for
+   * Studio, its "lateral"/"embaixo" tag) ALWAYS keeps its label: it is the one fact the bar exists
+   * to state at a glance, and a five-icon row with no visible answer to "what am I looking at" is
+   * the wrong place to save the width.
+   */
+  compact?: boolean
+}) {
+  const pt = lang === 'pt'
+  const cliLabel = targetLabel('cli', harness, lang)
+  const shellLabel = targetLabel('shell', harness, lang)
+  const meta: Record<PanelBarId, { label: string; icon: ReactNode; title: string }> = {
+    contents: {
+      label: pt ? 'Conteúdo' : 'Contents',
+      icon: <FileText size={14} />,
+      title: pt
+        ? 'Conteúdo desta sessão — atividade, galeria, skills, subagentes e mais'
+        : 'This session’s contents — activity, gallery, skills, subagents and more',
+    },
+    studio: {
+      label: 'Studio',
+      icon: (
+        <span style={{ position: 'relative', display: 'flex' }}>
+          <FolderTree size={14} />
+          {!studioSeen && (
+            <span aria-hidden="true" style={{
+              position: 'absolute', top: -2, right: -2, width: 6, height: 6,
+              borderRadius: '50%', background: 'var(--anthropic-orange)',
+            }} />
+          )}
+        </span>
+      ),
+      title: pt
+        ? 'Agentistics Studio (beta) — os arquivos desta sessão em árvore, com busca e editor'
+        : 'Agentistics Studio (beta) — this session’s files as a tree, with search and an editor',
+    },
+    cli: { label: cliLabel, icon: <TerminalSquare size={14} />, title: cliLabel },
+    shell: { label: shellLabel, icon: <TerminalSquare size={14} />, title: shellLabel },
+    hardware: {
+      label: pt ? 'Hardware' : 'Hardware',
+      icon: <Cpu size={14} />,
+      title: pt ? 'Recursos de hardware' : 'Hardware resources',
+    },
+  }
+  return (
+    <BandSegment label={pt ? 'O que mostrar' : 'What to show'} isMobile={false}>
+      {entries.map(({ id, on, studioAt }) => {
+        const m = meta[id]
+        const label = id === 'studio' && studioAt
+          ? `${m.label} · ${studioLocationLabel(studioAt, pt)}`
+          : m.label
+        // The LIT tab (and, for Studio, its location tag) always keeps its visible word — see this
+        // component's own `compact` doc comment. An unlit one in compact mode still carries the
+        // FULL text as its accessible name (a screen reader gets no less than before), only painted
+        // off-screen rather than beside the icon.
+        const hideLabel = compact && !on
+        return (
+          <BandSegmentTab
+            key={id}
+            on={on}
+            // Stops propagation unconditionally — this bar now renders inside the bottom band's own
+            // whole-row collapse toggle (`ShellBand`/`StudioBand`), so an unstopped click would both
+            // pick the tab AND collapse the band underneath it.
+            onClick={e => { e.stopPropagation(); onPick(id) }}
+            icon={m.icon}
+            label={hideLabel ? <span style={VISUALLY_HIDDEN}>{label}</span> : <span>{label}</span>}
+            title={m.title}
+          />
+        )
+      })}
+    </BandSegment>
+  )
+}
+
 /** One tab inside a `BandSegment` — `height: '100%'` fills the wrapper's own fixed height exactly,
  *  rather than repeating a second number that could drift from it. */
 export function BandSegmentTab({ on, onClick, icon, label, isMobile, title }: {
@@ -128,5 +238,125 @@ export function BandSegmentTab({ on, onClick, icon, label, isMobile, title }: {
       {icon}
       {label}
     </button>
+  )
+}
+
+export interface BandOverflowEntry {
+  id: string
+  label: string
+  icon: ReactNode
+  onSelect: () => void
+}
+
+/**
+ * BandOverflowMenu — the "⋯" that holds a bottom bar's SECONDARY actions (design item 7: "with the
+ * panel segment moving into this bar it must not become a wall of buttons"). Move/Full
+ * screen/End shell/Show-hide tree used to sit inline as their own `BandLabeledButton`s, each with an
+ * icon AND a visible word (the previous pass's own fix for "the buttons are non-standard sizes") —
+ * which is exactly what made the bar too wide once the panel segment grew from three entries to
+ * five (owner's screenshot: "segment + Mover para a direita + Tela cheia + Encerrar shell + Recolher
+ * — too wide"). The entries KEEP their labels here, inside the menu, where width is not the
+ * constraint — only the TRIGGER collapses them.
+ *
+ * Absent entirely when `entries` is empty, rather than a "⋯" that opens onto nothing: a control
+ * whose one outcome is an empty menu teaches nothing, same rule as everywhere else in this file.
+ */
+export function BandOverflowMenu({ label, entries, isMobile = false }: {
+  label: string
+  entries: readonly BandOverflowEntry[]
+  isMobile?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const away = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false) }
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', away)
+    document.addEventListener('keydown', key)
+    return () => {
+      document.removeEventListener('mousedown', away)
+      document.removeEventListener('keydown', key)
+    }
+  }, [open])
+  // FOCUS THE FIRST ITEM ON OPEN — Tab alone would still reach every item (they are plain buttons),
+  // but a menu that opens with focus still on its trigger makes a keyboard user press Tab once just
+  // to find out the menu is there at all.
+  useEffect(() => {
+    if (open) menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus()
+  }, [open])
+  if (entries.length === 0) return null
+  // ARROW-KEY ROVING between the items, Home/End to the ends — the same shape a native <select> or
+  // any desktop menu offers, on top of the Tab order every plain <button> already gives for free.
+  const roveFocus = (delta: 1 | -1) => {
+    const items = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])
+    const i = items.indexOf(document.activeElement as HTMLButtonElement)
+    const next = i === -1 ? (delta === 1 ? 0 : items.length - 1) : (i + delta + items.length) % items.length
+    items[next]?.focus()
+  }
+  return (
+    <div ref={ref} style={{ position: 'relative', flexShrink: 0, display: 'flex' }}>
+      <button
+        className="ag-tap-icon"
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={label}
+        title={label}
+        onClick={e => { e.stopPropagation(); setOpen(o => !o) }}
+        style={{
+          // The 44px mobile touch target is PROJECTED by `.ag-tap-icon` (`index.css`'s
+          // invisible-hitbox rule), never painted here — a literal `width/height: isMobile ? 44`
+          // on an icon button is the exact shape `touchTarget.lint.test.ts` refuses, the same rule
+          // `SessionsPage.tsx`'s own `rightSlotIconBtn` already follows.
+          ...pillBase,
+          width: BAND_CONTROL_H, height: BAND_CONTROL_H, padding: 0,
+        }}
+      ><MoreHorizontal size={14} /></button>
+      {open && (
+        <div
+          ref={menuRef}
+          role="menu"
+          aria-label={label}
+          onKeyDown={e => {
+            if (e.key === 'ArrowDown') { e.preventDefault(); roveFocus(1) }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); roveFocus(-1) }
+            else if (e.key === 'Home') { e.preventDefault(); menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[0]?.focus() }
+            else if (e.key === 'End') {
+              e.preventDefault()
+              const items = menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')
+              items?.[items.length - 1]?.focus()
+            }
+          }}
+          style={{
+            position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 30, minWidth: 200,
+            background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
+            padding: 4, boxShadow: 'var(--ag-shadow-pop)',
+          }}
+        >
+          {entries.map(e => (
+            <button
+              key={e.id}
+              role="menuitem"
+              type="button"
+              onClick={ev => { ev.stopPropagation(); setOpen(false); e.onSelect() }}
+              style={{
+                display: 'flex', alignItems: 'center', width: '100%', gap: 8,
+                minHeight: isMobile ? 44 : 30, padding: '6px 10px',
+                borderRadius: 6, border: 'none', textAlign: 'left',
+                background: 'transparent', fontFamily: 'inherit', fontSize: 12, fontWeight: 500,
+                color: 'var(--text-primary)', cursor: 'pointer',
+              }}
+              onMouseEnter={ev => { ev.currentTarget.style.background = 'var(--bg-elevated)' }}
+              onMouseLeave={ev => { ev.currentTarget.style.background = 'transparent' }}
+            >
+              {e.icon}
+              {e.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }

@@ -635,7 +635,7 @@ export async function readFleetPullRequests(
 /** What a search that could not run answers: no rows, and no claim about how many there are. */
 const EMPTY_PROJECT_SEARCH: ProjectSearchResult = {
   options: [],
-  totals: { repo: 0, project: 0, folder: 0 },
+  totals: { repo: 0, worktree: 0, project: 0, folder: 0 },
 }
 
 export interface FleetNewOptions {
@@ -672,7 +672,11 @@ export interface FleetNewOptions {
   }[]
   /** Ranked places, from the LOCAL store — so the picker answers with no network and a cold cache.
    *  CAPPED per kind: what fits on screen, never how many there are. See `projectTotals`. */
-  projects: { path: string; label: string; repo?: string; detail: string; source: string }[]
+  projects: {
+    path: string; label: string; repo?: string; detail: string; source: string
+    /** True only for a LINKED worktree — never its own main checkout. See `ProjectKind`. */
+    worktree?: boolean
+  }[]
   /**
    * How many places of each kind MATCHED, before the cap — the number the tabs carry.
    *
@@ -741,6 +745,7 @@ export async function readNewOptions(lang: CliLang, query: string): Promise<Flee
         ...(p.repo ? { repo: p.repo } : {}),
         detail: p.detail,
         source: p.source,
+        ...(p.worktree ? { worktree: true } : {}),
       })),
       /**
        * HOW MANY of each kind matched, which is NOT how many rows came back.

@@ -21,22 +21,28 @@
  * branch passes neither prop, and the header below returns.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronUp, FolderTree, MessagesSquare, PanelRightOpen, TerminalSquare, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { ChevronDown, ChevronUp, PanelBottomOpen, PanelRightOpen, X } from 'lucide-react'
 import { getCentralMachine } from '../../lib/centralMachinePick'
+import { ResizeGrip } from '../ResizeGrip'
 import { useIsMobile } from '../../hooks/useIsMobile'
-import { resolveForViewport, usePanelSlots } from '../../lib/panelSlots'
+import { useElementWidth } from '../../hooks/useElementWidth'
+import { resolveForViewport, rightSlotShowing, usePanelSlots } from '../../lib/panelSlots'
+import { closeArtifacts, openArtifacts, useArtifacts } from '../../lib/artifactsStore'
+import {
+  bandBarCompact, panelBarEntries, type PanelBarEntry, type PanelBarGates, type PanelBarId,
+} from '../../lib/panelBar'
+import { targetLabel } from '../../lib/terminalTarget'
 import { RelayedScreen } from './RelayedScreen'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import type { FleetActionId, FleetRow } from '../../lib/fleet'
 import { TerminalRegion } from '../RecentSessions'
 import { SessionChat, type SessionChatProps } from './SessionChat'
 import { SessionActions } from './SessionActions'
+import { SessionTitleFlag } from './SessionTitleFlag'
 import { ShellBand } from './ShellBand'
-import { targetLabel } from '../../lib/terminalTarget'
 import { BAND_MIN_PX, readBandPrefs, resolveBandHeight, writeBandPrefs } from '../../lib/shellBand'
-import { bandSegmentEntries } from '../../lib/bandSegment'
-import { BandLabeledButton, BandSegment, BandSegmentTab } from './bandControls'
+import { BAND_CONTROL_H, BandOverflowMenu, PanelBar, type BandOverflowEntry } from './bandControls'
 
 export type SessionView = 'chat' | 'terminal'
 
@@ -100,9 +106,22 @@ export interface SessionPanelProps {
    * elsewhere, which is also what the caller reads as "park it".
    */
   onStudioBandRef?: (el: HTMLDivElement | null) => void
+  /** Hardware reads THIS machine's own process list — offered on the panel bar unless this session
+   *  is viewed through a central (`!isCentral`, the same fact the header's old switcher read). */
+  hardwareOffered?: boolean
+  /** The Studio entry's first-open dot — `App.tsx`'s own `studioSeen`, so every surface that can
+   *  open the Studio clears the same one flag. */
+  studioSeen?: boolean
+  /** A task was just created and linked from the bottom bar's own task control — see
+   *  `SessionTitleFlag`'s own `onLinked`. */
+  onTaskLinked?: () => void
 }
 
-export function SessionPanel({ session, row, lang, theme, act, authorName, onGone, onOpened, view: viewProp, onViewChange, onArtifacts, shellEnabled, editorEnabled, onOpenTerminal, onOpenShellFullscreen, onStudioBandRef }: SessionPanelProps) {
+export function SessionPanel({
+  session, row, lang, theme, act, authorName, onGone, onOpened, view: viewProp, onViewChange,
+  onArtifacts, shellEnabled, editorEnabled, onOpenTerminal, onOpenShellFullscreen, onStudioBandRef,
+  hardwareOffered, studioSeen = true, onTaskLinked,
+}: SessionPanelProps) {
   /**
    * Is this a session of ANOTHER machine, reached through the relay?
    *
@@ -151,6 +170,93 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
   } = usePanelSlots()
   const slotLayout = resolveForViewport(rawSlotLayout, isMobile)
   const bottomIsStudio = !isMobile && editorEnabled === true && slotLayout.bottom === 'studio'
+
+  /**
+   * THE ONE PANEL BAR (design item 1) — computed here, where `slotLayout`/`artifactsStore`/`relayed`
+   * are all already in scope, and handed down as data + one callback to whichever bottom band
+   * actually renders it (`ShellBand`'s desktop bar, `StudioBand`'s bar, or the no-terminal fallback
+   * band below) — so the three can never draw a different bar for the same session.
+   *
+   * `contents` keeps going through the OLD `artifactsStore` (`openArtifacts`/`closeArtifacts`),
+   * deliberately — see `panelSlots.ts`'s own header on why `contents` carries no field of its own
+   * there. Every other entry goes through `panelSlots` directly: `studio` closes wherever it sits
+   * (asking first when dirty, through `closeSlotPanel`'s own `hidePanel`) when lit, opens at its last
+   * slot otherwise — unchanged from the header's old rule. `cli`/`shell` add one case the header
+   * never had: LIT BECAUSE THEY ARE THE BOTTOM BAND'S OWN OCCUPANT is a no-op here — there is
+   * nothing to close FROM in that reading, since the band itself decides what it shows through its
+   * own local preference (see `ShellBand`'s `bottomOccupant`/`handleBarPick`) — while lit because
+   * they sit on the RIGHT still closes the right slot, exactly as `hardware` does.
+   */
+  const art = useArtifacts()
+  const rightOccupant = rightSlotShowing(slotLayout, art.open)
+  const bottomOccupant = slotLayout.bottom
+  const panelBarGates: PanelBarGates = {
+    editorEnabled: editorEnabled === true,
+    shellEnabled: shellEnabled === true,
+    relayed,
+    hardwareOffered: hardwareOffered === true,
+  }
+  const barEntries = panelBarEntries(rightOccupant, bottomOccupant, panelBarGates)
+  const onPanelBarPick = useCallback((id: PanelBarId) => {
+    if (id === 'contents') {
+      if (rightOccupant === 'contents') closeArtifacts(); else openArtifacts()
+      return
+    }
+    if (id === 'studio') {
+      if (rightOccupant === 'studio' || bottomOccupant === 'studio') closeSlotPanel('studio')
+      else openSlotPanel('studio')
+      return
+    }
+    // hardware, cli, shell
+    if (rightOccupant === id) { closeSlotPanel(id); return }
+    if (bottomOccupant === id) return // already the band's own occupant — nothing to close from here
+    openSlotPanel(id)
+  }, [rightOccupant, bottomOccupant, closeSlotPanel, openSlotPanel])
+
+  /**
+   * "MOVE TO THE BOTTOM", FOR WHATEVER SITS ON THE RIGHT (owner feedback, 2026-09-17) — the reverse
+   * of `onMoveToRight` below, offered through the SAME docked band's own overflow menu rather than
+   * a second control living in the right aside. A panel sits in AT MOST one slot
+   * (`lib/panelSlots.ts`), so `rightOccupant` — when it names a panel this band family can ever
+   * dock (`studio`/`cli`/`shell`; `contents`/`hardware` are right-slot only) — is always the OTHER
+   * one from whatever is docked here, never a duplicate of it.
+   *
+   * `openSlotPanel(panel, 'bottom')` is the ONE write — deliberately not `moveSlotPanel` (the exact
+   * reason `onMoveToRight` below gives for the opposite direction: the panel is shown, so a `move`
+   * would behave the same, but `open` is the one call every trigger of this gesture in the codebase
+   * already agrees on). For `studio` that write is the whole of it (its target re-derives from
+   * `slotLayout` on every render, see `SessionsPage`'s `studioTarget`); for `cli`/`shell` the docked
+   * band's own `target` preference is a SEPARATE, local piece of state (`ShellBand`'s own header
+   * explains why) that this call does not touch directly — `ShellBand` follows `bottomOccupant`
+   * reactively instead (its own `useEffect`), so the move is visible to the one screen that has to
+   * display it however it was triggered, not only from that band's own bar. Before this,
+   * `SessionsPage.tsx`'s now-removed `rightSlotToolbar` called `movePanel` directly, from OUTSIDE
+   * this component and with no way to reach `ShellBand`'s `chooseTarget` at all — the store moved
+   * the panel correctly and the docked band kept showing whatever it last had a `target` for (or
+   * nothing), which read as "this button only closes the right aside".
+   */
+  const movableOnRight = rightOccupant === 'studio' || rightOccupant === 'cli' || rightOccupant === 'shell'
+    ? rightOccupant : null
+  const moveDownEntries: BandOverflowEntry[] = movableOnRight ? [{
+    id: 'move-down',
+    label: pt
+      ? `Trazer ${movableOnRight === 'studio' ? 'o Studio' : targetLabel(movableOnRight, session.harness, lang)} para baixo`
+      : `Bring ${movableOnRight === 'studio' ? 'the Studio' : targetLabel(movableOnRight, session.harness, lang)} to the bottom`,
+    icon: <PanelBottomOpen size={14} />,
+    onSelect: () => openSlotPanel(movableOnRight, 'bottom'),
+  }] : []
+  const taskControl = (
+    <SessionTitleFlag
+      session={{
+        id: session.id, title: session.title,
+        ...(session.harness ? { harness: session.harness } : {}),
+        ...(session.task ? { task: session.task } : {}),
+      }}
+      lang={lang}
+      size={BAND_CONTROL_H}
+      {...(onTaskLinked ? { onLinked: onTaskLinked } : {})}
+    />
+  )
 
   /**
    * THE CENTRE COLUMN'S OWN HEIGHT, MEASURED (design item 7) — what "full" means for the bottom
@@ -306,15 +412,14 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
           onToggleOpen={() => setBottomOpen(!slotLayout.bottomOpen)}
           onMoveToRight={() => moveSlotPanel('studio', 'right')}
           onClose={() => closeSlotPanel('studio')}
-          // Claude Code and Shell join the same segment (design §1.3) — picking either DISPLACES
-          // the Studio through `panelSlots.openPanel`, asking first only when it is dirty
-          // (`showPanel`'s own `studioDisplaced` check), never a second, redundant question.
-          {...(!relayed ? { onSelectCli: () => openSlotPanel('cli', 'bottom') } : {})}
-          {...(shellEnabled && !relayed ? { onSelectShell: () => openSlotPanel('shell', 'bottom') } : {})}
-          harness={session.harness}
+          barEntries={barEntries}
+          onBarPick={onPanelBarPick}
+          studioSeen={studioSeen}
+          taskControl={taskControl}
+          extraOverflowEntries={moveDownEntries}
           {...(onStudioBandRef ? { contentRef: onStudioBandRef } : {})}
         />
-      ) : shellEnabled && !relayed && (
+      ) : shellEnabled && !relayed ? (
         <ShellBand
           key={session.id}
           sessionId={session.id}
@@ -324,9 +429,12 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
           lang={lang}
           theme={theme}
           columnHeight={columnHeight}
-          studioEnabled={editorEnabled === true}
-          onSelectStudio={() => openSlotPanel('studio', 'bottom')}
-          onSelectTerminal={id => openSlotPanel(id, 'bottom')}
+          barEntries={barEntries}
+          onBarPick={onPanelBarPick}
+          studioSeen={studioSeen}
+          bottomOccupant={bottomOccupant === 'cli' || bottomOccupant === 'shell' ? bottomOccupant : null}
+          taskControl={taskControl}
+          extraOverflowEntries={moveDownEntries}
           /*
            * `openSlotPanel`, deliberately NOT `moveSlotPanel` (C3's second half). The docked band's
            * own `cli`/`shell` preference (`shellBand.ts`'s `target`) is never written through
@@ -338,6 +446,25 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
            * showing right now IS what the person means to move.
            */
           onMoveToRight={id => openSlotPanel(id, 'right')}
+        />
+      ) : !isMobile && (
+        /* NEITHER BAND EXISTS (design item 1: "It must also be present when no terminal is shown at
+           the bottom") — the session is relayed, or the shell is off, or nothing has ever been
+           placed at the bottom. Contents/Studio/Hardware must stay reachable regardless, or removing
+           the header's own copy of this bar (item 2) would make them unreachable on desktop
+           entirely. `PanelBarBand` is the same bar in the same slim shape `ShellBand`'s own
+           collapsed bar takes, minus a stream it has nothing to show. */
+        <PanelBarBand
+          key={session.id}
+          lang={lang}
+          open={slotLayout.bottomOpen}
+          onToggleOpen={() => setBottomOpen(!slotLayout.bottomOpen)}
+          barEntries={barEntries}
+          onBarPick={onPanelBarPick}
+          studioSeen={studioSeen}
+          taskControl={taskControl}
+          extraOverflowEntries={moveDownEntries}
+          reason={relayed ? 'relayed' : 'shell-off'}
         />
       )}
     </div>
@@ -361,7 +488,8 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
  * which is `ShellBand`'s alone — only `height`/`full` are read and written from here.
  */
 function StudioBand({
-  lang, open, columnHeight, onToggleOpen, onMoveToRight, onClose, onSelectCli, onSelectShell, harness, contentRef,
+  lang, open, columnHeight, onToggleOpen, onMoveToRight, onClose, barEntries, onBarPick, studioSeen,
+  taskControl, extraOverflowEntries, contentRef,
 }: {
   lang: 'pt' | 'en'
   open: boolean
@@ -371,16 +499,28 @@ function StudioBand({
   onToggleOpen: () => void
   onMoveToRight: () => void
   onClose: () => void
-  /** Present only when the target may be reached — absent, never disabled, per §1.5's gates. Picking
-   *  either DISPLACES the Studio (`openPanel('cli'|'shell', 'bottom')`), asking first only if it is
-   *  dirty — the same segment `ShellBand`'s own docked bar shows for cli/shell, now offering Studio
-   *  back the other way. */
-  onSelectCli?: () => void
-  onSelectShell?: () => void
-  harness?: string
+  /**
+   * THE ONE PANEL BAR (design item 1) — the same `entries`/`onPick` `ShellBand`'s desktop bar
+   * renders, computed once by `SessionPanel`. Picking Claude Code or Shell from it DISPLACES the
+   * Studio (`openPanel('cli'|'shell')`, at whichever slot it last sat in), asking first only if the
+   * Studio being displaced is dirty — the same segment `ShellBand`'s own bar shows, now offering
+   * Studio back the other way.
+   */
+  barEntries: readonly PanelBarEntry[]
+  onBarPick: (id: PanelBarId) => void
+  studioSeen: boolean
+  taskControl: ReactNode
+  /** "Bring [cli/shell] to the bottom" (owner feedback, 2026-09-17) — present exactly when one of
+   *  them sits in the right slot while THIS band shows the Studio; see `SessionPanel`'s own
+   *  `moveDownEntries`. Absent otherwise, never a menu entry with nothing to do. */
+  extraOverflowEntries?: readonly BandOverflowEntry[]
   contentRef?: (el: HTMLDivElement | null) => void
 }) {
   const pt = lang === 'pt'
+  /** The bar's OWN measured width (design item 7), never the window's — see `useElementWidth`'s
+   *  own header on why. */
+  const [barWidthRef, barWidth] = useElementWidth()
+  const compact = bandBarCompact(barWidth)
   const [heightPrefs, setHeightPrefs] = useState(() => {
     const p = readBandPrefs()
     return { height: p.height, full: p.full === true }
@@ -430,7 +570,18 @@ function StudioBand({
       display: 'flex', flexDirection: 'column',
       borderTop: '1px solid var(--border)', background: 'var(--bg-surface)',
     }}>
+      {/* THE COMPACT BAR (design item 7) — the exact same shape `ShellBand`'s desktop bar takes:
+          task control · panel segment (collapsing to icons below ~1100px) · spacer · ONE "⋯"
+          overflow menu · the collapse chevron as a plain icon button. The leading "STUDIO" icon and
+          label are gone with it — the segment's own lit tab already says "Studio", so the label was
+          the same fact painted twice.
+
+          THE TREE'S OWN SHOW/HIDE TOGGLE STAYS WHERE IT ALREADY IS, inside `Studio.tsx`'s own bar,
+          and does NOT also appear in this menu — a previous pass removed a floating SECOND way to
+          reach it (the collapsed-tree rail) on exactly the principle that there must be exactly ONE
+          way back once the tree is minimized. Adding it here would reopen that. */}
       <div
+        ref={barWidthRef}
         role="button"
         tabIndex={0}
         aria-expanded={open}
@@ -442,61 +593,34 @@ function StudioBand({
           cursor: 'pointer', userSelect: 'none',
         }}
       >
-        <span style={{ color: 'var(--anthropic-orange)', display: 'inline-flex' }}><FolderTree size={14} /></span>
-        <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-secondary)' }}>
-          STUDIO
-        </span>
-        {/* THE SPACER COMES BEFORE THE SEGMENT, not after — this is the whole fix for item 1. The
-            band's header must not change SHAPE with its occupant: `ShellBand`'s own desktop bar
-            (this same band, showing `cli`/`shell` instead) has always put its segment on the RIGHT,
-            right before the move/close/collapse icon buttons — a spacer, then the segment, then the
-            icons. This bar used to put the segment right after the "STUDIO" label instead, which
-            read as the segment sitting on the LEFT the moment the Studio (rather than Claude Code or
-            Shell) was the band's occupant — reported with a screenshot circling exactly that jump. */}
+        {taskControl}
+        {/* THE ONE PANEL BAR (design item 1) — `PanelBar` is the SAME component `ShellBand`'s
+            desktop bar renders, given the SAME `barEntries`/`onBarPick` `SessionPanel` computed for
+            both, so the two can never draw a different answer for the same session again — Studio
+            simply reads `on` here, since this bar IS the Studio. */}
+        <PanelBar entries={barEntries} lang={lang} studioSeen={studioSeen} onPick={onBarPick} compact={compact} />
         <span style={{ flex: 1 }} />
-        {/* THE SEGMENT ALWAYS OFFERS ALL THREE (design item 2, screenshot 2 — "when I open the
-            Studio it disappears from the tab menu"): this bar used to draw only `cli`/`shell` here,
-            because "what else can I switch to" was answered by hand a second time and Studio was
-            never asked about itself. `bandSegmentEntries` is the SAME pure function `ShellBand`'s
-            own docked segment calls, so the two can never draw a different answer for the same
-            occupant again — Studio simply reads `on` here, since this bar IS the Studio. */}
-        <div onClick={e => e.stopPropagation()}>
-          <BandSegment label={pt ? 'Qual terminal' : 'Which terminal'} isMobile={false}>
-            {bandSegmentEntries('studio', { cli: !!onSelectCli, shell: !!onSelectShell, studio: true })
-              .map(({ id, on }) => (
-                <BandSegmentTab
-                  key={id}
-                  on={on}
-                  onClick={id === 'cli' ? onSelectCli! : id === 'shell' ? onSelectShell! : () => {}}
-                  icon={id === 'studio' ? <FolderTree size={11} /> : undefined}
-                  label={id === 'studio' ? 'Studio' : targetLabel(id, harness, lang)}
-                />
-              ))}
-          </BandSegment>
-        </div>
-        {/* item 5 (screenshot 4): a distinct, conventional icon PLUS a visible label on desktop —
-            the plain icon pair here was circled as confusing beside the aside's own move control.
-            item 3 (screenshot 1): the SAME shared control every other labelled button in this
-            family (the band's own move/close/collapse trio, the Studio bar's tree toggles) renders
-            through, so none of them can drift into a different height/padding again. */}
-        <BandLabeledButton
-          isMobile={false}
-          onClick={e => { e.stopPropagation(); onMoveToRight() }}
-          label={pt ? 'Mover o Studio para a direita' : 'Move the Studio to the right'}
-          visibleText={pt ? 'Mover para a direita' : 'Move to the right'}
-        ><PanelRightOpen size={13} /></BandLabeledButton>
-        <BandLabeledButton
-          isMobile={false}
-          onClick={e => { e.stopPropagation(); onClose() }}
-          label={pt ? 'Fechar o Studio' : 'Close the Studio'}
-          visibleText={pt ? 'Fechar' : 'Close'}
-        ><X size={13} /></BandLabeledButton>
-        <BandLabeledButton
-          isMobile={false}
+        <BandOverflowMenu
+          label={pt ? 'Mais ações' : 'More actions'}
+          entries={[
+            { id: 'move', label: pt ? 'Mover para a direita' : 'Move to the right', icon: <PanelRightOpen size={14} />, onSelect: onMoveToRight },
+            ...(extraOverflowEntries ?? []),
+            { id: 'close', label: pt ? 'Fechar o Studio' : 'Close the Studio', icon: <X size={14} />, onSelect: onClose },
+          ]}
+        />
+        <button
+          className="ag-tap-icon"
+          type="button"
+          title={open ? (pt ? 'Recolher' : 'Collapse') : (pt ? 'Expandir' : 'Expand')}
+          aria-label={open ? (pt ? 'Recolher o Studio' : 'Collapse the Studio') : (pt ? 'Expandir o Studio' : 'Expand the Studio')}
           onClick={e => { e.stopPropagation(); onToggleOpen() }}
-          label={open ? (pt ? 'Recolher o Studio' : 'Collapse the Studio') : (pt ? 'Expandir o Studio' : 'Expand the Studio')}
-          visibleText={open ? (pt ? 'Recolher' : 'Collapse') : (pt ? 'Expandir' : 'Expand')}
-        >{open ? <ChevronDown size={13} /> : <ChevronUp size={13} />}</BandLabeledButton>
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            width: BAND_CONTROL_H, height: BAND_CONTROL_H, padding: 0,
+            border: 'none', borderRadius: 6, background: 'transparent',
+            color: 'var(--text-secondary)', cursor: 'pointer',
+          }}
+        >{open ? <ChevronDown size={14} /> : <ChevronUp size={14} />}</button>
       </div>
       {open && (
         <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -509,6 +633,7 @@ function StudioBand({
             aria-orientation="horizontal"
             aria-label={pt ? 'Redimensionar o Studio' : 'Resize the Studio'}
             tabIndex={0}
+            className="ag-resize-handle"
             onMouseDown={e => { e.preventDefault(); onDragStart(e.clientY) }}
             onTouchStart={e => { const p = e.touches[0]; if (p) onDragStart(p.clientY) }}
             onKeyDown={e => {
@@ -516,7 +641,7 @@ function StudioBand({
               if (e.key === 'ArrowDown') { e.preventDefault(); applyHeight(resolveBandHeight(renderedHeight - 24, columnHeight)) }
             }}
             style={{ height: 6, cursor: 'ns-resize', background: 'transparent' }}
-          />
+          ><ResizeGrip orientation="horizontal" /></div>
           <div style={{
             // NOT full: an explicit pixel height, because the ROOT above is auto-sized (content
             // decides it) and has no box of its own to hand this one a share of. FULL: the ROOT is
@@ -529,6 +654,95 @@ function StudioBand({
           }}>
             <div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} />
           </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * PanelBarBand — the panel bar with nothing docked behind it (design item 1: "It must also be
+ * present when no terminal is shown at the bottom"). Renders when the session is relayed (no
+ * `cli`/`shell` stream of its own to show) or the shell is off — the two cases that used to leave
+ * the bottom of the panel with NOTHING at all, which made Contents/Studio/Hardware unreachable on
+ * desktop the moment the header's own copy of this bar (design item 2) was removed.
+ *
+ * A SLIM BAR ONLY — the same header row `ShellBand`'s own collapsed bar takes (same height, same
+ * toggle), minus a stream it has nothing to show. Expanding it reveals one sentence naming WHY there
+ * is nothing to dock here, so "Expandir" is never a control whose one outcome is emptiness with no
+ * explanation.
+ */
+function PanelBarBand({
+  lang, open, onToggleOpen, barEntries, onBarPick, studioSeen, taskControl, extraOverflowEntries, reason,
+}: {
+  lang: 'pt' | 'en'
+  open: boolean
+  onToggleOpen: () => void
+  barEntries: readonly PanelBarEntry[]
+  onBarPick: (id: PanelBarId) => void
+  studioSeen: boolean
+  taskControl: ReactNode
+  /** "Bring [Studio/cli] to the bottom" (owner feedback, 2026-09-17) — see `SessionPanel`'s own
+   *  `moveDownEntries`. `BandOverflowMenu` itself renders nothing when this is empty. */
+  extraOverflowEntries?: readonly BandOverflowEntry[]
+  reason: 'relayed' | 'shell-off'
+}) {
+  const pt = lang === 'pt'
+  const REASON_TEXT: Record<'relayed' | 'shell-off', { en: string; pt: string }> = {
+    relayed: {
+      en: 'This session belongs to another machine — no terminal to show here.',
+      pt: 'Esta sessão pertence a outra máquina — não há terminal para mostrar aqui.',
+    },
+    'shell-off': {
+      en: 'This machine’s shell is off — turn it on in Settings → Sessions to dock a terminal here.',
+      pt: 'O shell desta máquina está desligado — ative em Configurações → Sessões para encaixar um terminal aqui.',
+    },
+  }
+  const [barWidthRef, barWidth] = useElementWidth()
+  const compact = bandBarCompact(barWidth)
+  return (
+    <div style={{
+      flexShrink: 0, display: 'flex', flexDirection: 'column',
+      borderTop: '1px solid var(--border)', background: 'var(--bg-surface)',
+    }}>
+      <div
+        ref={barWidthRef}
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        aria-label={pt ? 'Abrir ou recolher' : 'Open or collapse'}
+        onClick={onToggleOpen}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggleOpen() } }}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', minHeight: 32,
+          cursor: 'pointer', userSelect: 'none',
+        }}
+      >
+        {taskControl}
+        <PanelBar entries={barEntries} lang={lang} studioSeen={studioSeen} onPick={onBarPick} compact={compact} />
+        <span style={{ flex: 1 }} />
+        {/* "Bring the Studio to the bottom" (owner feedback, 2026-09-17) — the ONE place this gesture
+            is offered when nothing is docked here yet: `BandOverflowMenu` itself renders nothing
+            when `extraOverflowEntries` is empty, so a session with nothing on the right adds no
+            empty "⋯" nobody asked for. */}
+        <BandOverflowMenu label={pt ? 'Mais ações' : 'More actions'} entries={extraOverflowEntries ?? []} />
+        <button
+          className="ag-tap-icon"
+          type="button"
+          title={open ? (pt ? 'Recolher' : 'Collapse') : (pt ? 'Expandir' : 'Expand')}
+          aria-label={open ? (pt ? 'Recolher' : 'Collapse') : (pt ? 'Expandir' : 'Expand')}
+          onClick={e => { e.stopPropagation(); onToggleOpen() }}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            width: BAND_CONTROL_H, height: BAND_CONTROL_H, padding: 0,
+            border: 'none', borderRadius: 6, background: 'transparent',
+            color: 'var(--text-secondary)', cursor: 'pointer',
+          }}
+        >{open ? <ChevronDown size={14} /> : <ChevronUp size={14} />}</button>
+      </div>
+      {open && (
+        <div style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-tertiary)', padding: '0 12px 10px' }}>
+          {pt ? REASON_TEXT[reason].pt : REASON_TEXT[reason].en}
         </div>
       )}
     </div>
