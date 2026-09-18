@@ -1783,11 +1783,14 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           )
         }
         // `isGroup: true` creates a GROUP (§F.1) instead of an ordinary subtask — decided only at
-        // creation, `addSubtask` never offers a way to change it afterwards.
-        const ok = await mod.addSubtask(ref, String(body.title ?? ''), {
+        // creation, `addSubtask` never offers a way to change it afterwards. The new id travels
+        // back so a caller minting a group (rather than an ordinary subtask) can join members to
+        // it in the same flow — a bare `{ ok }` gave the "create a group with…" gesture nothing to
+        // join against.
+        const newId = await mod.addSubtask(ref, String(body.title ?? ''), {
           ...(body.isGroup === true ? { isGroup: true } : {}),
         })
-        return json({ ok }, ok ? 200 : 400)
+        return json({ ok: newId !== null, id: newId }, newId !== null ? 200 : 400)
       }
       if (verb === 'claim') {
         // `release: true` gives it back; anything else takes it. One verb, because a caller holding

@@ -1346,8 +1346,8 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
               onAdd={title => run(() => addSubtask(id, title))}
               onPatch={async (sid, patch) => {
                 // Same shape as `run()`, but the RESULT reaches the caller — `SubtaskTable` needs
-                // it to catch `done_needs_session` and open its own dialog instead of a swallowed
-                // refusal.
+                // it to catch `done_needs_session`/`invalid_group`/`subtask_has_sessions`/
+                // `group_field_conflict` and act on it instead of swallowing the refusal.
                 setBusy(true)
                 const result = await patchSubtask(id, sid, patch)
                 await reload()
@@ -1355,6 +1355,15 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
                 return result
               }}
               onRemove={sid => run(() => removeSubtask(id, sid))}
+              onCreateGroup={async title => {
+                // Same shape as `onPatch` above — the group menu needs the minted id back, and a
+                // failure here (a bad ref) is reported the same way any other refusal is.
+                setBusy(true)
+                const newId = await addSubtask(id, title, { isGroup: true })
+                await reload()
+                setBusy(false)
+                return newId
+              }}
               onAttach={async (subtaskId, sessionId) => {
                 setBusy(true)
                 const result = await attachSession(id, sessionId, subtaskId)

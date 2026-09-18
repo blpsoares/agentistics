@@ -39,11 +39,13 @@ import { NA, field, fmtInt, microLabel, surface } from './board'
 import { boardCopy, type Lang } from './copy'
 import { RailSection } from './RailSection'
 import { StatusChip } from './StatusChip'
+import { TaskProgressBar } from './TaskProgressBar'
 import { subtaskSessions } from './SubtaskSessions'
 import { SessionPicker } from './SessionPicker'
 import { DatePicker } from '../DatePicker'
 import { CommentsTab, Rollup, Stat } from './DeliveryDetail'
 import { subtaskRollupOf, subtaskStatsOf } from './subtaskRollup'
+import { isGroupSubtask } from './subtaskGroups'
 import {
   attachSession, detachSession, fmtDuration, patchSubtask,
   type Subtask, type TaskDetail, type TaskStatus,
@@ -76,18 +78,24 @@ export function SubtaskDetail(p: SubtaskDetailProps) {
   const stats = subtaskStatsOf(p.detail.subtaskRollups, p.subtask)
   const duration = stats ? fmtDuration(stats.deliveryMs) : null
 
-  // Every sibling sharing this subtask's `groupId` renders the identical chip list — the server
-  // files a session under ANY member into the SAME bucket, so the rollup and the stats above are
-  // already the group's; the session list must agree about which rows that covers. See
-  // `subtaskSessions`'s own doc comment and docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md §B.4.
-  const groupIds = p.subtask.groupId
-    ? p.detail.subtasks.filter(s => s.groupId === p.subtask.groupId).map(s => s.id)
-    : [p.subtask.id]
+  // §F.1 supersedes §B's shared-bucket model: a MEMBER can never hold a session (refused
+  // server-side, `subtask_in_group`), so this panel is only ever reached for a loose subtask or a
+  // GROUP — either way, its own sessions are exactly the ones filed on ITS OWN id, never a union of
+  // a group's members'. See docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md §F.3.
+  const groupIds = [p.subtask.id]
+  const view = p.detail.subtaskRollups.find(v => v.id === p.subtask.id)
 
   return (
     <div style={{ display: 'grid', gap: 12 }}>
       <div style={{ ...surface, padding: 14, display: 'grid', gap: 11 }}>
         <span style={{ fontSize: 13.5, fontWeight: 650 }}>{p.subtask.title}</span>
+
+        {/* A GROUP's own progress (§F.1) — from its members' `status`, the same round-down bar
+            `SubtaskTable` draws on the board. A loose subtask has no `groupProgress` and this
+            renders nothing, same as `TaskProgressBar`'s own "nothing to be a fraction of" rule. */}
+        {isGroupSubtask(p.subtask) && view?.groupProgress && (
+          <TaskProgressBar done={view.groupProgress.done} total={view.groupProgress.total} />
+        )}
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <div style={{ flex: '1 1 120px', display: 'grid', gap: 5, minWidth: 0 }}>
