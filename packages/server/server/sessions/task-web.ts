@@ -19,7 +19,7 @@ import {
   type Task, type TaskEvent, type TaskStatus,
 } from './task-model'
 import { boardProgress, DEFAULT_LEASE_MS, planNext } from './task-next'
-import { planAttach, sanitizeSubtaskBlockedBy } from './task-attach'
+import { checkParentGroup, planAttach, sanitizeSubtaskBlockedBy } from './task-attach'
 import { planMove } from './task-rank'
 import { compareBy } from '@agentistics/core'
 import { deleteTaskFile, deleteTaskFiles, readTaskFile, writeTaskFile } from './task-files'
@@ -364,7 +364,14 @@ export async function removeComment(commentId: string): Promise<boolean> {
   return await w.store.removeComment(commentId)
 }
 
-export async function addSubtask(ref: string, title: string): Promise<boolean> {
+/**
+ * Add a subtask — loose by default, or a GROUP (§F.1) when `o.isGroup` is true. `isGroup` is decided
+ * only here: nothing today offers a way to convert an existing subtask into a group afterwards (or
+ * a group back into a loose subtask), so a group's shape is fixed at creation.
+ */
+export async function addSubtask(
+  ref: string, title: string, o: { isGroup?: boolean } = {},
+): Promise<boolean> {
   const t = title.trim()
   if (!t) return false
   const w = await loadTaskWorld()
@@ -374,6 +381,7 @@ export async function addSubtask(ref: string, title: string): Promise<boolean> {
   await w.store.upsertSubtask({
     id: newSubtaskId(), taskId: task.id, title: t,
     status: 'todo', done: false, createdAt: now, updatedAt: now,
+    ...(o.isGroup === true ? { isGroup: true } : {}),
   })
   return true
 }
@@ -389,6 +397,11 @@ export async function addSubtask(ref: string, title: string): Promise<boolean> {
  * docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md §A.2. The guard is
  * `found.status !== 'done'`: a patch that is not actually a transition into `done` (editing the due
  * date of an already-done subtask) must not re-trigger it.
+ *
+ * `parentGroupId` (joining/leaving a group, §F.1) is checked BEFORE any of the above: a bad
+ * reference is refused outright (`invalid_group`) rather than silently dropped, because joining a
+ * group is a deliberate act and a caller who asked to join something needs to know it did not
+ * happen — see `checkParentGroup`.
  */
 export async function patchSubtask(subtaskId: string, patch: {
   title?: string
@@ -401,19 +414,37 @@ export async function patchSubtask(subtaskId: string, patch: {
   /** Sanitized against this subtask's OWN siblings — see `sanitizeSubtaskBlockedBy`. */
   blockedBy?: string[]
   /**
-   * The group this subtask shares its rollup bucket with (`Subtask.groupId`, spec
-   * 2026-09-11-alm-session-linking-ux.md §B.5). **`null` CLEARS it** — deliberately not the empty
-   * string the free-text columns above use: a group id is an identity, not prose, so removing it
-   * is a distinct act rather than "set it to nothing". An empty or whitespace-only string is read
-   * as the same clear rather than written through, because `subtaskViews`'s bucket key is
-   * `groupId ?? id` — `''` passes that `??` and would silently merge every subtask carrying it
-   * into one bucket, which is the cost-multiplying bug the group key exists to avoid.
+   * SUPERSEDED (§F) — see `Subtask.groupId`'s own docblock in `task-model.ts`. Still writable so
+   * the §B-era UI keeps working until it moves to `parentGroupId`; no longer read by `subtaskViews`.
    */
   groupId?: string | null
-}): Promise<{ ok: true } | { ok: false; message: 'no_such_subtask' | 'done_needs_session' }> {
+  /**
+   * Join (a group's own subtask id) or leave (`null`) a group — §F.1. Refused with
+   * `invalid_group` when the id does not name an actual group of this SAME task, or when this
+   * subtask is itself a group (a group can never be a member) — see `checkParentGroup`.
+   */
+  parentGroupId?: string | null
+}): Promise<
+  { ok: true } | { ok: false; message: 'no_such_subtask' | 'done_needs_session' | 'invalid_group' }
+> {
   const w = await loadTaskWorld()
   const found = w.book.subtasks.find(t => t.id === subtaskId)
   if (!found) return { ok: false, message: 'no_such_subtask' }
+
+  if (patch.parentGroupId !== undefined && patch.parentGroupId !== null) {
+    const wanted = patch.parentGroupId.trim()
+    if (wanted) {
+      const check = checkParentGroup({
+        subtaskId: found.id,
+        taskId: found.taskId,
+        isGroup: found.isGroup === true,
+        parentGroupId: wanted,
+        siblings: w.book.subtasks,
+      })
+      if (!check.ok) return { ok: false, message: 'invalid_group' }
+    }
+  }
+
   const status = patch.status ?? found.status
   if (status === 'done' && found.status !== 'done') {
     const hasSession = w.rows.some(r => r.subtaskId === subtaskId)
@@ -441,6 +472,11 @@ export async function patchSubtask(subtaskId: string, patch: {
     ...(patch.groupId !== undefined
       ? { groupId: patch.groupId?.trim() ? patch.groupId.trim() : undefined }
       : {}),
+    // Already validated above (or cleared, or left alone) — this only ever writes the trimmed,
+    // checked value, `undefined` to leave the column alone.
+    ...(patch.parentGroupId !== undefined
+      ? { parentGroupId: patch.parentGroupId?.trim() ? patch.parentGroupId.trim() : undefined }
+      : {}),
     updatedAt: new Date().toISOString(),
   })
   return { ok: true }
@@ -456,7 +492,7 @@ export async function removeSubtask(subtaskId: string): Promise<boolean> {
 
 /** The tick, expressed as what it means: a move to `done`, or back to `todo`. */
 export async function setSubtaskDone(subtaskId: string, done: boolean): Promise<
-  { ok: true } | { ok: false; message: 'no_such_subtask' | 'done_needs_session' }
+  { ok: true } | { ok: false; message: 'no_such_subtask' | 'done_needs_session' | 'invalid_group' }
 > {
   return await patchSubtask(subtaskId, { status: done ? 'done' : 'todo' })
 }
@@ -601,7 +637,7 @@ export type AttachResult =
   | {
     ok: false
     reason: 'no_such_task' | 'no_such_session' | 'no_such_subtask' | 'needs_subtask'
-      | 'wrong_delivery' | 'blocked'
+      | 'wrong_delivery' | 'blocked' | 'subtask_in_group'
     /** Set only for `reason: 'blocked'` — the subtask ids still open. */
     blockedBy?: readonly string[]
   }
@@ -625,6 +661,7 @@ export async function attachSession(
     taskIds: w.book.tasks.map(t => t.id),
     subtasks: w.book.subtasks.map(st => ({
       id: st.id, taskId: st.taskId, done: st.done, blockedBy: st.blockedBy,
+      parentGroupId: st.parentGroupId,
     })),
   })
   if (!plan.ok) {

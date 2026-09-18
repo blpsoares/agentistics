@@ -313,13 +313,45 @@ export interface Subtask {
    */
   blockedBy?: string[]
   /**
-   * Subtasks that share a `groupId` are read as ONE bucket for rollup: a session filed under any
-   * member counts for all of them, and their `subtaskViews` rollup is the SAME object, keyed by
-   * the group id rather than by each subtask's own id — never summed per member, which is what
-   * would multiply a shared session's cost by the group's size. Absent = today's behaviour
-   * unchanged: every existing subtask, with no `groupId`, is its own group of one.
+   * SUPERSEDED by `isGroup`/`parentGroupId` — see docs/superpowers/specs/
+   * 2026-09-11-alm-session-linking-ux.md §F, which replaces §B's "shared bucket" model with a real
+   * hierarchy level. `subtaskViews` (`task-report.ts`) no longer reads this field for bucketing.
+   *
+   * Kept, and still WRITABLE through `patchSubtask`, only so the already-shipped §B-era UI
+   * (`SubtaskTable.tsx`/`TaskTable.tsx`/`subtaskRollup.ts`) keeps compiling until it is updated to
+   * the §F model in a follow-on change — production data carries zero subtasks with this field set
+   * (checked directly against a live `tasks.json` before this revision), so there is nothing to
+   * migrate away from, only a UI surface to stop reading it once it is rewritten. New code should
+   * use `isGroup`/`parentGroupId` instead; this field should be removed once the UI no longer names
+   * it.
    */
   groupId?: string
+  /**
+   * A GROUP is a real hierarchy level (§F.1), not a label two subtasks share: it is a peer of a
+   * loose subtask in the listing, and it is the ONLY thing a session may be filed on inside this
+   * branch of the tree — never one of its own members (`task-attach.ts`'s `planAttach` refuses that,
+   * `subtask_in_group`). A group can never itself be a MEMBER — `parentGroupId` and `isGroup: true`
+   * never coexist on one record, enforced in `task-attach.ts`'s `checkParentGroup`.
+   *
+   * Absent reads as "not a group" — the same convention every optional column here follows. Decided
+   * at creation (`addSubtask`'s `isGroup` option) and not changed afterwards by this round of work;
+   * nothing here refuses a future patch, but nothing offers one either.
+   */
+  isGroup?: boolean
+  /**
+   * The GROUP this subtask is a MEMBER of — the group's own subtask id, from the SAME task
+   * (`task-attach.ts`'s `checkParentGroup`, mirroring `sanitizeSubtaskBlockedBy`'s same-parent
+   * rule). A member NEVER receives a session of its own (refused at filing time,
+   * `subtask_in_group`) and therefore gets no rollup bucket of its own either — `subtaskViews`
+   * (`task-report.ts`) excludes it entirely rather than publishing an always-empty one. It still has
+   * its own `status`, `assignee`, dates, comments and files: those exist independently of whether it
+   * ever accounted for a session, and its `status` is what the group's own progress percentage
+   * (`groupProgress`, `@agentistics/core`) is computed from.
+   *
+   * `null` CLEARS it (leaves the group) — the same "an identity is removed, not blanked to an empty
+   * string" convention `groupId` already established. Absent reads as "not a member."
+   */
+  parentGroupId?: string
 }
 
 /**
@@ -333,6 +365,26 @@ export function taskShared(task: Pick<Task, 'shared'>): boolean {
 /** `done` and `status` are one fact written twice; this keeps them from disagreeing. */
 export function subtaskDone(status: TaskStatus): boolean {
   return status === 'done'
+}
+
+/** Is this subtask a GROUP (§F.1)? The one reading of `Subtask.isGroup`, so nothing else has to
+ *  write `=== true` inline and risk reading `false`/`undefined` differently in two places. */
+export function isGroupSubtask(s: Pick<Subtask, 'isGroup'>): boolean {
+  return s.isGroup === true
+}
+
+/** Is this subtask a MEMBER of a group (§F.1)? The one reading of `Subtask.parentGroupId`. */
+export function isGroupMember(s: Pick<Subtask, 'parentGroupId'>): boolean {
+  return Boolean(s.parentGroupId)
+}
+
+/**
+ * Every member of a group, in the order they were created — the set a group's own progress
+ * (`groupProgress`, `@agentistics/core`) is computed over, and the set `task-report.ts`'s
+ * `groupVisibility` reveals to a session filed on the group.
+ */
+export function groupMembers(groupId: string, subtasks: readonly Subtask[]): Subtask[] {
+  return subtasks.filter(s => s.parentGroupId === groupId)
 }
 
 /**
