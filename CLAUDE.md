@@ -73,7 +73,11 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── config.ts            → path constants + PORT (api+mcp, 47291) + WEB_PORT (dashboard, PORT+1=47292); binary mode binds BOTH
   ├── utils.ts             → createLimiter, safeReadJson, safeReadDir, safeStat
   ├── git.ts               → decodeProjectDir, getGitFileStats, getProjectGitStats
-  ├── jsonl.ts             → parseSessionJsonl, makeEmptySession, classifyAgentFile, EXT_TO_LANG
+  ├── jsonl.ts             → ClaudeParseState + emptyClaudeParse/foldClaudeParse/finishClaudeSession
+  │                          (the RESUMABLE walk), parseSessionJsonl (the one-shot wrapper),
+  │                          makeEmptySession, classifyAgentFile, EXT_TO_LANG
+  ├── transcript-cursor.ts → **pure**: may a stored byte offset be resumed from, and what to read
+  ├── transcript-state.ts  → the walk kept per live transcript; reads only what is new
   ├── health.ts            → runHealthChecks, analyzeToolHealthIssues
   ├── rates.ts             → pricing scraper + BRL rate cache
   ├── sse.ts               → SSE clients, chokidar watcher, serveStatic, maybeSpawnWatcher
@@ -474,13 +478,24 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          convention would have worked and been one refactor from breaking; a
   │                          socket cannot break, and `shell-isolation.test.ts` asserts all of it
   │                          over the module SOURCE (comments stripped first — these modules are
-  │                          REQUIRED to explain themselves in terms of the registry). **Two gates,
-  │                          and absent reads OFF**: `CAPS.localShell` decides the security answer
-  │                          and `preferences.shellEnabled` may only ever NARROW it — a raw shell is
+  │                          REQUIRED to explain themselves in terms of the registry). **Two gates**:
+  │                          `CAPS.localShell` decides the security answer and
+  │                          `preferences.shellEnabled` may only ever NARROW it — a raw shell is
   │                          strictly more powerful than the chat `chat-gate.ts` already calls the
   │                          most powerful thing this server does, because the chat at least runs a
-  │                          NAMED assistant CLI. Enforced in `index.ts` before the routes, not only
-  │                          in the UI, and a CENTRAL refuses outright. **Lifetime is a CEILING
+  │                          NAMED assistant CLI. **OWNER DECISION, 2026-09-14: an ABSENT preference
+  │                          now reads as ON** (subject to `capable`), not off — Shell moved into the
+  │                          bottom bar as one of three standing entries (`panelBar.ts`, alongside
+  │                          Claude Code and Studio) and the call is that it belongs there from the
+  │                          first run, the same way the session's own Claude Code pane always has.
+  │                          `editor-gate.ts` (the Studio) carries the identical reversal for the
+  │                          identical reason; `chat-gate.ts` and the `shareMode` migration each keep
+  │                          their OWN strict "absent reads OFF" reading, unchanged and un-argued-with
+  │                          — this is a decision about these two switches, not a new house rule. An
+  │                          explicit `false` is still respected exactly as before, and the SECURITY
+  │                          gate (`capable`) is exactly as strict as it always was. Enforced in
+  │                          `index.ts` before the routes, not only in the UI, and a CENTRAL refuses
+  │                          outright. **Lifetime is a CEILING
   │                          (`SHELL_CAP` = 8) and never a timer**: a TTL kills the `bun test` that
   │                          finished at minute 61 at an hour nobody was watching and needs a timer
   │                          running forever, while a ceiling is one check on open and only ever
@@ -1655,6 +1670,76 @@ The numbers moved to `~/.claude/projects/<project>/<session-id>/subagents/agent-
          ↓
     /api/data → useData() → useDerivedStats() → React components
 ```
+
+## A LIVE transcript is read by what it has WRITTEN SINCE LAST TIME
+
+`parse-cache.ts` spares a transcript that has not changed, keyed on (mtime, size). A LIVE one
+changes on every turn, so it misses on every rebuild — and `parseSessionJsonl` / `cachedEnrich` then
+read the whole file again from byte zero and re-`JSON.parse` every line they had already parsed.
+`buildApiResponse` re-runs on a 30 s stale-while-revalidate tick for as long as anybody is watching
+a dashboard, and the bill scales with (live sessions) × (transcript size). **This is what took this
+machine down twice** — 16 transcripts written to inside 30 minutes totalling 99,4 MB, the three
+largest at 26,4 / 21,4 / 12,4 MB, and `agentop server` holding 66–77 % of a core for five hours.
+
+`transcript-cursor.ts` (**pure**) decides; `transcript-state.ts` reads and keeps the walk. The rules:
+
+- **A PARTIAL LINE IS NEVER CONSUMED.** A read of a file another process is appending to lands
+  wherever that process got to, so the last line is routinely half-written. `consumedEnd` stops at
+  the last newline — the mirror of `windowLines()` in `transcript-window.ts`, which drops the
+  partial line at the START of a tail window. It makes ONE exception, and it had to: a file that has
+  STOPPED with no terminating newline has a complete last line, which the one-shot parser counts,
+  and declining it loses a turn silently. A proper prefix of a JSON object is never itself a valid
+  JSON object (the first point the braces balance IS the end), so "does the trailing region parse as
+  an object" separates the two exactly. The repo's own `parse-cache-jsonl.test.ts` fixture ends
+  without a newline and is what caught this.
+- **AN OFFSET IS ONLY AS GOOD AS THE BYTES IT SITS BEHIND.** The size may only grow, and the
+  ANCHOR — the 256 bytes immediately before the cursor — is re-read and compared on every resume, in
+  the SAME `read()` that fetches the new bytes. A same-length rewrite is caught by the mtime, a
+  longer rewrite by the anchor. Either way the file is read WHOLE once and the cursor re-established:
+  a walk that cannot be resumed safely costs exactly one re-read, never a number assembled out of
+  two files.
+- **COMPACTION IS NOT A REWRITE, AND THAT WAS MEASURED.** Claude Code compacts by APPENDING a
+  `compact_boundary` line and the summary, leaving the earlier history in place — verified on a real
+  transcript, two boundaries at lines 2992 and 6141 of 6229 with all 2991 earlier lines still there.
+  So no rule is needed FOR compaction; the rewrite rule above exists in case a harness ever compacts
+  the other way, and catches it without knowing it happened.
+- **EVERY ACCUMULATOR MOVES ONLY FORWARD**, which is what makes resuming sound: folding 1..n then
+  n+1..m gives the same state as folding 1..m. `ClaudeParseState` (jsonl.ts), `ActiveTimeState`
+  (core/activeTime.ts) and `AgentMetricsState` (agent-metrics.ts) are the three, each with
+  `empty` / `fold` / `finish`, and each one-shot export is now a wrapper over its own fold — so the
+  existing tests pin the behaviour rather than describing a second implementation of it.
+- **AGENT ROWS ARE PRICED AT FINISH, NOT AT FOLD.** The model id they price against is the FIRST
+  `claude-*` in the whole transcript, which a walk that is still reading has not necessarily seen.
+  Pricing where the row is built would bill an early agent at whatever was known when the poll that
+  found it landed — a cost that depends on when somebody opened the dashboard.
+- **EVERY COLLECTION IS COPIED OUT OF `finishClaudeSession`.** When the parser held its accumulators
+  as locals the caller owned them outright; they now belong to a walk the next poll appends to, so
+  handing out the live array would give a caller a `message_hours` that grows under it and let
+  anything that edits what it was given corrupt the numbers from then on.
+- **The walk is kept per FILE, never per caller** — the facts a transcript carries do not depend on
+  who asked, so `cachedParseSession` and `cachedEnrich` finish from the same fold. The memo is
+  bounded twice (`STATE_TTL_MS`, `MAX_STATES`), and both bounds are cheap to be wrong about: a
+  dropped walk costs one full re-read, which is what every read cost before this existed.
+- **`cachedEnrich` was SIX passes over a second full copy of the file** and `parseSessionJsonl` four
+  over its own; they are one now. `contextTokensAny` and `modelFirst200` exist because the two paths
+  asked those two questions under DIFFERENT rules (the enrichment path capped its model scan at 200
+  lines and applied no usage dedupe), and unifying them would silently re-price sessions. Two
+  integers is what it costs to keep both callers answering exactly what they answered before.
+
+**Measured on this machine, 8 of the largest live transcripts (232 MB), 20 polls each**, against a
+differential over every one of the 484 real transcripts here (identical `SessionMeta` byte for byte,
+whole-file vs. grown-in-18-uneven-slices, and identical `EnrichResult` over 489):
+
+| | before | after | |
+|---|---|---|---|
+| `cachedEnrich` (most Claude sessions) | 31.476 ms | 1.468 ms | **21x** |
+| `cachedParseSession`, the read+parse in it | 57.441 ms | 1.304 ms | **44x** |
+| bytes read | 4.533 MB | 248 MB | **18x less** |
+
+**STATED LIMIT, and it is now the dominant cost on the `cachedParseSession` path**: the rest of that
+row (15.327 ms after) is `getSessionFileStats`. `git.ts` memoizes on (root, window, HEAD), and a
+LIVE session's window ends at its last turn — so the key moves on every turn and the memo misses
+every time, which is the same shape of bug in a different file. Untouched here on purpose.
 
 ## Archive mirror (survives Claude's 30-day cleanup)
 

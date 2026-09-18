@@ -134,6 +134,17 @@ export interface CliStrings {
    */
   sessConversationBlind: (harness: string) => string
   /**
+   * Said on a hosted, ENDED row of a harness whose only exact link needs the LIVE process
+   * (`conversationLinkGoneForever`) and never got one — antigravity today.
+   *
+   * A DIFFERENT fact from `sessConversationBlind`: that one is a harness that can never report a
+   * link at all, this one is a harness that can, and this particular session's one chance (this
+   * machine's own several seconds right after spawn, plus every poll while it was alive) simply
+   * passed before it happened — a first-run trust dialog nobody answered, most often. Once the
+   * process has exited, nothing on this machine can recover the id it would have named.
+   */
+  sessConversationLost: (harness: string) => string
+  /**
    * Said on a session that IS visibly blocked, but whose dialog nobody has read.
    *
    * A different fact from `sessApprovalBlind`, which is about not being able to SEE the block. This
@@ -547,6 +558,8 @@ const EN: CliStrings = {
   sessDirGone: 'this directory no longer exists — a removed worktree, most likely. Reopening will not work until it is back.',
   sessConversationBlind: (harness: string) =>
     `${harness} never reports which conversation a session it started is writing, so agentop cannot record the link — anything offered to reopen here is inferred from the directory.`,
+  sessConversationLost: (harness: string) =>
+    `this session ended before agentop could capture which conversation it was — ${harness} only names it in its own log while the process is alive, and that process is gone. It cannot be reopened.`,
   sessApproveBlind: (harness: string) =>
     `nobody has read ${harness}'s dialog, so agentop does not know which key answers it — attach to this session to answer it there.`,
   sessPrompted: (id: string) => `sent to ${id}.`,
@@ -888,6 +901,8 @@ const PT: CliStrings = {
   sessDirGone: 'este diretório não existe mais — provavelmente uma worktree removida. Reabrir não vai funcionar enquanto ele não voltar.',
   sessConversationBlind: (harness: string) =>
     `o ${harness} nunca informa qual conversa uma sessão iniciada por ele está escrevendo, então o agentop não consegue registrar o vínculo — o que for oferecido para reabrir aqui é inferido pelo diretório.`,
+  sessConversationLost: (harness: string) =>
+    `esta sessão terminou antes que o agentop conseguisse capturar qual conversa ela era — o ${harness} só informa isso no próprio log enquanto o processo está vivo, e esse processo já se foi. Não é possível reabri-la.`,
   sessApproveBlind: (harness: string) =>
     `ninguém leu o diálogo do ${harness}, então o agentop não sabe qual tecla responde — anexe na sessão para responder lá.`,
   sessPrompted: (id: string) => `enviado para ${id}.`,

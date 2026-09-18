@@ -72,13 +72,8 @@ import { Login } from './components/Login'
 import { ModeSwitch } from './components/nav/ModeSwitch'
 import { TopBar } from './components/nav/TopBar'
 import { COST_BASIS_W, FULL_BAR_W, MIN_BAR_W, headerFit, stripPadding } from './lib/headerFit'
-import { closeArtifacts, openArtifacts, useArtifacts } from './lib/artifactsStore'
-import { isPanelShown, rightSlotShowing, usePanelSlots } from './lib/panelSlots'
-import { getCentralMachine } from './lib/centralMachinePick'
-import { targetLabel } from './lib/terminalTarget'
-import {
-  headerSwitcherEntries, studioLocationLabel, type HeaderSwitcherGates, type HeaderSwitcherPanel,
-} from './lib/sessionHeaderSwitcher'
+import { openArtifacts } from './lib/artifactsStore'
+import { isPanelShown, usePanelSlots } from './lib/panelSlots'
 import { shouldHandleGlobally } from './lib/studioShortcuts'
 import { runStudioShortcut } from './lib/studioSearchRequest'
 import { SessionsAside } from './components/nav/SessionsAside'
@@ -1394,92 +1389,6 @@ export function writeStudioSeen(storage: Pick<StorageLike, 'setItem'>): void {
   try { storage.setItem(STUDIO_SEEN_KEY, '1') } catch { /* private mode */ }
 }
 
-/**
- * THE ONE TAB GROUP FOR THE RIGHT SLOT (design item 2, screenshot 6; owner follow-up, screenshot 5)
- * — `Conteúdo · Studio · Claude Code · Shell · Hardware`, replacing three separate header buttons
- * (the Contents icon, the Studio button, the hardware chip) that could each answer "is the right
- * slot showing me" independently and therefore disagree (screenshot 3: the Contents button and the
- * Studio button lit at once). The aside's OWN internal tab row (the same four/five choices, drawn a
- * second time above the panel itself) is removed on desktop for the same reason — see
- * `SessionsPage.tsx`'s `rightSlotHeader`.
- *
- * ONE SEGMENTED CONTROL, not five separate pills (screenshot 5: "I want them all in ONE tab menu").
- * `BandSegment`/`BandSegmentTab` are the SAME components the bottom band's own `Claude Code | Shell
- * | Studio` segment renders through (`bandControls.tsx`) — the visual language the owner pointed at
- * — so this row can never drift into its own bordered-pill-per-entry look again.
- *
- * `headerSwitcherEntries` decides which entry is `on` (Studio in EITHER slot; everything else only
- * in the right one) and, for Studio, where it sits — rendered as a small tag folded into the label
- * itself (`studioLocationLabel`), which is what makes it part of the tab's own accessible name
- * without a second `aria-label` to keep in sync. The first-open dot (§2/W1-A) stays on the Studio
- * entry's icon alone.
- */
-export function SessionHeaderSwitcher({
-  entries, lang, studioSeen, cliLabel, shellLabel, onPick,
-}: {
-  entries: readonly { id: HeaderSwitcherPanel; on: boolean; studioAt?: 'side' | 'bottom' }[]
-  lang: string
-  studioSeen: boolean
-  cliLabel: string
-  shellLabel: string
-  onPick: (id: HeaderSwitcherPanel) => void
-}) {
-  const pt = lang === 'pt'
-  const meta: Record<string, { label: string; icon: React.ReactNode; title: string }> = {
-    contents: {
-      label: pt ? 'Conteúdo' : 'Contents',
-      icon: <FileText size={14} />,
-      title: pt
-        ? 'Conteúdo desta sessão — atividade, galeria, skills, subagentes e mais'
-        : 'This session’s contents — activity, gallery, skills, subagents and more',
-    },
-    studio: {
-      label: 'Studio',
-      icon: (
-        <span style={{ position: 'relative', display: 'flex' }}>
-          <FolderTree size={14} />
-          {!studioSeen && (
-            <span aria-hidden="true" style={{
-              position: 'absolute', top: -2, right: -2, width: 6, height: 6,
-              borderRadius: '50%', background: 'var(--anthropic-orange)',
-            }} />
-          )}
-        </span>
-      ),
-      title: pt
-        ? 'Agentistics Studio (beta) — os arquivos desta sessão em árvore, com busca e editor'
-        : 'Agentistics Studio (beta) — this session’s files as a tree, with search and an editor',
-    },
-    cli: { label: cliLabel, icon: <TerminalSquare size={14} />, title: cliLabel },
-    shell: { label: shellLabel, icon: <TerminalSquare size={14} />, title: shellLabel },
-    hardware: {
-      label: pt ? 'Hardware' : 'Hardware',
-      icon: <Cpu size={14} />,
-      title: pt ? 'Recursos de hardware' : 'Hardware resources',
-    },
-  }
-  return (
-    <BandSegment label={pt ? 'O que mostrar' : 'What to show'} isMobile={false}>
-      {entries.map(({ id, on, studioAt }) => {
-        const m = meta[id]!
-        const label = id === 'studio' && studioAt
-          ? `${m.label} · ${studioLocationLabel(studioAt, pt)}`
-          : m.label
-        return (
-          <BandSegmentTab
-            key={id}
-            on={on}
-            onClick={() => onPick(id)}
-            icon={m.icon}
-            label={<span>{label}</span>}
-            title={m.title}
-          />
-        )
-      })}
-    </BandSegment>
-  )
-}
-
 export default function AppLayout() {
   const location = useLocation()
   const navigate = useNavigate()
@@ -2031,36 +1940,25 @@ export default function AppLayout() {
     return () => ro.disconnect()
   }, [actionsEl])
 
-  // The compensating padding is not space the bar may draw in, so it is taken off first.
-  /** The artifacts panel's open flag and count — see `artifactsStore` for why it is not a prop. */
-  const artifacts = useArtifacts()
   /**
-   * THE STUDIO BUTTON'S OWN STATE (§2 of the slots/references design). `studioOn` is "on screen in
-   * ANY slot" — `panelSlots.ts`'s own `isPanelShown`, which is `true` whether the Studio sits in the
+   * THE STUDIO'S FIRST-OPEN DOT (§2 of the slots/references design). `studioOn` is "on screen in ANY
+   * slot" — `panelSlots.ts`'s own `isPanelShown`, which is `true` whether the Studio sits in the
    * right slot, the bottom slot, or a collapsed bottom band (the panel is still THERE, only its
-   * screen is hidden). This used to read a bespoke `useStudioShown` flag published by
-   * `ArtifactsAside` back when the Studio was a MODE of that one panel; now that panels/slots exist,
-   * the layout itself is the single source of truth for "is the Studio on screen".
+   * screen is hidden).
    *
-   * `headerRightShowing` is the SEPARATE question the Contents button asks — what does the RIGHT
-   * slot specifically show — through `rightSlotShowing`, the one selector every "is this pressed"
-   * reading in this header goes through. Before this existed, the Contents button's `aria-pressed`
-   * read `artifacts.open` directly: with `cli`/`shell` holding the slot, pressing the button flipped
-   * the flag while the screen kept showing the terminal — see C2.
+   * `studioSeen` replaces the Studio entry's old `NewTag`: a corner DOT rather than a word, cleared
+   * for good the first time the Studio opens. Guarded like every other `localStorage` flag in this
+   * file (`readStudioSeen`/`writeStudioSeen`, pulled out as pure functions below `AppLayout` so a
+   * test can hand in a storage whose accessors throw) — a private window or a wiped store just shows
+   * the dot every time, which is the safer of the two wrong answers.
    *
-   * `studioSeen` replaces the button's old `NewTag`: a corner DOT rather than a word, so the button
-   * is the same width whether or not it has been pressed yet, cleared for good the first time it
-   * opens. Guarded like every other `localStorage` flag in this file (`readStudioSeen`/
-   * `writeStudioSeen`, pulled out as pure functions below `AppLayout` so a test can hand in a
-   * storage whose accessors throw) — a private window or a wiped store just shows the dot every
-   * time, which is the safer of the two wrong answers.
-   *
-   * CLEARED FROM ONE PLACE — an effect on `studioOn` turning true, not this button's own `onClick`
-   * — so every route into the Studio marks the dot seen the same way: this button, the mobile
-   * menu's row (`SessionsPage.tsx`) and the right switcher's own Studio tab all flip `studioOn`, and
-   * only one of those used to clear the dot.
+   * CLEARED FROM ONE PLACE — an effect on `studioOn` turning true, not any one button's own
+   * `onClick` — so every route into the Studio marks the dot seen the same way, wherever the panel
+   * bar that draws it happens to render (the bottom band's own bar now, never the header — see
+   * `lib/panelBar.ts`'s `PanelBar`). Published on `AppContext` (`studioSeen`) so the bar can read it
+   * from wherever `SessionsPage`/`SessionPanel` mount it.
    */
-  const { layout: slotLayout, openPanel: openSlotPanel, closePanel: closeSlotPanel } = usePanelSlots()
+  const { layout: slotLayout } = usePanelSlots()
   const studioOn = isPanelShown(slotLayout, 'studio')
   const [studioSeen, setStudioSeen] = useState(() => readStudioSeen(localStorage))
   useEffect(() => {
@@ -2068,7 +1966,6 @@ export default function AppLayout() {
     setStudioSeen(true)
     writeStudioSeen(localStorage)
   }, [studioOn, studioSeen])
-  const headerRightShowing = rightSlotShowing(slotLayout, artifacts.open)
 
   /**
    * Active sessions only — the fleet's own dimension (see `FiltersBar`'s doc comment on
@@ -2214,7 +2111,7 @@ export default function AppLayout() {
   // A CENTRAL's fleet is the RELAY's, for the machine the aside's picker chose. Set once, here,
   // because the poller is module-scoped and every surface reads the same snapshot.
   useEffect(() => { setFleetSourceCentral(isCentral) }, [isCentral])
-  const { fleet: headerFleet, act: headerFleetAct, unsupported: headerFleetUnsupported, refresh: headerFleetRefresh } = useFleet(lang === 'pt' ? 'pt' : 'en')
+  const { fleet: headerFleet, act: headerFleetAct, unsupported: headerFleetUnsupported } = useFleet(lang === 'pt' ? 'pt' : 'en')
   /**
    * "Active only" needs a fleet to intersect against, on EITHER page. An exposed profile with no
    * host power, or a central with no machine chosen, both report `unsupported` here — offering the
@@ -2569,7 +2466,13 @@ export default function AppLayout() {
         if (rates.brlRate && rates.brlRate > 1) setBrlRate(rates.brlRate)
         if (rates.pricing) {
           for (const [id, price] of Object.entries(rates.pricing)) {
-            MODEL_PRICING[id] = price
+            // `/api/rates` states the 5-minute-TTL rate only (see `rates.ts`, which skips the
+            // page's 1h column). The 1-hour rate is derived here the same way MODEL_PRICING's own
+            // built-in table derives it: 2x base input, never fetched or guessed — see
+            // `packages/core/src/types.ts`'s `cacheWrite1h`. Without this, a live/community/
+            // official price replacing the built-in row would silently drop the field and price
+            // every 1h-TTL cache write at `undefined` (NaN) the moment `/api/rates` responds.
+            MODEL_PRICING[id] = { ...price, cacheWrite1h: price.input * 2 }
           }
         }
       })
@@ -3381,6 +3284,7 @@ export default function AppLayout() {
     // The one way a page can make the line above catch up after `SessionsSettings` flips the
     // preference: ask the server again, never mirror the toggle's own guess into context.
     refreshTeamSession,
+    studioSeen,
     editorAutosave, setEditorAutosave,
     me: iam?.account,
     teams: teamsList,
@@ -3432,15 +3336,10 @@ export default function AppLayout() {
           }}>
             {selectedFleetSession.title}
           </span>
-          <SessionTitleFlag
-            session={{
-              id: selectedFleetSession.id, title: selectedFleetSession.title,
-              ...(selectedFleetSession.harness ? { harness: selectedFleetSession.harness } : {}),
-              ...(selectedFleetSession.task ? { task: selectedFleetSession.task } : {}),
-            }}
-            lang={lang === 'pt' ? 'pt' : 'en'}
-            onLinked={headerFleetRefresh}
-          />
+          {/* THE TASK CONTROL MOVED DOWN (design item 3) — `SessionTitleFlag` now renders at the
+              bottom bar's left end (`SessionPanel.tsx`'s `taskControl`), with a clipboard icon
+              instead of a flag. The header is left with only the title and its state, per the
+              owner's drawing: "the top bar becomes clean and dedicated to the title etc." */}
           {/* Gives up before the title does: the name is what identifies the session, and the state
               is repeated on its own row in the aside two centimetres away. */}
           <span style={{
@@ -3491,62 +3390,13 @@ export default function AppLayout() {
           arrow in the owner's own screenshot points from this exact spot to a new hanging tab next
           to Filtros. See `sessionMetricsTab` near the end of this bar. */}
 
-      {/* THE ONE TAB GROUP FOR THE RIGHT SLOT (design item 2, screenshot 6; owner follow-up,
-          screenshot 5) — replaces the separate Contents button, Studio button and hardware chip
-          that used to sit here (and, on this route, the hardware chip that sat further LEFT among
-          the machine-wide controls — a question about THIS session's right slot belongs on the
-          session side of the rule this bar otherwise draws). Each used to answer "am I lit"
-          independently — the Contents button read `artifacts.open` on its own, the Studio button
-          read `isPanelShown(slotLayout, 'studio')` — which is exactly how two of them lit at once
-          (screenshot 3): the Studio switcher moved the slot to Studio while the Contents button's
-          own flag stayed `true`. `headerSwitcherEntries` is now the ONE place that decides which
-          entries are `on`, reading `headerRightShowing` (`rightSlotShowing`) — the same selector
-          the right slot's own content branches read in `SessionsPage.tsx` — and `slotLayout.bottom`
-          for the Studio's own tag, so this row and the panel on screen cannot disagree.
-
-          `relayed`: this session belongs to ANOTHER machine, reached through a central's relay —
-          no `cli`/`shell` stream of its own exists to show, the same fact `SessionPanel`'s own
-          `relayed` reads. `hardwareOffered`: hardware reads THIS machine's own process list, which
-          is meaningless (and was always excluded, `!isCentral`) on a central.
-
-          CLICKING STUDIO IS DIFFERENT FROM CLICKING EVERYTHING ELSE (owner follow-up, screenshot
-          5): unlit → `openSlotPanel('studio')` with NO explicit slot, which resolves to
-          `lastSlot['studio']` — "opens in its last slot", not forced to the right the way every
-          other entry is; lit → `closeSlotPanel('studio')`, which closes it wherever it currently
-          sits (`panelSlots.ts`'s `hidePanel` already asks first when it holds unsaved buffers,
-          regardless of which slot). Every other entry but Contents still moves the RIGHT SLOT
-          explicitly (`openSlotPanel(id, 'right')`) and closes only the right slot when lit — a
-          Studio sitting in the BOTTOM band is not what THEIR click means, and clicking one of them
-          must never reach into the band to close it. Contents keeps going through the OLD
-          `artifactsStore` (`openArtifacts`/`closeArtifacts`), deliberately — see `panelSlots.ts`'s
-          own header on why `contents` carries no field of its own there. */}
-      {selectedFleetSession && (
-        <SessionHeaderSwitcher
-          entries={headerSwitcherEntries(headerRightShowing, slotLayout.bottom, {
-            editorEnabled: appCtx.editorEnabled === true,
-            shellEnabled: appCtx.shellEnabled === true,
-            relayed: getCentralMachine() !== null,
-            hardwareOffered: !isCentral,
-          })}
-          lang={lang}
-          studioSeen={studioSeen}
-          cliLabel={targetLabel('cli', selectedFleetSession.harness, lang === 'pt' ? 'pt' : 'en')}
-          shellLabel={targetLabel('shell', selectedFleetSession.harness, lang === 'pt' ? 'pt' : 'en')}
-          onPick={id => {
-            if (id === 'contents') {
-              if (headerRightShowing === 'contents') closeArtifacts(); else openArtifacts()
-              return
-            }
-            if (id === 'studio') {
-              if (studioOn) { closeSlotPanel('studio'); return }
-              openSlotPanel('studio')
-              return
-            }
-            if (headerRightShowing === id) { closeSlotPanel(id); return }
-            openSlotPanel(id, 'right')
-          }}
-        />
-      )}
+      {/* THE PANEL SWITCHER MOVED DOWN TOO (this pass's design item 1/2) — `Conteúdo · Studio ·
+          Claude Code · Shell · Hardware` no longer renders here at all. It is now the bottom band's
+          own bar (`SessionPanel.tsx`'s `PanelBar`, computed there from the very `slotLayout`/
+          `artifactsStore` state this header used to read on its own) — one panel bar, not two
+          copies of it agreeing by convention. The header is left with only the title, the
+          magnifier and the "⋯" session-actions menu, per the owner's drawing: "the top bar becomes
+          clean and dedicated to the title etc." */}
 
       {selectedSessionRow && (
         <SessionActions

@@ -3,8 +3,9 @@ import { editorAllowed } from './editor-gate'
 import { routeCapability } from '../capability-guard'
 
 describe('editorAllowed', () => {
-  test('absent preference reads as OFF', () => {
-    expect(editorAllowed(true, undefined)).toBe(false)
+  // Owner decision, 2026-09-14: Studio ships on by default — an absent preference now reads as ON.
+  test('absent preference reads as ON when capable', () => {
+    expect(editorAllowed(true, undefined)).toBe(true)
   })
   test('preference true but not capable is still OFF — the preference only narrows', () => {
     expect(editorAllowed(false, true)).toBe(false)
@@ -12,8 +13,18 @@ describe('editorAllowed', () => {
   test('capable and explicitly on is ON', () => {
     expect(editorAllowed(true, true)).toBe(true)
   })
-  test('preference explicitly false is OFF even when capable', () => {
+  test('preference explicitly false is OFF even when capable — the explicit opt-out is respected', () => {
     expect(editorAllowed(true, false)).toBe(false)
+  })
+  test('absent preference on an incapable profile is still OFF — the security gate is unchanged', () => {
+    expect(editorAllowed(false, undefined)).toBe(false)
+  })
+
+  // Plant: the OLD strict rule (`preference === true`) — this must now FAIL, proving the reversal
+  // actually shipped rather than merely being asserted above.
+  test('plant: the old strict reading no longer matches this module\'s behaviour', () => {
+    const oldStrictReading = (capable: boolean, preference: boolean | undefined) => capable && preference === true
+    expect(editorAllowed(true, undefined)).not.toBe(oldStrictReading(true, undefined))
   })
 })
 
