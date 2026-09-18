@@ -95,7 +95,6 @@ interface T {
   pasteDenied: string
   resize: string
   retry: string
-  fullscreen: string
   endThis: string
   whichTerminal: string
   openOnRight: string
@@ -135,7 +134,6 @@ const TXT: Record<'pt' | 'en', T> = {
     pasteDenied: 'Could not read the clipboard — check the browser permission.',
     resize: 'Drag to resize the shell',
     retry: 'Try again',
-    fullscreen: 'Open the shell full screen',
     endThis: 'End this terminal',
     whichTerminal: 'Which terminal',
     openOnRight: 'This is open in the panel on the right. Pick it again to bring it back here.',
@@ -168,7 +166,6 @@ const TXT: Record<'pt' | 'en', T> = {
     pasteDenied: 'Não foi possível ler a área de transferência — verifique a permissão do navegador.',
     resize: 'Arraste para redimensionar o shell',
     retry: 'Tentar de novo',
-    fullscreen: 'Abrir o shell em tela cheia',
     endThis: 'Encerrar este terminal',
     whichTerminal: 'Qual terminal',
     openOnRight: 'Isto está aberto no painel à direita. Selecione de novo para trazer de volta aqui.',
@@ -214,8 +211,15 @@ export interface ShellBandProps {
    * unwatch discipline — which is the entire reason this is a prop and not a second component.
    */
   placement?: 'docked' | 'dedicated' | 'aside'
-  /** Offered only when there is somewhere to go: the band's "take the whole screen" control. */
-  onOpenFullscreen?: () => void
+  /**
+   * Offered only when there is somewhere to go: the band's "take the whole screen" control.
+   *
+   * Takes the TARGET this band is showing right now (`cli`/`shell`) — never a bare callback. It
+   * used to be one, wired unconditionally to the shell's own dedicated screen, so pressing "full
+   * screen" while reading the Claude Code pane opened the shell instead: the caller has no way to
+   * know which of the two panes this band's own local `target` is on without being told.
+   */
+  onOpenFullscreen?: (target: TerminalTarget) => void
   /**
    * THE ONE PANEL BAR (design item 1) — `Conteúdo · Studio · Claude Code · Shell · Hardware`,
    * computed by the caller (`SessionPanel`, which has `panelSlots`/`artifactsStore` in scope) through
@@ -782,8 +786,15 @@ export function ShellBand({
     // like the entries above: it names what sits on the RIGHT, not what this band is doing, and a
     // collapsed band is still a valid place to bring something into.
     ...(extraOverflowEntries ?? []),
+    // The LABEL names whichever pane THIS band is actually showing (`target`) — never a fixed
+    // "shell" sentence, which is what sent a reader pressing this while reading the Claude Code
+    // pane to the shell's own screen instead. See `paneForTarget`'s own header.
     ...(prefs.open && streamId && onOpenFullscreen ? [{
-      id: 'fullscreen', label: t.fullscreen, icon: <Maximize2 size={14} />, onSelect: onOpenFullscreen,
+      id: 'fullscreen',
+      label: lang === 'pt'
+        ? `Abrir ${targetLabel(target, harness, lang)} em tela cheia`
+        : `Open ${targetLabel(target, harness, lang)} full screen`,
+      icon: <Maximize2 size={14} />, onSelect: () => onOpenFullscreen(target),
     }] : []),
     ...(prefs.open && shell && target === 'shell' ? [{
       id: 'end', label: t.close, icon: <Trash2 size={14} />, onSelect: () => { void close() },

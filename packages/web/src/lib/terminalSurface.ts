@@ -118,3 +118,17 @@ export function dedicatedTerminalPath(sessionId: string, pane: TerminalPane = 'a
 export function readTerminalPane(raw: string | null | undefined): TerminalPane {
   return raw === 'shell' ? 'shell' : 'assistant'
 }
+
+/**
+ * WHICH DEDICATED PANE A BAND'S OWN TARGET OPENS.
+ *
+ * `ShellBand`'s "full screen" control used to navigate to the SHELL's dedicated screen
+ * unconditionally, whichever of `cli`/`shell` the band was actually showing — the docked band's
+ * `target` (`terminalTarget.ts`) and the route's own `pane` (this module) are two names for the
+ * same axis and nothing mapped one to the other. Pressing "full screen" while reading the Claude
+ * Code pane opened the shell's screen instead, silently: the URL changed, a terminal rendered, and
+ * it was the wrong one. One mapping closes it, so a THIRD name for this axis is never invented.
+ */
+export function paneForTarget(target: 'cli' | 'shell'): TerminalPane {
+  return target === 'shell' ? 'shell' : 'assistant'
+}

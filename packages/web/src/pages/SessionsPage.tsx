@@ -75,7 +75,7 @@ import { FiltersSheet } from '../components/sessions/FiltersSheet'
 import {
   arrivalFor, reopenedSessionRoute, sessionPath, stillArriving, type SessionArrival,
 } from '../lib/sessionRoute'
-import { dedicatedTerminalPath, readTerminalPane } from '../lib/terminalSurface'
+import { dedicatedTerminalPath, paneForTarget, readTerminalPane } from '../lib/terminalSurface'
 import { ShellBand } from '../components/sessions/ShellBand'
 import { targetLabel } from '../lib/terminalTarget'
 import { TerminalRegion } from '../components/RecentSessions'
@@ -101,6 +101,11 @@ export interface StudioHostMountParams {
   composerMounted: boolean
   /** Fired after either mention gesture queues a reference — see `Studio.tsx`'s own `onMention`. */
   onMention: (result: { text: string; needsSwitch: boolean }) => void
+  /** TRUE full screen for the Studio's bottom band — see `SessionsPage`'s own `studioFullscreen`. */
+  fullscreen?: boolean
+  /** Absent (not merely a no-op) while the Studio is not bottom-docked — see the call site's own
+   *  comment on why the control is offered only where there is somewhere to go. */
+  onToggleFullscreen?: () => void
   /**
    * NEVER A REAL FIELD (I4, fix wave 3) — declared `never` so a stray `key` on this params object is
    * a TYPE ERROR at every route a value can reach `mountStudioHostPanel` through, not only a literal
@@ -157,6 +162,8 @@ export function mountStudioHostPanel(params: StudioHostMountParams): ReactElemen
     harness: params.harness,
     composerMounted: params.composerMounted,
     onMention: params.onMention,
+    fullscreen: params.fullscreen,
+    onToggleFullscreen: params.onToggleFullscreen,
   })
 }
 
@@ -619,6 +626,22 @@ export default function SessionsPage() {
   const studioTarget: HTMLElement | null = rightIsStudio
     ? rightSlotEl
     : bottomIsStudio && slotLayout.bottomOpen ? bottomStudioEl : null
+  /**
+   * TRUE FULL SCREEN for the Studio's BOTTOM band — the whole viewport, not merely "fills the
+   * centre column" (`SessionPanel`'s own `heightPrefs.full`, untouched by this). Held HERE, not
+   * inside `StudioBand` itself, because `Studio.tsx`'s own gear menu (the deliberate, non-drag way
+   * to ask for the same thing, and the one place its own exit control lives) is a SIBLING mount
+   * reached through `StudioHost`'s portal below — the two can only ever agree on which state is
+   * current if something above both of them owns the one flag.
+   *
+   * RESET the moment the Studio is no longer bottom-docked (moved to the right, closed, displaced)
+   * — a lingering `true` would silently reopen full screen the next time the band merely expands,
+   * from a plain "Expandir" press nobody asked to mean that.
+   */
+  const [studioFullscreen, setStudioFullscreen] = useState(false)
+  useEffect(() => {
+    if (!bottomIsStudio) setStudioFullscreen(false)
+  }, [bottomIsStudio])
   const onArtifacts = useCallback((a: { artifacts: Artifact[]; loading: boolean; unavailable?: string; older?: string; unlisted: boolean; turns: readonly LiveTurn[] }) => {
     setArtifacts(a.artifacts)
     setArtifactTurns(a.turns)
@@ -1027,9 +1050,14 @@ export default function SessionsPage() {
       // `StudioHost` (mounted once, here in `SessionsPage`) moves its persistent carrier into.
       editorEnabled={editorEnabled}
       onStudioBandRef={setBottomStudioEl}
+      // TRUE full screen for the Studio's bottom band — see `studioFullscreen`'s own header above.
+      studioFullscreen={studioFullscreen}
+      onStudioFullscreenChange={setStudioFullscreen}
       // The terminal's own screen. A route, so it survives a reload and can be sent to somebody.
       onOpenTerminal={() => navigate(dedicatedTerminalPath(selected.id))}
-      onOpenShellFullscreen={() => navigate(dedicatedTerminalPath(selected.id, 'shell'))}
+      // WHICHEVER PANE the band is showing right now (`target`) — never a fixed `'shell'`. See
+      // `paneForTarget`'s own header for the defect this closes.
+      onOpenShellFullscreen={target => navigate(dedicatedTerminalPath(selected.id, paneForTarget(target)))}
       // Hardware is meaningless (and refused) on a central — the same fact `hardwareOffered` already
       // names for this page's own mobile switcher.
       hardwareOffered={hardwareOffered}
@@ -1156,144 +1184,6 @@ export default function SessionsPage() {
       />
     </FiltersSheet>
   )
-
-  // ---------------------------------------------------------------------------
-  // The DEDICATED terminal — one screen, one pane, both layouts. Before the mobile branch because
-  // it is the SAME screen at 390px and at 1440px: a terminal that fills what it is given needs no
-  // second version, and the key strip it gets on a phone is decided by `keyStripShown`.
-  // ---------------------------------------------------------------------------
-  if (dedicatedTerminal && selected) {
-    const back = () => navigate(sessionPath(selected.id))
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8, minHeight: 44, padding: '0 10px',
-          flexShrink: 0, paddingTop: 'var(--safe-top)',
-          borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)',
-        }}>
-          <button
-            onClick={back}
-            aria-label={pt ? 'Voltar para a sessão' : 'Back to the session'}
-            style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              // 44px is the mobile figure, and this is the only way back from a full screen.
-              width: 44, height: 44, flexShrink: 0, marginLeft: -6,
-              border: 'none', background: 'transparent', color: 'var(--text-secondary)',
-              cursor: 'pointer',
-            }}
-          >
-            <ChevronLeft size={20} />
-          </button>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-              <div style={{
-                fontSize: 13, fontWeight: 650, color: 'var(--text-primary)', minWidth: 0,
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              }}>{selected.title}</div>
-              <SessionTitleFlag
-                session={{
-                  id: selected.id, title: selected.title,
-                  ...(selected.harness ? { harness: selected.harness } : {}),
-                  ...(selected.task ? { task: selected.task } : {}),
-                }}
-                lang={pt ? 'pt' : 'en'}
-                onLinked={refresh}
-              />
-            </div>
-            <div style={{
-              fontSize: 10.5, color: 'var(--text-tertiary)',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>
-              {selected.stateLabel}
-              {selected.project ? ` · ${selected.project}` : ''}
-            </div>
-          </div>
-        </div>
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: 10 }}>
-          {/* THE TARGET SELECTOR. One screen, two panes, and neither segment may be called
-              "Terminal" — that ambiguity is exactly what phase 1 avoided by naming the shell a
-              shell. It is a ROUTE and not a state, so a reload and a shared link land on the pane
-              you were looking at. Withheld when this machine serves no shell: a segment whose only
-              outcome is a refusal is worse than no segment. */}
-          {shellEnabled && (
-            <div role="tablist" aria-label={pt ? 'Qual terminal' : 'Which terminal'} style={{
-              // RIGHT, like the band's. One control, one shape, one SIDE — a control that changes
-              // corner between the docked band and this screen is one the reader has to find again.
-              display: 'flex', gap: 4, flexShrink: 0, alignSelf: 'flex-end',
-              padding: 3, borderRadius: 8, background: 'var(--bg-elevated)',
-              border: '1px solid var(--border-subtle)',
-            }}>
-              {(['assistant', 'shell'] as const).map(target => {
-                const on = dedicatedPane === target
-                // ONE VOCABULARY. The band and this screen ask the same question, so they may not
-                // word it differently — and the CLI segment is named after the harness on the
-                // screen rather than after a concept.
-                const label = targetLabel(
-                  target === 'assistant' ? 'cli' : 'shell',
-                  selected.harness,
-                  pt ? 'pt' : 'en',
-                )
-                return (
-                  <button
-                    key={target}
-                    role="tab"
-                    aria-selected={on}
-                    onClick={() => navigate(dedicatedTerminalPath(selected.id, target), { replace: true })}
-                    style={{
-                      // 44px is the MOBILE figure; on a desktop it would turn a segmented control
-                      // into a row of buttons.
-                      minHeight: isMobile ? 44 : 26, padding: isMobile ? '0 16px' : '0 12px',
-                      borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-                      fontSize: 12, fontWeight: 650, border: 'none',
-                      background: on ? 'var(--bg-surface)' : 'transparent',
-                      color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                      boxShadow: on ? '0 1px 2px rgba(0,0,0,0.18)' : 'none',
-                    }}
-                  >
-                    {label}
-                  </button>
-                )
-              })}
-            </div>
-          )}
-          {/* A link to `?pane=shell` on a machine that serves no shell must not quietly draw the
-              ASSISTANT's pane under a shell's name. The selector is absent there — a segment whose
-              only outcome is a refusal is worse than none — so the sentence is the only thing that
-              can say what happened. */}
-          {dedicatedPane === 'shell' && !shellEnabled && (
-            <div role="status" style={{ fontSize: 11, color: 'var(--accent-red)', flexShrink: 0 }}>
-              {pt
-                ? 'Esta máquina não está servindo shell — abaixo está o terminal do assistente.'
-                : 'This machine is not serving a shell — below is the assistant’s terminal.'}
-            </div>
-          )}
-          {dedicatedPane === 'shell' && shellEnabled ? (
-            <ShellBand
-              key={`shell-${selected.id}`}
-              placement="dedicated"
-              sessionId={selected.id}
-              {...(selected.cwd ? { cwd: selected.cwd } : {})}
-              lang={pt ? 'pt' : 'en'}
-              theme={theme === 'light' ? 'light' : 'dark'}
-              {...(selected.harness ? { harness: selected.harness } : {})}
-            />
-          ) : (
-            <TerminalRegion
-              /* DEDICATED: you asked for this screen, so focus is the consent and there is no arm
-                 button; on a phone it carries the key strip. */
-              placement="dedicated"
-              id={selected.id}
-              theme={theme === 'light' ? 'light' : 'dark'}
-              lang={pt ? 'pt' : 'en'}
-              fill
-              {...(rowIndex.get(selected.id) ? { row: rowIndex.get(selected.id)! } : {})}
-              act={act}
-            />
-          )}
-        </div>
-      </div>
-    )
-  }
 
   // ---------------------------------------------------------------------------
   // ONE PANE, POSITIONED BY THE LAYOUT — never one pane per layout.
@@ -1458,6 +1348,144 @@ export default function SessionsPage() {
     }
   }, [isMobile, artShell, splitRoom, asideIn])
   useEffect(() => () => setRightAsideEdge(null), [])
+
+  // ---------------------------------------------------------------------------
+  // The DEDICATED terminal — one screen, one pane, both layouts. Before the mobile branch because
+  // it is the SAME screen at 390px and at 1440px: a terminal that fills what it is given needs no
+  // second version, and the key strip it gets on a phone is decided by `keyStripShown`.
+  // ---------------------------------------------------------------------------
+  if (dedicatedTerminal && selected) {
+    const back = () => navigate(sessionPath(selected.id))
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, minHeight: 44, padding: '0 10px',
+          flexShrink: 0, paddingTop: 'var(--safe-top)',
+          borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)',
+        }}>
+          <button
+            onClick={back}
+            aria-label={pt ? 'Voltar para a sessão' : 'Back to the session'}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              // 44px is the mobile figure, and this is the only way back from a full screen.
+              width: 44, height: 44, flexShrink: 0, marginLeft: -6,
+              border: 'none', background: 'transparent', color: 'var(--text-secondary)',
+              cursor: 'pointer',
+            }}
+          >
+            <ChevronLeft size={20} />
+          </button>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+              <div style={{
+                fontSize: 13, fontWeight: 650, color: 'var(--text-primary)', minWidth: 0,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>{selected.title}</div>
+              <SessionTitleFlag
+                session={{
+                  id: selected.id, title: selected.title,
+                  ...(selected.harness ? { harness: selected.harness } : {}),
+                  ...(selected.task ? { task: selected.task } : {}),
+                }}
+                lang={pt ? 'pt' : 'en'}
+                onLinked={refresh}
+              />
+            </div>
+            <div style={{
+              fontSize: 10.5, color: 'var(--text-tertiary)',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
+              {selected.stateLabel}
+              {selected.project ? ` · ${selected.project}` : ''}
+            </div>
+          </div>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: 10 }}>
+          {/* THE TARGET SELECTOR. One screen, two panes, and neither segment may be called
+              "Terminal" — that ambiguity is exactly what phase 1 avoided by naming the shell a
+              shell. It is a ROUTE and not a state, so a reload and a shared link land on the pane
+              you were looking at. Withheld when this machine serves no shell: a segment whose only
+              outcome is a refusal is worse than no segment. */}
+          {shellEnabled && (
+            <div role="tablist" aria-label={pt ? 'Qual terminal' : 'Which terminal'} style={{
+              // RIGHT, like the band's. One control, one shape, one SIDE — a control that changes
+              // corner between the docked band and this screen is one the reader has to find again.
+              display: 'flex', gap: 4, flexShrink: 0, alignSelf: 'flex-end',
+              padding: 3, borderRadius: 8, background: 'var(--bg-elevated)',
+              border: '1px solid var(--border-subtle)',
+            }}>
+              {(['assistant', 'shell'] as const).map(target => {
+                const on = dedicatedPane === target
+                // ONE VOCABULARY. The band and this screen ask the same question, so they may not
+                // word it differently — and the CLI segment is named after the harness on the
+                // screen rather than after a concept.
+                const label = targetLabel(
+                  target === 'assistant' ? 'cli' : 'shell',
+                  selected.harness,
+                  pt ? 'pt' : 'en',
+                )
+                return (
+                  <button
+                    key={target}
+                    role="tab"
+                    aria-selected={on}
+                    onClick={() => navigate(dedicatedTerminalPath(selected.id, target), { replace: true })}
+                    style={{
+                      // 44px is the MOBILE figure; on a desktop it would turn a segmented control
+                      // into a row of buttons.
+                      minHeight: isMobile ? 44 : 26, padding: isMobile ? '0 16px' : '0 12px',
+                      borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+                      fontSize: 12, fontWeight: 650, border: 'none',
+                      background: on ? 'var(--bg-surface)' : 'transparent',
+                      color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                      boxShadow: on ? '0 1px 2px rgba(0,0,0,0.18)' : 'none',
+                    }}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+          {/* A link to `?pane=shell` on a machine that serves no shell must not quietly draw the
+              ASSISTANT's pane under a shell's name. The selector is absent there — a segment whose
+              only outcome is a refusal is worse than none — so the sentence is the only thing that
+              can say what happened. */}
+          {dedicatedPane === 'shell' && !shellEnabled && (
+            <div role="status" style={{ fontSize: 11, color: 'var(--accent-red)', flexShrink: 0 }}>
+              {pt
+                ? 'Esta máquina não está servindo shell — abaixo está o terminal do assistente.'
+                : 'This machine is not serving a shell — below is the assistant’s terminal.'}
+            </div>
+          )}
+          {dedicatedPane === 'shell' && shellEnabled ? (
+            <ShellBand
+              key={`shell-${selected.id}`}
+              placement="dedicated"
+              sessionId={selected.id}
+              {...(selected.cwd ? { cwd: selected.cwd } : {})}
+              lang={pt ? 'pt' : 'en'}
+              theme={theme === 'light' ? 'light' : 'dark'}
+              {...(selected.harness ? { harness: selected.harness } : {})}
+            />
+          ) : (
+            <TerminalRegion
+              /* DEDICATED: you asked for this screen, so focus is the consent and there is no arm
+                 button; on a phone it carries the key strip. */
+              placement="dedicated"
+              id={selected.id}
+              theme={theme === 'light' ? 'light' : 'dark'}
+              lang={pt ? 'pt' : 'en'}
+              fill
+              {...(rowIndex.get(selected.id) ? { row: rowIndex.get(selected.id)! } : {})}
+              act={act}
+            />
+          )}
+        </div>
+      </div>
+    )
+  }
 
   /**
    * What the pane sits beside or under. A VALUE, never a `return`: the moment one of these is
@@ -1924,6 +1952,12 @@ export default function SessionsPage() {
         harness: selected.harness as HarnessId,
         composerMounted: sessionView === 'chat',
         onMention: onStudioMention,
+        // TRUE full screen — see `studioFullscreen`'s own header above. The TOGGLE is offered only
+        // while the Studio is actually BOTTOM-DOCKED (`bottomIsStudio`): the right slot has no drag
+        // handle and no giant-band gesture to escalate from, the same "offered only where there is
+        // somewhere to go" rule `ShellBand`'s own fullscreen control follows for `aside`/`dedicated`.
+        fullscreen: studioFullscreen,
+        onToggleFullscreen: bottomIsStudio ? () => setStudioFullscreen(f => !f) : undefined,
       })}
       {/* Mobile-only chrome, and a slot that is always here so it can never shift the pane. */}
       {isMobile ? filtersSheet : null}

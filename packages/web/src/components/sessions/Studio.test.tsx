@@ -21,9 +21,9 @@ import {
   dividerKeyDelta, dividerWantedWidth, EDITOR_MIN, EditorStack,
   Layer, mountedEditors, nextGoTo, NewFileRow, paneHits, resolveTreeCollapsed, resolveTreeShown,
   resolveTreeSide, resolveTreeWidth, searchRequestNeedsExpand, sessionMovedOn, SPLIT_MIN,
-  Studio, StudioBar, StudioBody, sameFile,
-  studioLayout, TabStrip, Toolbar, treeCollapsible, TREE_DEFAULT, TREE_MAX, TREE_MIN, TreeDivider,
-  Watermark, watermarkOpacity, type TreeSide,
+  Studio, StudioBody, sameFile,
+  studioGearEntries, studioLayout, TabStrip, Toolbar, treeCollapsible, TREE_DEFAULT, TREE_MAX,
+  TREE_MIN, TreeDivider, Watermark, watermarkOpacity,
 } from './Studio'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -637,59 +637,114 @@ describe('Studio', () => {
 })
 
 /**
- * THE EXIT. The Studio covers the aside's header and its tab strip, so this bar is the only way out
- * of it — and a way out that can be absent is a reader trapped in a panel. `onExit` is therefore a
- * REQUIRED prop (the type carries that) and the bar is drawn unconditionally (these tests carry
- * that): neither half is enough on its own, because a required callback nobody renders a control for
- * is exactly the shape this guards against.
+ * THE GEAR MENU (§2) — everything `StudioBar`'s own always-on row used to carry (the exit, the tree
+ * toggle, the flip-side control) plus full screen, now as ROWS of one popover reached from a gear
+ * icon on the Buscar/Novo arquivo/Nova pasta row. `studioGearEntries` decides WHAT is offered and
+ * what each row SAYS — pure, so it is testable as DATA without a DOM (this package has none, and a
+ * popover's own rows render only once OPENED, which `renderToStaticMarkup` cannot do at all).
  */
-describe('StudioBar — the only chrome the Studio has', () => {
-  const bar = (lang: 'pt' | 'en', isMobile = false) => renderToStaticMarkup(
-    <StudioBar isMobile={isMobile} lang={lang} onExit={() => {}} />,
-  )
+describe('studioGearEntries — the gear menu\'s own rows, as data', () => {
+  const base = {
+    lang: 'en' as const, treeCollapsible: false, treeCollapsed: false, treeSide: 'left' as const,
+    fullscreenAvailable: false, fullscreen: false,
+  }
 
-  test('the exit is a CLOSE, never a link named after another panel', () => {
-    // §1.1/§2 of the slots/references design: this used to read "‹ Conteúdo", which is the aside's
-    // own heading and lies the moment the Studio can open without that panel ever having been open.
-    // `X` plus "Fechar Studio"/"Close Studio" says only what is true in both worlds.
-    expect(bar('en')).toContain('aria-label="Close Studio"')
-    expect(bar('en')).toContain('title="Close Studio"')
-    expect(bar('pt')).toContain('aria-label="Fechar Studio"')
-    expect(bar('pt')).toContain('title="Fechar Studio"')
-    expect(bar('en')).not.toContain('Contents')
-    expect(bar('pt')).not.toContain('Conteúdo')
+  test('with nothing else offered, the ONE row is always Close — the required exit', () => {
+    expect(studioGearEntries(base)).toEqual([{ id: 'close', label: 'Close Studio' }])
   })
 
-  test('it is a BUTTON with an accessible name, not a decorated glyph', () => {
-    expect(bar('en')).toContain('<button aria-label="Close Studio"')
-    expect(bar('pt')).toContain('<button aria-label="Fechar Studio"')
+  test('and in Portuguese', () => {
+    expect(studioGearEntries({ ...base, lang: 'pt' })).toEqual([{ id: 'close', label: 'Fechar Studio' }])
   })
 
-  test('the product names itself, and carries the beta caveat', () => {
-    const html = bar('en')
-    expect(html).toContain('Agentistics Studio')
-    expect(html).toContain('>beta<')
+  test('the tree rows are ABSENT with no split — a row that does nothing is worse than none', () => {
+    const ids = studioGearEntries(base).map(e => e.id)
+    expect(ids).not.toContain('tree-toggle')
+    expect(ids).not.toContain('tree-side')
   })
 
-  test('mobile keeps the short name and takes the 44px target; desktop does NOT', () => {
-    // 44px is the mobile figure. On desktop this bar sits above a tab strip and must stay thin.
-    expect(bar('en', true)).toContain('min-height:44px')
-    expect(bar('en', true)).not.toContain('Agentistics Studio')
-    expect(bar('en', false)).not.toContain('min-height:44px')
-    expect(bar('en', false)).toContain('min-height:30px')
+  test('the split offers the toggle, and it SAYS which way it goes', () => {
+    const shown = studioGearEntries({ ...base, treeCollapsible: true, treeCollapsed: false })
+    expect(shown.find(e => e.id === 'tree-toggle')?.label).toBe('Hide tree')
+    const hidden = studioGearEntries({ ...base, treeCollapsible: true, treeCollapsed: true })
+    expect(hidden.find(e => e.id === 'tree-toggle')?.label).toBe('Show tree')
+  })
+
+  test('and in Portuguese', () => {
+    const shown = studioGearEntries({ ...base, lang: 'pt', treeCollapsible: true, treeCollapsed: false })
+    expect(shown.find(e => e.id === 'tree-toggle')?.label).toBe('Ocultar árvore')
+    const hidden = studioGearEntries({ ...base, lang: 'pt', treeCollapsible: true, treeCollapsed: true })
+    expect(hidden.find(e => e.id === 'tree-toggle')?.label).toBe('Mostrar árvore')
+  })
+
+  // item 10 — "move side bar right".
+  test('the flip-side row says where it would go, from either side', () => {
+    const fromLeft = studioGearEntries({ ...base, treeCollapsible: true, treeSide: 'left' })
+    expect(fromLeft.find(e => e.id === 'tree-side')?.label).toBe('Move tree to the right')
+    const fromRight = studioGearEntries({ ...base, treeCollapsible: true, treeSide: 'right' })
+    expect(fromRight.find(e => e.id === 'tree-side')?.label).toBe('Move tree to the left')
+  })
+
+  test('and in Portuguese', () => {
+    const fromLeft = studioGearEntries({ ...base, lang: 'pt', treeCollapsible: true, treeSide: 'left' })
+    expect(fromLeft.find(e => e.id === 'tree-side')?.label).toBe('Mover árvore para a direita')
+    const fromRight = studioGearEntries({ ...base, lang: 'pt', treeCollapsible: true, treeSide: 'right' })
+    expect(fromRight.find(e => e.id === 'tree-side')?.label).toBe('Mover árvore para a esquerda')
+  })
+
+  test('full screen is ABSENT wherever it has nowhere to apply — the Studio is not bottom-docked', () => {
+    const ids = studioGearEntries({ ...base, fullscreenAvailable: false, fullscreen: false }).map(e => e.id)
+    expect(ids).not.toContain('fullscreen')
+  })
+
+  test('full screen states its CURRENT value, both directions', () => {
+    const off = studioGearEntries({ ...base, fullscreenAvailable: true, fullscreen: false })
+    expect(off.find(e => e.id === 'fullscreen')?.label).toBe('Full screen')
+    const on = studioGearEntries({ ...base, fullscreenAvailable: true, fullscreen: true })
+    expect(on.find(e => e.id === 'fullscreen')?.label).toBe('Exit full screen')
+  })
+
+  test('and in Portuguese', () => {
+    const off = studioGearEntries({ ...base, lang: 'pt', fullscreenAvailable: true, fullscreen: false })
+    expect(off.find(e => e.id === 'fullscreen')?.label).toBe('Tela cheia')
+    const on = studioGearEntries({ ...base, lang: 'pt', fullscreenAvailable: true, fullscreen: true })
+    expect(on.find(e => e.id === 'fullscreen')?.label).toBe('Sair da tela cheia')
+  })
+
+  test('every row, in order — tree first (what StudioBar used to carry), full screen next, close LAST', () => {
+    const everything = studioGearEntries({
+      lang: 'en', treeCollapsible: true, treeCollapsed: false, treeSide: 'left',
+      fullscreenAvailable: true, fullscreen: false,
+    })
+    expect(everything.map(e => e.id)).toEqual(['tree-toggle', 'tree-side', 'fullscreen', 'close'])
   })
 })
 
-describe('the Studio draws its exit from the first frame', () => {
+/**
+ * THE GEAR IS THE ONLY CHROME THE STUDIO HAS NOW, and it is reachable from the first frame — the
+ * exact guarantee `StudioBar`'s own always-on exit used to carry, moved to the control that OPENS
+ * the menu rather than to the menu's own rows (which render only once opened, and which
+ * `studioGearEntries` above already covers as data). `onExit` stays a REQUIRED prop on `Studio` —
+ * seethis component's own header — precisely because "Close Studio" is one of those rows and must
+ * never have nothing behind it.
+ */
+describe('the Studio draws its gear from the first frame', () => {
   const render = (lang: 'pt' | 'en' = 'en') => renderToStaticMarkup(
     <Studio sessionId="s1" lang={lang} autosave={false} turns={[]} onExit={() => {}} />,
   )
 
-  test('before any listing has arrived, the way out is already on screen', () => {
+  test('before any listing has arrived, the gear trigger is already on screen', () => {
     // The root listing is a fetch and `useEffect` never runs here, so this is the panel at its
-    // emptiest — the moment a missing exit would strand somebody.
-    expect(render()).toContain('aria-label="Close Studio"')
-    expect(render('pt')).toContain('aria-label="Fechar Studio"')
+    // emptiest — the moment a missing way-in to the exit would strand somebody.
+    expect(render()).toContain('aria-haspopup="menu"')
+    expect(render()).toContain('aria-label="Studio options"')
+    expect(render('pt')).toContain('aria-label="Opções do Studio"')
+  })
+
+  test('the old unconditional exit row is gone — Search/New/the gear share ONE row now', () => {
+    const html = render()
+    expect(html).not.toContain('aria-label="Close Studio"')
+    expect(html).toContain('Search')
   })
 })
 
@@ -1117,76 +1172,12 @@ describe('TreeDivider — draggable, and reachable without a pointer', () => {
   })
 })
 
-describe('StudioBar — minimizing the tree, and getting it back', () => {
-  const bar = (
-    tree?: { collapsed: boolean; onToggle: () => void; side?: TreeSide; onFlipSide?: () => void },
-    lang: 'pt' | 'en' = 'en',
-  ) => renderToStaticMarkup(
-    <StudioBar isMobile={false} lang={lang} onExit={() => {}}
-      {...(tree ? { tree: { side: 'left' as const, onFlipSide: () => {}, ...tree } } : {})}
-    />,
-  )
-
-  test('with no split there is no toggle — a button that does nothing is worse than none', () => {
-    expect(bar()).not.toContain('Hide the file tree')
-    expect(bar()).not.toContain('Show the file tree')
-  })
-
-  test('the split offers it, and it SAYS which way it goes', () => {
-    expect(bar({ collapsed: false, onToggle: () => {} })).toContain('Hide the file tree')
-    expect(bar({ collapsed: true, onToggle: () => {} })).toContain('Show the file tree')
-  })
-
-  test('a MINIMIZED tree still has a visible way back — not a keyboard-only escape', () => {
-    const html = bar({ collapsed: true, onToggle: () => {} })
-    expect(html).toContain('<button')
-    expect(html).toContain('aria-label="Show the file tree"')
-    expect(html).toContain('aria-pressed="false"')
-  })
-
-  test('and in Portuguese', () => {
-    expect(bar({ collapsed: false, onToggle: () => {} }, 'pt')).toContain('Esconder a árvore de arquivos')
-    expect(bar({ collapsed: true, onToggle: () => {} }, 'pt')).toContain('Mostrar a árvore de arquivos')
-  })
-
-  test('the toggle is a TOGGLE: it reports the state it is in', () => {
-    expect(bar({ collapsed: false, onToggle: () => {} })).toContain('aria-pressed="true"')
-  })
-
-  // item 5 — the toggle carries a visible word on desktop now, not only an icon and a tooltip.
-  test('the collapse toggle carries a visible label, not only an icon', () => {
-    expect(bar({ collapsed: false, onToggle: () => {} })).toContain('Hide tree')
-    expect(bar({ collapsed: true, onToggle: () => {} })).toContain('Show tree')
-    expect(bar({ collapsed: false, onToggle: () => {} }, 'pt')).toContain('Ocultar árvore')
-    expect(bar({ collapsed: true, onToggle: () => {} }, 'pt')).toContain('Mostrar árvore')
-  })
-
-  // item 10 — "move side bar right".
-  describe('the flip-side control', () => {
-    test('absent with no split, exactly like the collapse toggle', () => {
-      expect(bar()).not.toContain('Move the tree')
-    })
-
-    test('says where it would go, from the left', () => {
-      const html = bar({ collapsed: false, onToggle: () => {}, side: 'left' })
-      expect(html).toContain('Move the tree to the right')
-      expect(html).toContain('Tree right')
-    })
-
-    test('says where it would go, from the right', () => {
-      const html = bar({ collapsed: false, onToggle: () => {}, side: 'right' })
-      expect(html).toContain('Move the tree to the left')
-      expect(html).toContain('Tree left')
-    })
-
-    test('and in Portuguese', () => {
-      expect(bar({ collapsed: false, onToggle: () => {}, side: 'left' }, 'pt'))
-        .toContain('Mover a árvore para a direita')
-      expect(bar({ collapsed: false, onToggle: () => {}, side: 'right' }, 'pt'))
-        .toContain('Mover a árvore para a esquerda')
-    })
-  })
-})
+// `StudioBar`'s own "minimizing the tree, and getting it back" behavioural matrix — no split means
+// no toggle, the split offers it and says which way it goes, the toggle reports its own state, in
+// both languages — now lives in `studioGearEntries — the gear menu's own rows, as data`, above,
+// which covers the SAME matrix (plus the flip-side control, plus full screen) as pure data rather
+// than as rendered `StudioBar` markup, since the gear's own rows render only once its popover is
+// open and a render-only test cannot open one.
 
 /**
  * THE SCAN, AND WHY IT READS THROUGH `stripComments`.
