@@ -6,6 +6,7 @@
  * delivery cost", and the two would drift.
  */
 
+import type { StagedSessionDraft } from '@agentistics/core'
 import { loadTaskWorld } from './task-source'
 import { buildTaskDetail, buildTaskList, findTask, rowsOfTask } from './task-report'
 import { planDeliveryEvidence, type DeliveryEvidence } from './task-evidence'
@@ -429,6 +430,14 @@ export async function addSubtask(
  * the two fields — an old row that already carries a stale `groupId` from before this rule existed
  * is left alone until the caller next touches either column. `isGroup` itself is never checked here
  * because it is decided at creation and this patch type offers no way to change it.
+ *
+ * `stagedSession` (board task t-918cc82233) is refused with `subtask_in_group` when this subtask is
+ * a group MEMBER — reusing `isGroupMember`, never reimplementing the rule `task-attach.ts` already
+ * states for filing a real session: a member can never receive one, so a draft that could never be
+ * fired there is refused at the same point, judged against the EFFECTIVE post-patch
+ * `parentGroupId` (`nextParentGroupId`) for the same reason the `done` gate below is. CLEARING the
+ * draft (`stagedSession: null`) is never refused this way — a stale draft left over from before a
+ * subtask joined a group must still be removable.
  */
 export async function patchSubtask(subtaskId: string, patch: {
   title?: string
@@ -453,6 +462,8 @@ export async function patchSubtask(subtaskId: string, patch: {
    * `checkParentGroup`.
    */
   parentGroupId?: string | null
+  /** Set (a validated draft) or clear (`null`) the staged session — see this function's own note. */
+  stagedSession?: StagedSessionDraft | null
 }): Promise<
   {
     ok: true
@@ -460,7 +471,7 @@ export async function patchSubtask(subtaskId: string, patch: {
     ok: false
     message:
       | 'no_such_subtask' | 'done_needs_session' | 'invalid_group' | 'subtask_has_sessions'
-      | 'group_field_conflict'
+      | 'group_field_conflict' | 'subtask_in_group'
   }
 > {
   const w = await loadTaskWorld()
@@ -516,6 +527,16 @@ export async function patchSubtask(subtaskId: string, patch: {
   if (status === 'done' && found.status !== 'done' && !isGroupMember({ parentGroupId: nextParentGroupId })) {
     if (!hasSession) return { ok: false, message: 'done_needs_session' }
   }
+
+  // SETTING a staged draft on a group member is refused for the exact reason `planAttach` refuses
+  // to file a real session there — a draft that could never be fired on this row is not a draft
+  // worth saving. CLEARING (`null`) is always allowed: a stale draft left over from before this
+  // subtask joined a group must still be removable. Judged on `nextParentGroupId`, same as `done`.
+  if (patch.stagedSession !== undefined && patch.stagedSession !== null
+    && isGroupMember({ parentGroupId: nextParentGroupId })) {
+    return { ok: false, message: 'subtask_in_group' }
+  }
+
   await w.store.upsertSubtask({
     ...found,
     ...(patch.title?.trim() ? { title: patch.title.trim() } : {}),
@@ -542,6 +563,11 @@ export async function patchSubtask(subtaskId: string, patch: {
     // checked value (the same `nextParentGroupId` the gate above judged), `undefined` to leave the
     // column alone.
     ...(patch.parentGroupId !== undefined ? { parentGroupId: nextParentGroupId } : {}),
+    // `null` clears (the store drops the key, same convention as every other identity field here);
+    // an object SETS it, already validated above. `undefined` leaves the column alone.
+    ...(patch.stagedSession !== undefined
+      ? { stagedSession: patch.stagedSession ?? undefined }
+      : {}),
     updatedAt: new Date().toISOString(),
   })
   return { ok: true }
@@ -563,11 +589,11 @@ export async function setSubtaskDone(subtaskId: string, done: boolean): Promise<
     ok: false
     message:
       | 'no_such_subtask' | 'done_needs_session' | 'invalid_group' | 'subtask_has_sessions'
-      | 'group_field_conflict'
+      | 'group_field_conflict' | 'subtask_in_group'
   }
 > {
-  // Only ever passes `status`, so `group_field_conflict` cannot actually fire through this path —
-  // the union member exists to match `patchSubtask`'s own return type exactly.
+  // Only ever passes `status`, so `group_field_conflict`/`subtask_in_group` cannot actually fire
+  // through this path — the union member exists to match `patchSubtask`'s own return type exactly.
   return await patchSubtask(subtaskId, { status: done ? 'done' : 'todo' })
 }
 

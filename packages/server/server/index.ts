@@ -1746,6 +1746,18 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             const result = await mod.setSubtaskDone(body.id, body.done)
             return json(result, result.ok ? 200 : (result.message === 'done_needs_session' ? 422 : 404))
           }
+          // A staged session draft (t-918cc82233): `null` clears, an object is validated HERE before
+          // the write — a malformed one (no prompt, a relative cwd) is refused outright (400) rather
+          // than silently dropped, which would look on screen like the save had succeeded.
+          let stagedSessionPatch: import('./sessions/task-model').Subtask['stagedSession'] | null | undefined
+          if (body.stagedSession === null) {
+            stagedSessionPatch = null
+          } else if (body.stagedSession !== undefined) {
+            const { normalizeStagedSession } = await import('@agentistics/core')
+            const normalized = normalizeStagedSession(body.stagedSession)
+            if (!normalized) return json({ error: 'bad_staged_session' }, 400)
+            stagedSessionPatch = normalized
+          }
           const result = await mod.patchSubtask(body.id, {
             ...(typeof body.title === 'string' ? { title: body.title } : {}),
             ...(typeof body.status === 'string' ? { status: body.status as never } : {}),
@@ -1770,6 +1782,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             ...(typeof body.parentGroupId === 'string'
               ? { parentGroupId: body.parentGroupId }
               : body.parentGroupId === null ? { parentGroupId: null } : {}),
+            ...(stagedSessionPatch !== undefined ? { stagedSession: stagedSessionPatch } : {}),
           })
           return json(
             result,
@@ -1778,6 +1791,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
               : (result.message === 'done_needs_session' || result.message === 'invalid_group'
                   || result.message === 'subtask_has_sessions'
                   || result.message === 'group_field_conflict'
+                  || result.message === 'subtask_in_group'
                 ? 422
                 : 404),
           )

@@ -12,7 +12,7 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import { PRIORITY_ORDER, type TaskPriorityId } from '@agentistics/core'
-import type { HarnessId } from '@agentistics/core'
+import type { HarnessId, StagedSessionDraft } from '@agentistics/core'
 
 /**
  * Where the work stands. A board needs more than open/closed, and each of these answers a question
@@ -357,6 +357,23 @@ export interface Subtask {
    * string" convention `groupId` already established. Absent reads as "not a member."
    */
   parentGroupId?: string
+  /**
+   * A DORMANT session draft composed ahead of time on this specific subtask or group — board task
+   * t-918cc82233. See `@agentistics/core`'s `stagedSession.ts` for the shape and why it is stored
+   * this way rather than as a second, task-agnostic shelf (that is what `SessionPreset` already is).
+   *
+   * Absent means no draft, the same convention every optional column here follows. Firing it starts
+   * a real session via `/api/fleet/new` and immediately files the result under THIS subtask/group
+   * through the ordinary `attachSession` — no manual filing step afterward.
+   *
+   * **Never coexists with `isGroupMember(this)` being true** — a group MEMBER can never receive a
+   * session of its own (`task-attach.ts`'s `subtask_in_group` refusal), so a draft composed on one
+   * could never be fired there either. `task-web.ts`'s `patchSubtask` refuses a write that would set
+   * one on a member, reusing `isGroupMember` rather than reimplementing the rule; a GROUP itself
+   * (`isGroup: true`) is exactly like a loose subtask here — it is the one thing in its branch of the
+   * tree that MAY hold a session, so it may hold a draft too.
+   */
+  stagedSession?: StagedSessionDraft
 }
 
 /**

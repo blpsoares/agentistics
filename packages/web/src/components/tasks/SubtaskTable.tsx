@@ -32,9 +32,10 @@
  */
 
 import { useState } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Rocket, SquarePen, Trash2 } from 'lucide-react'
+import type { StagedSessionDraft } from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
-import { COLUMN_ORDER, STATUS, fmtTokens, microLabel, numeric, surface, type BoardStatus } from './board'
+import { COLUMN_ORDER, STATUS, fmtTokens, microLabel, numeric, pill, surface, type BoardStatus } from './board'
 import { SessionPicker } from './SessionPicker'
 import { DoneNeedsSessionDialog } from './DoneNeedsSessionDialog'
 import { DatePicker } from '../DatePicker'
@@ -42,10 +43,14 @@ import { TaskProgressBar } from './TaskProgressBar'
 import { subtaskSessions } from './SubtaskSessions'
 import { SubtaskBlockedBy } from './SubtaskBlockedBy'
 import { SessionRef } from './SessionRef'
+import { StagedSessionCompose } from './StagedSessionCompose'
 import { boardCopy, statusLabel, type Lang } from './copy'
 import { useMoney, type Money } from './money'
 import { costCaveat, costCellFor, subtaskRollupOf, tokensCellFor, type CostCell, type TokensCell } from './subtaskRollup'
-import type { AttemptRollup, StatusWriteResult, Subtask, SubtaskView, TaskSessionRow, TaskStatus } from '../../lib/tasks'
+import type {
+  AttemptRollup, StagedSessionWriteResult, StatusWriteResult, Subtask, SubtaskView, TaskFile,
+  TaskSessionRow, TaskStatus,
+} from '../../lib/tasks'
 
 function StatusPick({ value, lang, onPick }: {
   value: TaskStatus
@@ -145,6 +150,22 @@ export interface SubtaskTableProps {
   onUnfile: (sessionId: string) => void | Promise<void>
   /** Open a session's own screen. Absent renders the reference as a label. */
   onOpenSession?: (sessionId: string) => void
+  /**
+   * The staged-session draft (t-918cc82233) — a dormant session composed ahead of time on a loose
+   * subtask or a group, fired later. Never offered on a group MEMBER (`isGroupMember`): a member can
+   * never hold a session of its own, so a draft that could never be fired there is refused at the
+   * same point `task-attach.ts`'s `subtask_in_group` already refuses filing a real one.
+   */
+  taskFiles: readonly TaskFile[]
+  onUploadFile: (file: File) => Promise<string | null>
+  onSaveStagedSession: (subtaskId: string, draft: StagedSessionDraft) => Promise<StagedSessionWriteResult>
+  onClearStagedSession: (subtaskId: string) => void | Promise<void>
+  /** Fire an EXISTING draft — the caller decides the direct-launch-vs-wizard-fallback path (see
+   *  `DeliveryDetail`'s `startFire`), since only it holds the navigation this can end in. */
+  onFireStagedSession: (subtask: Subtask) => void
+  /** The subtask whose attachments are being materialized into real paths right now, so its Fire
+   *  button reads busy instead of looking inert during the brief round trip. */
+  preparingStagedSessionId?: string | null
 }
 
 export function SubtaskTable(p: SubtaskTableProps) {
@@ -156,6 +177,10 @@ export function SubtaskTable(p: SubtaskTableProps) {
   /** Set when a status write refused `done` for having no session filed yet — see
    *  `DoneNeedsSessionDialog`. Named so its shortcut can reopen `SessionPicker` for the SAME row. */
   const [doneRefusal, setDoneRefusal] = useState<{ id: string; title: string } | null>(null)
+  /** The subtask/group whose staged-session compose dialog is open — see `StagedSessionCompose`. */
+  const [composing, setComposing] = useState<Subtask | null>(null)
+  const [stagedError, setStagedError] = useState<string | null>(null)
+  const staged = boardCopy(p.lang).staged
 
   const pickStatus = async (t: Subtask, status: TaskStatus) => {
     const result = await p.onPatch(t.id, { status })
@@ -300,10 +325,40 @@ export function SubtaskTable(p: SubtaskTableProps) {
                 <TokensCellView tok={tok} />
               </td>
               <td style={{ ...cell, textAlign: 'right' }}>
-                <button
-                  onClick={() => void p.onRemove(t.id)} title={copy.remove}
-                  style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', display: 'inline-flex' }}
-                ><Trash2 size={12} /></button>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  {/* A group MEMBER can never hold a session of its own (`task-attach.ts`'s
+                      `subtask_in_group`), so a draft that could never be fired there is never
+                      offered here either — the control is ABSENT, not disabled-and-refusing. */}
+                  {!t.parentGroupId && (
+                    t.stagedSession ? (
+                      <>
+                        <span style={{ ...pill('var(--anthropic-orange)'), fontSize: 9.5 }}>{staged.ready}</span>
+                        <button
+                          onClick={() => p.onFireStagedSession(t)} title={staged.fire}
+                          disabled={p.preparingStagedSessionId === t.id}
+                          style={{
+                            background: 'none', border: 'none', color: 'var(--anthropic-orange)',
+                            cursor: p.preparingStagedSessionId === t.id ? 'wait' : 'pointer',
+                            display: 'inline-flex', opacity: p.preparingStagedSessionId === t.id ? 0.5 : 1,
+                          }}
+                        ><Rocket size={13} /></button>
+                        <button
+                          onClick={() => setComposing(t)} title={staged.edit}
+                          style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', display: 'inline-flex' }}
+                        ><SquarePen size={12} /></button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => setComposing(t)} title={staged.compose}
+                        style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', display: 'inline-flex' }}
+                      ><Rocket size={12} /></button>
+                    )
+                  )}
+                  <button
+                    onClick={() => void p.onRemove(t.id)} title={copy.remove}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', display: 'inline-flex' }}
+                  ><Trash2 size={12} /></button>
+                </span>
               </td>
             </tr>
             )
@@ -388,6 +443,64 @@ export function SubtaskTable(p: SubtaskTableProps) {
             setLinking(id)
           }}
         />
+      )}
+
+      {composing && (
+        <StagedSessionCompose
+          lang={p.lang}
+          subtaskTitle={composing.title}
+          {...(composing.stagedSession ? { initial: composing.stagedSession } : {})}
+          taskFiles={p.taskFiles}
+          onUpload={p.onUploadFile}
+          onSave={async d => {
+            const result = await p.onSaveStagedSession(composing.id, d)
+            if (!result.ok) {
+              // Structurally unreachable through this UI (the control is absent on a member row),
+              // but the server is the authority and a network hiccup can still refuse — say so
+              // rather than pretending the dialog's close meant success. The compose dialog still
+              // closes: what was typed was not saved, and repeating it in a member row would refuse
+              // again — this is defence in depth, not a path a person composing from this table can
+              // actually reach.
+              setStagedError(result.reason === 'subtask_in_group'
+                ? (p.lang === 'pt'
+                  ? 'Esta subtarefa pertence a um grupo e não pode receber uma sessão em espera.'
+                  : 'This subtask belongs to a group and cannot hold a staged session.')
+                : staged.networkError)
+            }
+          }}
+          {...(composing.stagedSession
+            ? { onDiscard: () => void p.onClearStagedSession(composing.id) }
+            : {})}
+          onClose={() => setComposing(null)}
+        />
+      )}
+
+      {stagedError && (
+        <div
+          role="alertdialog" aria-modal="true"
+          onClick={e => { if (e.target === e.currentTarget) setStagedError(null) }}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 435, background: 'var(--ag-scrim)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+          }}
+        >
+          <div style={{
+            background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 14,
+            width: '100%', maxWidth: 380, padding: 18, display: 'grid', gap: 12,
+          }}>
+            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--text-primary)', lineHeight: 1.5 }}>
+              {stagedError}
+            </p>
+            <button
+              type="button" onClick={() => setStagedError(null)}
+              style={{
+                justifySelf: 'flex-end', padding: '7px 14px', borderRadius: 7,
+                border: '1px solid var(--border)', background: 'transparent',
+                color: 'var(--text-secondary)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+              }}
+            >OK</button>
+          </div>
+        </div>
       )}
     </div>
   )

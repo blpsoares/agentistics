@@ -29,10 +29,11 @@ import {
   Bot, ChevronDown, ExternalLink, FileText, FileVideo, Link2, MessageSquare, Paperclip, Pencil,
   Plus, Trash2, X, XCircle,
 } from 'lucide-react'
-import { PRIORITY_ORDER, type TaskPriorityId } from '@agentistics/core'
+import { PRIORITY_ORDER, composePromptWithPaths, type TaskPriorityId } from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useFleet } from '../../lib/fleet'
 import { sessionPath } from '../../lib/sessionRoute'
+import { NewSessionModal } from '../sessions/NewSessionModal'
 import {
   bodyWithAttachments, looksLikeImage, looksLikeVideo, parseCommentBody,
   type CommentAttachment, type CommentPart,
@@ -50,16 +51,18 @@ import { RailSection } from './RailSection'
 import { StatusChip } from './StatusChip'
 import { SubtaskTable } from './SubtaskTable'
 import { BlockedSubtaskResolve } from './BlockedSubtaskResolve'
+import { StagedSessionLaunchConfirm } from './StagedSessionLaunchConfirm'
 import { TaskFiles } from './TaskFiles'
 import { TaskProgressBar } from './TaskProgressBar'
 import { DatePicker } from '../DatePicker'
 import { ConfirmModal, Select } from '../../pages/settings/primitives'
 import {
-  addComment, addLink, addSubtask, attachSession, claimTask, deleteFile, deleteTask, detachSession,
-  editComment, editTask, fileUrl, fmtDuration, markTask, patchSubtask, removeComment, removeLink,
-  removeSubtask, setBlockedBy, uploadFile, useTaskActivity, useTaskDetail, useTaskList,
-  type AttemptRollup, type AttemptView, type TaskDetail, type TaskFieldPatch, type TaskFile,
-  type TaskListRow, type TaskRecord, type TaskStatus,
+  addComment, addLink, addSubtask, attachSession, claimTask, clearStagedSession, deleteFile,
+  deleteTask, detachSession, editComment, editTask, fileUrl, fmtDuration, materializeStagedAttachments,
+  markTask, patchSubtask, removeComment, removeLink, removeSubtask, saveStagedSession, setBlockedBy,
+  uploadFile, useTaskActivity, useTaskDetail, useTaskList,
+  type AttemptRollup, type AttemptView, type Subtask, type TaskDetail, type TaskFieldPatch,
+  type TaskFile, type TaskListRow, type TaskRecord, type TaskStatus,
 } from '../../lib/tasks'
 
 /**
@@ -1231,6 +1234,85 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
   // page already loads; a second endpoint for "what could block this" would be a second answer.
   const { rows: boardRows } = useTaskList()
 
+  /**
+   * FIRING a staged session (t-918cc82233) — two paths, decided by whether the draft already names
+   * BOTH a harness and a folder, exactly the split `SessionsPage.tsx`'s `selectPreset` draws for a
+   * `SessionPreset`. `firing` is the direct-launch confirm; `firePrefillFor` opens the ordinary
+   * wizard pre-filled with whatever the draft DOES have, seeded to auto-file under this exact
+   * subtask once the session exists (`NewSessionModal`'s `initialTaskId`/`initialSubtaskId`).
+   */
+  const [firing, setFiring] = useState<Subtask | null>(null)
+  const [fireBusy, setFireBusy] = useState(false)
+  const [fireError, setFireError] = useState<string | null>(null)
+  const [firePrefillFor, setFirePrefillFor] = useState<{ subtask: Subtask; prompt: string } | null>(null)
+  /** The subtask id whose attachments are being materialized into real paths — a brief round trip
+   *  through `/api/fleet/attach`, shown so the fire button does not look inert while it runs. */
+  const [preparingFire, setPreparingFire] = useState<string | null>(null)
+
+  async function startFire(t: Subtask) {
+    const draft = t.stagedSession
+    if (!draft) return
+    setFireError(null)
+    if (draft.harness && draft.cwd) {
+      setFiring(t)
+      return
+    }
+    // The wizard fallback needs the composed prompt UP FRONT: `initialPreset` seeds its textarea
+    // once, and the wizard itself has no notion of a staged draft's attachments to weave in later.
+    setPreparingFire(t.id)
+    const paths = await materializeStagedAttachments(lang, draft.attachmentIds ?? [], detail.files)
+    setPreparingFire(null)
+    setFirePrefillFor({ subtask: t, prompt: composePromptWithPaths(paths, draft.prompt) })
+  }
+
+  async function confirmFire() {
+    if (!firing) return
+    const t = firing
+    const draft = t.stagedSession!
+    setFireBusy(true)
+    setFireError(null)
+    try {
+      const paths = await materializeStagedAttachments(lang, draft.attachmentIds ?? [], detail.files)
+      const finalPrompt = composePromptWithPaths(paths, draft.prompt)
+      // The SAME route the wizard and the preset shelf call (`fleet-spawn.ts`'s `planFleetSpawn`) —
+      // never a second, unvalidated path.
+      const res = await fetch(`/api/fleet/new?lang=${lang}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          harness: draft.harness,
+          cwd: draft.cwd,
+          ...(draft.model ? { model: draft.model } : {}),
+          ...(draft.effort ? { effort: draft.effort } : {}),
+          prompt: finalPrompt,
+          label: t.title,
+        }),
+      })
+      const json = await res.json() as { ok: boolean; message: string; id?: string }
+      if (!json.ok) {
+        setFireError(json.message)
+        setFireBusy(false)
+        return
+      }
+      setFiring(null)
+      setFireBusy(false)
+      if (json.id) {
+        // The session EXISTS now — the true first moment its filing can actually be attempted, the
+        // same reasoning `NewSessionModal`'s own `subtaskTarget` attach applies. A `blocked` refusal
+        // reuses the EXACT dialog the ordinary session-filing flow already opens for this delivery.
+        const attach = await attachSession(id, json.id, t.id)
+        if (!attach.ok && attach.reason === 'blocked') {
+          setSubtaskBlocked({ subtaskId: t.id, sessionId: json.id, blockedBy: attach.blockedBy ?? [] })
+        }
+        await reload()
+        navigate(sessionPath(json.id))
+      }
+    } catch {
+      setFireError(lang === 'pt' ? 'Erro de rede ao falar com esta máquina.' : 'Network error talking to this machine.')
+      setFireBusy(false)
+    }
+  }
+
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); await fn(); await reload(); setBusy(false) }
   const stats = detail.stats
   const duration = fmtDuration(stats.deliveryMs)
@@ -1367,6 +1449,12 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
               }}
               onUnfile={sessionId => run(() => detachSession(id, sessionId))}
               onOpenSession={sid => navigate(sessionPath(sid))}
+              taskFiles={detail.files}
+              onUploadFile={f => uploadFile(id, f, 'you')}
+              onSaveStagedSession={(sid, d) => saveStagedSession(id, sid, d).then(r => { void reload(); return r })}
+              onClearStagedSession={sid => run(() => clearStagedSession(id, sid))}
+              onFireStagedSession={t => void startFire(t)}
+              preparingStagedSessionId={preparingFire}
             />
           )}
 
@@ -1533,6 +1621,41 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
             setSubtaskBlocked(null)
             await run(() => attachSession(id, sessionId, subtaskId))
           }}
+        />
+      )}
+
+      {firing && (
+        <StagedSessionLaunchConfirm
+          lang={lang}
+          subtaskTitle={firing.title}
+          draft={firing.stagedSession!}
+          attachmentNames={(firing.stagedSession!.attachmentIds ?? [])
+            .map(fid => detail.files.find(f => f.id === fid)?.name)
+            .filter((n): n is string => !!n)}
+          busy={fireBusy}
+          error={fireError}
+          onCancel={() => setFiring(null)}
+          onConfirm={() => void confirmFire()}
+        />
+      )}
+
+      {firePrefillFor && (
+        <NewSessionModal
+          lang={lang}
+          initialTaskId={id}
+          initialSubtaskId={firePrefillFor.subtask.id}
+          initialPreset={{
+            ...(firePrefillFor.subtask.stagedSession?.harness
+              ? { harness: firePrefillFor.subtask.stagedSession.harness } : {}),
+            prompt: firePrefillFor.prompt,
+            ...(firePrefillFor.subtask.stagedSession?.model
+              ? { model: firePrefillFor.subtask.stagedSession.model } : {}),
+            ...(firePrefillFor.subtask.stagedSession?.effort
+              ? { effort: firePrefillFor.subtask.stagedSession.effort } : {}),
+            label: firePrefillFor.subtask.title,
+          }}
+          onClose={() => setFirePrefillFor(null)}
+          onStarted={() => { setFirePrefillFor(null); void reload() }}
         />
       )}
     </>
