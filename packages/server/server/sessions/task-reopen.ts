@@ -35,6 +35,15 @@
  *    the concurrency itself lives at the call site (see `resume-lock.ts`); THIS is the backstop for
  *    the case where one single planning pass is handed the same conversation more than once — the
  *    second row is skipped rather than spawning a twin of the first.
+ *  - **An empty (or otherwise falsy) resolved id never claims anything.** `claimed` is keyed on
+ *    `conv.sessionId`, so without this rule TWO rows a broken `conversationFor` handed the
+ *    degenerate id `''` would collide on that empty string exactly as if they shared a real
+ *    conversation, and the second would be silently skipped as a "duplicate" of the first. Neither
+ *    real caller produces `''` today (a resolver that cannot resolve returns `null`, not an empty
+ *    id) — but that was true "by luck", not by anything this function enforced, and this rule's own
+ *    job is to be the enforcement. So a falsy id is never added to `claimed` and never blocks
+ *    another row via it: both rows are planned, each on its own (equally degenerate) terms, rather
+ *    than one silently vanishing into the other's shadow.
  */
 
 import { conversationHeldBy, type ConversationHolder } from './conversation-claim'
@@ -101,13 +110,15 @@ export function planTaskReopen(o: {
     if (o.liveIds.has(entry.id)) { plan.already.push(entry.id); continue }
     const conv = o.conversationFor(entry)
     if (!conv) { plan.skipped.push(entry.id); continue }
-    if (claimed.has(conv.sessionId)) { plan.skipped.push(entry.id); continue }
+    // A falsy id (`''`) is never claimed and never checked against a claim — see the header. Only a
+    // genuine id can collide with another genuine id.
+    if (conv.sessionId && claimed.has(conv.sessionId)) { plan.skipped.push(entry.id); continue }
     // Checked AFTER the conversation is resolved, and against THAT conversation rather than the
     // row's recorded one: the resolver is what decides which conversation this reopen would
     // actually open, so it is the only id whose being taken means anything.
     const holder = conversationHeldBy(inUse, conv.sessionId, entry.id)
     if (holder) { plan.heldElsewhere.push({ id: entry.id, holder }); continue }
-    claimed.add(conv.sessionId)
+    if (conv.sessionId) claimed.add(conv.sessionId)
     plan.reopen.push({ entry, resumeId: conv.sessionId, label: entry.label ?? conv.title })
   }
   return plan

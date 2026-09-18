@@ -127,9 +127,8 @@ import { markFleetPhase, timeFleetPhase } from './sessions/fleet-profile'
 // The `SessionView` -> `ControlSession` mapping, extracted so `agentop session ls` draws the same
 // rows from the same decision rather than mapping the fleet a second time.
 import { toControlSession } from './sessions/control-session'
-import {
-  conversationAlreadyOpen, planTaskReopen, taskReopenSucceeded, type TaskReopenPlan,
-} from './sessions/task-reopen'
+import { planTaskReopen, taskReopenSucceeded, type TaskReopenPlan } from './sessions/task-reopen'
+import { attemptReopenRow } from './sessions/reopen-attempt'
 import { approvalFor, choiceKey, fieldIsOpen, isFreeTextOption, readsMarkerSelect } from './sessions/approval-spec'
 // Carrying a rename through to the harness. Shared with `agentop session rename` — one gesture, one
 // implementation, for the reason `task-reopen.ts` exists.
@@ -1745,22 +1744,31 @@ async function reopenEntries(
      * browser tabs both reacting to the same fallen group, a retry) can both read that snapshot
      * before either has spawned or retired anything, and both would then plan to reopen the SAME
      * conversation — measured on the isolated preview: two concurrent calls, four live rows for two
-     * fallen conversations. The lock serialises the actual spawn per `resumeId`, reusing the very
-     * lock a plain `resume` already takes for that id, so the two verbs cannot race each other
-     * either. `conversationAlreadyOpen` is the check made a SECOND time, once this row's turn comes,
-     * against a FRESH read — which is what lets the second racer see the first racer's own new row
-     * and stand down instead of starting a twin.
+     * fallen conversations. `attemptReopenRow` (`reopen-attempt.ts`) is the check made a SECOND
+     * time, once this row's turn under the lock comes, against a FRESH read — which is what lets the
+     * second racer see the first racer's own new row and stand down instead of starting a twin.
+     *
+     * `withResumeLock` is IN-PROCESS memory (a plain `Map` at module scope in `resume-lock.ts`), so
+     * this closes the race COMPLETELY only between two callers inside the SAME process — two
+     * `reopenFell` requests both landing on this one `agentop server`. A `reopenFell` fired from a
+     * separately-run cockpit process at the same instant has its OWN lock instance and is not
+     * serialised by it; the fresh-read recheck inside `attemptReopenRow` still narrows that case (it
+     * reads the registry file and the backend, which any process can see) without being a hard
+     * exclusion the way the same-process case is. Same class of stated limit `registry.ts` already
+     * carries for cross-process writes.
      */
-    const outcome = await withResumeLock(row.resumeId, async (): Promise<
-      { kind: 'opened' } | { kind: 'held' } | { kind: 'failed' }
-    > => {
-      const freshBackend = await resolveBackend()
-      const [freshEntries, freshAlive] = await Promise.all([
-        readRegistry().catch(() => [] as ManagedSession[]),
-        freshBackend.list().catch(() => []).then(l => new Set(l.filter(b => b.alive).map(b => b.id))),
-      ])
-      if (conversationAlreadyOpen(freshEntries, freshAlive, row.resumeId, m.id)) return { kind: 'held' }
-      const r = await spawnManaged({
+    const outcome = await withResumeLock(row.resumeId, () => attemptReopenRow(row.resumeId, m.id, {
+      freshState: async () => {
+        const freshBackend = await resolveBackend()
+        const [freshEntries, freshAlive] = await Promise.all([
+          readRegistry().catch(() => [] as ManagedSession[]),
+          freshBackend.list().catch(() => []).then(l => new Set(l.filter(b => b.alive).map(b => b.id))),
+        ])
+        return { entries: freshEntries, aliveIds: freshAlive }
+      },
+      holderOf: async () =>
+        conversationHeldBy(await liveConversationHolders(await resolveBackend()), row.resumeId, m.id),
+      spawn: () => spawnManaged({
         harness: m.harness,
         cwd: m.cwd,
         resumeId: row.resumeId,
@@ -1769,23 +1777,22 @@ async function reopenEntries(
         // The task travels with the session, whichever set this reopen was chosen from: a fall does
         // not un-file the work someone filed.
         ...(m.task ? { task: m.task } : {}),
-      }, s)
-      if (!r.ok) return { kind: 'failed' }
-      if (r.id) await patchSession(r.id, { conversationId: row.resumeId })
-      // Retired, so a laptop closed and opened twice does not leave two dead twins and one live
-      // session standing under the same name.
-      await patchSession(m.id, { endedAt: new Date().toISOString() })
-      if (m.note && r.id) await patchSession(r.id, { note: m.note })
-      return { kind: 'opened' }
-    })
+      }, s),
+      onSpawned: async newId => {
+        if (newId) await patchSession(newId, { conversationId: row.resumeId })
+        // Retired, so a laptop closed and opened twice does not leave two dead twins and one live
+        // session standing under the same name.
+        await patchSession(m.id, { endedAt: new Date().toISOString() })
+        if (m.note && newId) await patchSession(newId, { note: m.note })
+      },
+    }))
     if (outcome.kind === 'opened') opened++
     else if (outcome.kind === 'held') {
       // Somebody else's attempt for this exact conversation landed first, in the time between the
       // plan being built and this row's turn under the lock. Reported the same way `planTaskReopen`
       // reports any other twin: the work is on screen, under another row, and this was never a
       // failure.
-      const holder = conversationHeldBy(await liveConversationHolders(await resolveBackend()), row.resumeId, m.id)
-      plan.heldElsewhere.push({ id: m.id, holder: holder ?? { id: row.resumeId, label: row.label, kind: 'managed' } })
+      plan.heldElsewhere.push({ id: m.id, holder: outcome.holder ?? { id: row.resumeId, label: row.label, kind: 'managed' } })
     } else {
       skipped++
     }

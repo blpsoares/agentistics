@@ -167,6 +167,20 @@ describe('two rows resolving to the SAME conversation', () => {
     ])
     expect(plan.reopen.map(r => r.entry.id)).toEqual(['b'])
   })
+
+  it('never collides two rows on an empty resolved id — both are planned', () => {
+    // A latent trap in the dedup key, not a live bug: no real `conversationFor` returns `''` today
+    // (an unresolvable conversation is `null`, never an empty id) — but that used to be true "by
+    // luck", not by anything this function enforced. A broken resolver handing out `''` for two
+    // DIFFERENT rows must not have the second one silently vanish as a "duplicate" of the first.
+    const plan = planTaskReopen({
+      entries: [entry('a'), entry('b')],
+      liveIds: new Set(),
+      conversationFor: () => ({ sessionId: '', title: 't' }),
+    })
+    expect(plan.reopen.map(r => r.entry.id)).toEqual(['a', 'b'])
+    expect(plan.skipped).toEqual([])
+  })
 })
 
 describe('conversationAlreadyOpen', () => {

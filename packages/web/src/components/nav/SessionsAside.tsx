@@ -45,6 +45,7 @@ import {
   subscribePinnedSessions, togglePinnedSession,
 } from '../../lib/pinnedSessions'
 import { fellGroupDismissed, readDismissedFell, writeDismissedFell } from '../../lib/fellDismissal'
+import { endDispatch, tryBeginDispatch } from '../../lib/dispatchGuard'
 
 export interface SessionsAsideProps {
   lang: 'pt' | 'en'
@@ -177,9 +178,9 @@ export function SessionsAside({
    * `groupBusy` already disables the modal's confirm button, but that is REACT STATE: it only takes
    * effect once a render has committed, and two `click` events dispatched close enough together (a
    * fast double-click, or a stray double dispatch) can both run their handler before that render
-   * lands — both would then call `act()`. A ref is read and written synchronously, in the same tick
-   * the first click's handler runs, so the second click's handler sees it immediately, before React
-   * has painted anything.
+   * lands — both would then call `act()`. The decision itself (`tryBeginDispatch`/`endDispatch`) is
+   * a plain, tested function in `dispatchGuard.ts`; this ref is just the mutable box it reads and
+   * writes synchronously, in the same tick the first click's handler runs.
    */
   const groupActingRef = useRef(false)
   /** The exact set of fallen ids the "reopen what fell" banner was last dismissed for — see
@@ -529,9 +530,9 @@ export function SessionsAside({
           onClose={() => { if (!groupBusy) setPicking(null) }}
           onConfirm={(ids, text) => {
             // Checked and set SYNCHRONOUSLY, before anything async or any state update — see
-            // `groupActingRef`'s own comment. `groupBusy` still drives the modal's disabled look.
-            if (groupActingRef.current) return
-            groupActingRef.current = true
+            // `groupActingRef`'s own comment and `dispatchGuard.ts`. `groupBusy` still drives the
+            // modal's disabled look.
+            if (!tryBeginDispatch(groupActingRef)) return
             setGroupBusy(true)
             /*
              * The GROUP is addressed, never a row: the id is the anchor the route needs and `ids`
@@ -541,7 +542,7 @@ export function SessionsAside({
              */
             void act({ id: ids[0] ?? '', action: picking === 'reopen' ? 'reopenFell' : 'broadcast', ids, ...(text ? { text } : {}) })
               .then(out => { setNotice(out.message); setPicking(null) })
-              .finally(() => { groupActingRef.current = false; setGroupBusy(false) })
+              .finally(() => { endDispatch(groupActingRef); setGroupBusy(false) })
           }}
         />
       )}
