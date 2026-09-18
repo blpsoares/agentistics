@@ -8,7 +8,7 @@ import {
   killSessionArgs, listSessionsArgs, paneInfoArgs, parsePaneInfo, parsePrefix, parseTmuxList,
   tmuxListIsEmptyState,
   resolveDefaultTerminal, resolveTruecolorTerm, spawnArgs, sendKeysNamedArgs, sendKeysLiteralArgs,
-  clearHistoryArgs,
+  clearHistoryArgs, pasteBufferName, setBufferArgs, pasteBufferArgs,
   showPrefixArgs, trimCapture,
   type TerminalProfile,
 } from './tmux-cli'
@@ -384,6 +384,17 @@ export const tmuxBackend: SessionBackend = {
         await tmux(clearHistoryArgs(id))
       }
       return ok
+    })
+  },
+
+  // LOCKED like every other write: a keystroke landing mid-paste is the same collision
+  // `pane-writer.ts` exists to prevent. `set-buffer` first, THEN `paste-buffer -d` — a failed
+  // set never pastes stale content from a previous buffer of the same name.
+  async sendPaste(id: string, text: string) {
+    return writeToPane(id, async () => {
+      const name = pasteBufferName(id)
+      if ((await tmux(setBufferArgs(name, text))).code !== 0) return false
+      return (await tmux(pasteBufferArgs(id, name))).code === 0
     })
   },
 

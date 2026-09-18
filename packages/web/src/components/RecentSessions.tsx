@@ -22,7 +22,8 @@ import { operatorId, recordPromptSend, resolveAuthor } from '../lib/promptAudit'
 import { getTerminalZoom, setTerminalZoom, subscribeTerminalZoom, ZOOM_STEP, ZOOM_MIN, ZOOM_MAX } from '../lib/terminalZoom'
 import { consentMode, keyStripShown, type TerminalPlacement } from '../lib/terminalSurface'
 import { createPaneResizer } from '../lib/paneResizeRequest'
-import { KEY_STRIP, ctrlKeyFor, keyBytes, stripKeyLabel } from '../lib/keyStrip'
+import { ctrlKeyFor, keyBytes, stripEntries, stripKeyLabel } from '../lib/keyStrip'
+import { clipboardPasteAvailable, pasteFromClipboard } from '../lib/clipboardPaste'
 import { getPinnedIds, isSessionPinned, togglePinnedSession, subscribePinnedSessions, pinnedServerSnapshot, MAX_PINNED } from '../lib/pinnedSessions'
 import { getOpenModalSession, setOpenModalSession, subscribeOpenModalSession } from '../lib/openModalSession'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -1854,6 +1855,11 @@ export function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, au
     setStripNote(null)
     write.send(keyBytes(key))
   }
+  /** A paste never goes through `sendKeys` — it is one atomic message, not a keystroke burst — and
+   *  never through the ctrl-armed composition either: pasting cancels an armed ctrl the same way a
+   *  strip press for any other key would leave it hanging otherwise. */
+  const sendPasteText = (text: string) => { setCtrlArmed(false); write.sendPaste(text) }
+  const clipboardReadable = useMemo(() => clipboardPasteAvailable(), [])
   const tw = TYPING_T[lang]
   // The one honest status for the keystroke channel: connecting → live, a drop, or a not-delivered.
   const typingNotice: { tone: 'live' | 'wait' | 'bad'; text: string } | null =
@@ -1918,7 +1924,7 @@ export function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, au
       >
         <Suspense fallback={<div style={{ padding: 16, fontSize: 12, color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>{lang === 'pt' ? 'Carregando o emulador…' : 'Loading the emulator…'}</div>}>
           {/* key={id}: a new session gets a brand-new emulator, so no content leaks across. */}
-          <SessionTerminal key={id} frame={state.frame} theme={theme} showCursor={status.showCursor} zoom={zoom} interactive={interactive} onInput={sendKeys} onGeometry={resizer.request} />
+          <SessionTerminal key={id} frame={state.frame} theme={theme} showCursor={status.showCursor} zoom={zoom} interactive={interactive} onInput={sendKeys} onPaste={sendPasteText} onGeometry={resizer.request} />
         </Suspense>
       </div>
       {/* THE KEY STRIP — mobile only, and never in a dashboard card (`keyStripShown`). Without it a
@@ -1928,7 +1934,7 @@ export function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, au
           judges both identically — a key it would refuse cannot reach the wire by a side door. */}
       {showStrip && write.ready && (
         <div style={{ display: 'flex', gap: 6, flexShrink: 0, overflowX: 'auto' }}>
-          {KEY_STRIP.map(entry => {
+          {stripEntries(clipboardReadable).map(entry => {
             const armed = entry.kind === 'modifier' && ctrlArmed
             return (
               <button
@@ -1937,6 +1943,7 @@ export function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, au
                   e.stopPropagation()
                   if (entry.kind === 'modifier') { setStripNote(null); setCtrlArmed(a => !a); return }
                   setCtrlArmed(false)
+                  if (entry.kind === 'paste') { void pasteFromClipboard(sendPasteText); return }
                   write.send(keyBytes(entry.key))
                 }}
                 aria-pressed={entry.kind === 'modifier' ? ctrlArmed : undefined}

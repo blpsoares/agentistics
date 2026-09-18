@@ -15,7 +15,7 @@
 
 import {
   capturePaneAnsiArgs, paneInfoArgs, parsePaneInfo, SHELL_SOCKET, sendKeysLiteralArgs,
-  sendKeysNamedArgs, clearHistoryArgs,
+  sendKeysNamedArgs, clearHistoryArgs, pasteBufferName, setBufferArgs, pasteBufferArgs,
 } from './tmux-cli'
 import type { TerminalCapture } from './types'
 
@@ -29,6 +29,8 @@ export interface ShellTerminal {
   sendText(id: string, text: string): Promise<boolean>
   /** Press ONE named key (`C-c`, `Enter`, `Escape`). */
   sendKey(id: string, key: string): Promise<boolean>
+  /** Deliver a whole clipboard PASTE atomically — bracketed `paste-buffer`, on the SHELL socket. */
+  sendPaste(id: string, text: string): Promise<boolean>
 }
 
 /** The byte a terminal emits for ctrl+l. */
@@ -77,6 +79,12 @@ export function createShellTerminal(run: TmuxRun): ShellTerminal {
         await run(clearHistoryArgs(id, SHELL_SOCKET))
       }
       return ok
+    },
+
+    async sendPaste(id, text) {
+      const name = pasteBufferName(id)
+      if ((await run(setBufferArgs(name, text, SHELL_SOCKET))).code !== 0) return false
+      return (await run(pasteBufferArgs(id, name, SHELL_SOCKET))).code === 0
     },
   }
 }

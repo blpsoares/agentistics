@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   KEY_ALLOWLIST,
   MAX_INPUT_TEXT,
+  MAX_PASTE_TEXT,
   ackFail,
   ackOk,
   encodeAck,
@@ -100,6 +101,49 @@ describe('parseInputMessage', () => {
   test('rejects a non-string key name', () => {
     expect(parseInputMessage(JSON.stringify({ seq: 6, kind: 'key', name: 3 })))
       .toEqual({ ok: false, seq: 6, reason: 'bad_key' })
+  })
+
+  test('accepts a paste message — a SEPARATE kind from text, with its own cap', () => {
+    const r = parseInputMessage(JSON.stringify({ seq: 10, kind: 'paste', data: 'line one\nline two' }))
+    expect(r).toEqual({ ok: true, msg: { seq: 10, kind: 'paste', text: 'line one\nline two' } })
+  })
+
+  test('a multi-line paste is never refused as an unsupported sequence — it is a whole message', () => {
+    // The typed-keystroke allowlist (`terminalKeys.ts`, client-side) refuses a chunk with an
+    // interior newline outright. `paste` is a different kind entirely and carries no such rule —
+    // the point of it existing is that a paste's newlines are never judged as control bytes.
+    const text = Array.from({ length: 30 }, (_, i) => `line ${i}`).join('\n')
+    const r = parseInputMessage(JSON.stringify({ seq: 11, kind: 'paste', data: text }))
+    expect(r).toEqual({ ok: true, msg: { seq: 11, kind: 'paste', text } })
+  })
+
+  test('rejects empty paste text', () => {
+    expect(parseInputMessage(JSON.stringify({ seq: 12, kind: 'paste', data: '' })))
+      .toEqual({ ok: false, seq: 12, reason: 'empty_text' })
+  })
+
+  test('rejects paste text that is not a string', () => {
+    expect(parseInputMessage(JSON.stringify({ seq: 12, kind: 'paste', data: 9 })))
+      .toEqual({ ok: false, seq: 12, reason: 'bad_message' })
+  })
+
+  test('rejects a paste over ITS OWN (larger) length ceiling — refused, never truncated', () => {
+    const big = 'a'.repeat(MAX_PASTE_TEXT + 1)
+    expect(parseInputMessage(JSON.stringify({ seq: 13, kind: 'paste', data: big })))
+      .toEqual({ ok: false, seq: 13, reason: 'paste_too_long' })
+  })
+
+  test('accepts a paste exactly at its own ceiling, which is larger than the typed-text one', () => {
+    expect(MAX_PASTE_TEXT).toBeGreaterThan(MAX_INPUT_TEXT)
+    const atLimit = 'a'.repeat(MAX_PASTE_TEXT)
+    const r = parseInputMessage(JSON.stringify({ seq: 14, kind: 'paste', data: atLimit }))
+    expect(r.ok).toBe(true)
+  })
+
+  test('a paste past MAX_INPUT_TEXT but within MAX_PASTE_TEXT is accepted — the caps are independent', () => {
+    const between = 'a'.repeat(MAX_INPUT_TEXT + 1000)
+    const r = parseInputMessage(JSON.stringify({ seq: 15, kind: 'paste', data: between }))
+    expect(r.ok).toBe(true)
   })
 
   test('KEY_ALLOWLIST is exactly the agreed closed set', () => {

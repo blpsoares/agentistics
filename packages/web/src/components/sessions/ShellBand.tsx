@@ -63,7 +63,8 @@ import {
 import {
   INITIAL_SHELL_BAND, shellBandReducer, shellResolveWanted, type OpenShell,
 } from '../../lib/shellBandState'
-import { KEY_STRIP, ctrlKeyFor, keyBytes, stripKeyLabel } from '../../lib/keyStrip'
+import { ctrlKeyFor, keyBytes, stripEntries, stripKeyLabel } from '../../lib/keyStrip'
+import { clipboardPasteAvailable, pasteFromClipboard } from '../../lib/clipboardPaste'
 import { terminalStatus } from '../../lib/terminalStream'
 import { createPaneResizer } from '../../lib/paneResizeRequest'
 import { bandSegmentEntries } from '../../lib/bandSegment'
@@ -416,13 +417,20 @@ export function ShellBand({
     write.send(data)
   }, [ctrlArmed, write, t])
 
+  /** A paste — from the native paste event OR the strip's own `paste` button — is one atomic
+   *  message, never a keystroke, and cancels an armed ctrl the same way any other strip press
+   *  would leave it hanging otherwise. */
+  const sendPasteText = useCallback((text: string) => { setCtrlArmed(false); write.sendPaste(text) }, [write])
+  const clipboardReadable = useMemo(() => clipboardPasteAvailable(), [])
+
   const pressStrip = useCallback((id: string) => {
-    const entry = KEY_STRIP.find(e => e.id === id)
+    const entry = stripEntries(clipboardReadable).find(e => e.id === id)
     if (!entry) return
     if (entry.kind === 'modifier') { setCtrlNote(null); setCtrlArmed(a => !a); return }
     setCtrlArmed(false)
+    if (entry.kind === 'paste') { void pasteFromClipboard(sendPasteText); return }
     write.send(keyBytes(entry.key))
-  }, [write])
+  }, [write, clipboardReadable, sendPasteText])
 
   const close = useCallback(async () => {
     if (!shell) return
@@ -545,6 +553,7 @@ export function ShellBand({
           showCursor={status.showCursor}
           interactive={write.ready}
           onInput={send}
+          onPaste={sendPasteText}
           onGeometry={streamId ? onGeometry : undefined}
         />
       </Suspense>
@@ -645,7 +654,7 @@ export function ShellBand({
       display: 'flex', gap: 6, flexShrink: 0, overflowX: 'auto',
       paddingBottom: 'var(--safe-bottom)',
     }}>
-      {KEY_STRIP.map(entry => {
+      {stripEntries(clipboardReadable).map(entry => {
         const armed = entry.kind === 'modifier' && ctrlArmed
         return (
           <button

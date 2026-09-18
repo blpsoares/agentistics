@@ -41,6 +41,7 @@ function fakeBackend(o: {
     async sendText() { return true },
     async sendTextRaw() { return true },
     async sendKey() { return true },
+    async sendPaste() { return true },
   }
 }
 

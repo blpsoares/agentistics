@@ -10,8 +10,14 @@
  *
  * Client → server, one JSON object per WS message:
  *
- *   { "seq": 1, "kind": "text", "data": "l"   }   // literal characters, typed with `-l`, NO Enter
- *   { "seq": 2, "kind": "key",  "name": "C-c" }   // one NAMED key from the CLOSED set below
+ *   { "seq": 1, "kind": "text",  "data": "l"   }   // literal characters, typed with `-l`, NO Enter
+ *   { "seq": 2, "kind": "key",   "name": "C-c" }   // one NAMED key from the CLOSED set below
+ *   { "seq": 3, "kind": "paste", "data": "…"   }   // a whole clipboard PASTE, atomic, never split
+ *
+ * `paste` is a SEPARATE kind from `text`, not a longer `text` — it goes through a different tmux
+ * primitive (bracketed `paste-buffer`, see `tmux-cli.ts`), and its own, larger length cap
+ * (`MAX_PASTE_TEXT`), because the client can tell the two apart at the source (the DOM `paste`
+ * event) in a way the server never could from bytes alone.
  *
  * Server → client, one ack per message:
  *
@@ -34,9 +40,16 @@
  */
 import { originAllowed } from '../cors'
 
-/** A `text` payload longer than this is refused. A browser paste goes through the #269 line composer;
- *  direct typing is small, and 8 KiB is generous headroom for a batched `xterm.onData` chunk. */
+/** A `text` payload longer than this is refused. Direct typing is small — a batched `xterm.onData`
+ *  chunk from a person's own keystrokes — and 8 KiB is generous headroom for one. A PASTE is a
+ *  different payload with its own, larger cap: see `MAX_PASTE_TEXT`. */
 export const MAX_INPUT_TEXT = 8192
+
+/** A `paste` payload longer than this is REFUSED, never truncated — a truncated paste silently
+ *  types less than the person copied, which is worse than a refusal they can see. 64 KiB is
+ *  generous for a clipboard paste (a long log line, a stack trace, a config file) while still
+ *  bounding what one WebSocket message can make the server type into a pane. */
+export const MAX_PASTE_TEXT = 65536
 
 /**
  * The CLOSED set of named keys this channel will send — defence in depth.
@@ -71,6 +84,7 @@ export const KEY_ALLOWLIST: ReadonlySet<string> = new Set([
 export type InputMessage =
   | { seq: number; kind: 'text'; text: string }
   | { seq: number; kind: 'key'; key: string }
+  | { seq: number; kind: 'paste'; text: string }
 
 /** Every stable failure reason a client may receive. */
 export type InputReason =
@@ -78,6 +92,7 @@ export type InputReason =
   | 'bad_message'
   | 'empty_text'
   | 'text_too_long'
+  | 'paste_too_long'
   | 'bad_key'
   | 'send_failed'
   | 'error'
@@ -144,6 +159,14 @@ export function parseInputMessage(raw: string): ParseResult {
       return { ok: false, seq, reason: 'bad_key' }
     }
     return { ok: true, msg: { seq, kind: 'key', key: name } }
+  }
+  if (kind === 'paste') {
+    const data = rec.data
+    if (typeof data !== 'string') return { ok: false, seq, reason: 'bad_message' }
+    if (data.length === 0) return { ok: false, seq, reason: 'empty_text' }
+    // REFUSED, never truncated — see `MAX_PASTE_TEXT`.
+    if (data.length > MAX_PASTE_TEXT) return { ok: false, seq, reason: 'paste_too_long' }
+    return { ok: true, msg: { seq, kind: 'paste', text: data } }
   }
   return { ok: false, seq, reason: 'bad_message' }
 }
