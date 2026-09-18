@@ -39,12 +39,14 @@
  * one place that turns those into sentences. A blank band is never an answer.
  */
 
-import { Suspense, lazy, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import {
-  ChevronDown, ChevronUp, ChevronLeft, FolderTree, Loader2, Maximize2, PanelRightOpen,
+  ChevronDown, ChevronUp, ChevronLeft, Loader2, Maximize2, PanelRightOpen,
   RotateCcw, TerminalSquare, Trash2,
 } from 'lucide-react'
 import { useDocumentVisible } from '../../hooks/useDocumentVisible'
+import { useElementWidth } from '../../hooks/useElementWidth'
+import { ResizeGrip } from '../ResizeGrip'
 import { keyStripShown } from '../../lib/terminalSurface'
 import { dockedShowsTarget, usePanelSlots } from '../../lib/panelSlots'
 import {
@@ -67,7 +69,10 @@ import { KEY_STRIP, ctrlKeyFor, keyBytes, stripKeyLabel } from '../../lib/keyStr
 import { terminalStatus } from '../../lib/terminalStream'
 import { createPaneResizer } from '../../lib/paneResizeRequest'
 import { bandSegmentEntries } from '../../lib/bandSegment'
-import { BandLabeledButton, BandSegment, BandSegmentTab } from './bandControls'
+import { bandBarCompact, type PanelBarEntry, type PanelBarId } from '../../lib/panelBar'
+import {
+  BAND_CONTROL_H, BandOverflowMenu, BandSegment, BandSegmentTab, PanelBar, type BandOverflowEntry,
+} from './bandControls'
 
 const SessionTerminal = lazy(() => import('../SessionTerminal'))
 
@@ -171,22 +176,60 @@ export interface ShellBandProps {
   /** Offered only when there is somewhere to go: the band's "take the whole screen" control. */
   onOpenFullscreen?: () => void
   /**
-   * May the DOCKED band also offer Studio as a third segment (design §1.3's "Claude Code | Shell
-   * segment gains Studio")? The same already-resolved `editorEnabled` `SessionPanel` reads. Ignored
-   * outside `docked` — `aside`/`dedicated` show one stream and nothing else sits beside them.
+   * THE ONE PANEL BAR (design item 1) — `Conteúdo · Studio · Claude Code · Shell · Hardware`,
+   * computed by the caller (`SessionPanel`, which has `panelSlots`/`artifactsStore` in scope) through
+   * `panelBarEntries`. It replaces the docked band's own former `Claude Code | Shell | Studio`
+   * segment — that segment's whole job (switch what THIS band shows) is a subset of what this bar
+   * now does. `docked`, desktop only — `aside`/`dedicated` show one stream and nothing else sits
+   * beside them, and mobile keeps its own compact switcher (see the module header).
    */
-  studioEnabled?: boolean
-  /** Selecting Studio from the docked band's own segment — `openPanel('studio', 'bottom')`, which
-   *  displaces whichever of cli/shell this band was showing (asking first only if the STUDIO being
-   *  displaced elsewhere is dirty — moving TO it never drops anything of this band's own). Ignored
-   *  outside `docked`. */
-  onSelectStudio?: () => void
-  /** Told the target every time a person actually PICKS one from the docked band's own segment —
-   *  kept in sync with `panelSlots.ts`'s own `bottom` field, which is what lets "move to right" and
-   *  a later "which panel is at the bottom" question answer correctly for cli/shell exactly as they
-   *  already do for the Studio. This band's OWN `target` state remains the thing that actually
-   *  decides what is on screen — this is a notification, not a second source of truth. */
-  onSelectTerminal?: (target: TerminalTarget) => void
+  barEntries?: readonly PanelBarEntry[]
+  /**
+   * A tab was picked. `SessionPanel` builds ONE such handler shared by this band and `StudioBand`,
+   * so the two can never disagree about what clicking Contents/Studio/Hardware does — this band adds
+   * only the cli/shell-specific side effects (`chooseTarget`, opening if collapsed) around it, in
+   * `handleBarPick` below, because those two targets are this band's own local preference and no
+   * other caller of the shared handler needs to know that.
+   */
+  onBarPick?: (id: PanelBarId) => void
+  /** The first-open dot on the Studio entry — `App.tsx`'s own `studioSeen`, threaded down through
+   *  `SessionPanel`. */
+  studioSeen?: boolean
+  /**
+   * WHAT `panelSlots.ts` SAYS THE BOTTOM SLOT HOLDS, `'cli'`/`'shell'` only — seeds this band's own
+   * `target` state on a FRESH MOUNT (a fresh mount happens whenever `StudioBand` swaps out for this
+   * component: picking Claude Code or Shell from within `StudioBand`'s own bar displaces the Studio
+   * and hands the bottom slot to whichever was picked, and without this the new `ShellBand` instance
+   * would initialise `target` from its own stored preference, disagreeing with what was just
+   * requested on the very first frame) — AND kept in sync for the life of the mount, below (the
+   * effect next to `target`'s own declaration).
+   *
+   * That second half is not optional. `target` is this band's own LOCAL preference and nothing sets
+   * it except `chooseTarget`, called only from THIS component's own click handlers
+   * (`handleBarPick`, the mobile `targetSwitch`). `SessionPanel`'s "bring it to the bottom" gesture
+   * (owner feedback, 2026-09-17) writes `panelSlots` from OUTSIDE this component — it has no access
+   * to `chooseTarget` at all — so without the effect, `bottomOccupant` flips to the newly-moved
+   * panel while `target` (and the stream on screen) stays whatever it was, which is what made
+   * "Mover para baixo" read as "this just closes the right aside": the store moved the panel
+   * correctly and this band kept showing the wrong thing, or nothing.
+   */
+  bottomOccupant?: 'cli' | 'shell' | null
+  /**
+   * THE TASK CONTROL (design item 3) — `SessionTitleFlag`, rendered at the bar's LEFT end, the same
+   * element `StudioBand` and the no-terminal fallback band render. Built once by `SessionPanel` (it
+   * owns the session's id/title/harness/task) and handed down as a node rather than reimplemented
+   * three times — the exact reason `SessionTitleFlag` itself exists. `docked`/desktop only: mobile
+   * keeps it in the page's own header (design item 4), and `aside`/`dedicated` show one stream with
+   * no room for a second control.
+   */
+  taskControl?: ReactNode
+  /**
+   * "Bring the Studio to the bottom" (owner feedback, 2026-09-17) — present exactly when the Studio
+   * sits in the right slot while THIS band is docked; see `SessionPanel`'s own `moveDownEntries`.
+   * Merged into this band's own overflow menu rather than a second control — `docked` only, the
+   * same reasoning as `onMoveToRight` below.
+   */
+  extraOverflowEntries?: readonly BandOverflowEntry[]
   /** Move whichever pane THIS band is currently showing to the right slot. Docked only — `aside` is
    *  already the right slot, and `dedicated` has no slot to move into. */
   onMoveToRight?: (target: TerminalTarget) => void
@@ -201,7 +244,8 @@ export interface ShellBandProps {
 
 export function ShellBand({
   sessionId, cwd, lang, theme, harness, placement = 'docked', onOpenFullscreen,
-  studioEnabled, onSelectStudio, onSelectTerminal, onMoveToRight, columnHeight = 0,
+  barEntries, onBarPick, studioSeen = true, bottomOccupant = null, taskControl, extraOverflowEntries,
+  onMoveToRight, columnHeight = 0,
 }: ShellBandProps) {
   const t = TXT[lang]
   const isMobile = useIsMobile()
@@ -216,8 +260,14 @@ export function ShellBand({
    * WHICH terminal this band is showing. It is the band's own state and not the session's, because
    * the band is now the door to BOTH panes: the header's `Conversa | Terminal` toggle is gone, a
    * session opens on its conversation, and choosing a terminal is choosing which one.
+   *
+   * SEEDED FROM `bottomOccupant` WHEN IT NAMES ONE, the stored preference otherwise — see that
+   * prop's own doc comment for why: a fresh mount (this component swapping in for `StudioBand`)
+   * must show what was just requested, not whatever this band happened to show last time it was up.
    */
-  const [target, setTarget] = useState<TerminalTarget>(() => readTarget(readBandPrefs().target))
+  const [target, setTarget] = useState<TerminalTarget>(
+    () => bottomOccupant ?? readTarget(readBandPrefs().target),
+  )
   const scope = targetScope(target)
   /**
    * EXCLUSIVITY WITH THE RIGHT SLOT (C3) — only the DOCKED placement needs this. This band's own
@@ -249,6 +299,21 @@ export function ShellBand({
     setTarget(next)
     try { writeBandPrefs({ ...readBandPrefs(), target: next }) } catch { /* storage blocked */ }
   }, [])
+
+  /**
+   * FOLLOW `bottomOccupant` FOR THE LIFE OF THE MOUNT, not only at the first frame — see that prop's
+   * own doc comment. A move triggered from outside this band's own bar (`SessionPanel`'s "bring it
+   * to the bottom" overflow entry) writes `panelSlots` directly and has no way to call `chooseTarget`
+   * itself; without this effect `target` stayed on whatever it was, `dockedShowsTarget` kept judging
+   * the OLD target against the (now cleared) right slot, and the band showed the wrong stream — or,
+   * once the right slot cleared, `terminalStream.ts`'s generic "pick a live session" placeholder —
+   * while the panel bar's own tab read correctly lit. Guarded so a `bottomOccupant` of `null` (the
+   * panel moved AWAY from the bottom, or nothing has ever named an occupant) never overwrites a
+   * choice the person made by clicking inside this band itself.
+   */
+  useEffect(() => {
+    if (bottomOccupant && bottomOccupant !== target) chooseTarget(bottomOccupant)
+  }, [bottomOccupant, target, chooseTarget])
 
   const setBand = useCallback((next: Partial<{ open: boolean; height: number; full: boolean }>) => {
     setPrefs(p => {
@@ -493,38 +558,59 @@ export function ShellBand({
   )
 
   /**
-   * THE DOCKED BAND'S OWN SEGMENT, WITH STUDIO AS A THIRD OPTION (design §1.3: "today's Claude Code
-   * | Shell segment gains Studio"). A separate variable from `targetSwitch` rather than a third
-   * entry in `TERMINAL_TARGETS` — that array drives `targetScope` / `targetStreamId`, which speak
-   * only of the two terminal STREAMS this band actually resolves; Studio streams nothing and has no
-   * scope, so teaching it to the pure terminal-target module would be answering a question about
-   * this band's own chrome with a change to a module three other surfaces read.
+   * THE ONE PANEL BAR (design item 1) — replaces the docked band's former "Claude Code | Shell |
+   * Studio" segment (`dockedTargetSwitch`, before this pass). `barEntries`/`onBarPick` come from
+   * `SessionPanel`, which is what lets `StudioBand` render the exact same bar and the two never
+   * disagree about what is lit or what clicking it does.
    *
-   * Picking Studio never touches this band's own `target` state — it calls `onSelectStudio`, which
-   * moves the STUDIO panel into the bottom slot (`panelSlots.ts`); `SessionPanel` then swaps this
-   * whole band out for the Studio's own bottom band on the very next render, exactly as picking the
-   * Studio already does from the right slot's switcher. Only shown while DOCKED: `dedicated` and
-   * `aside` already show one stream and nothing else sits beside them.
+   * The only thing THIS band adds around the shared handler is what makes cli/shell its OWN local
+   * concern rather than something `panelSlots.ts` can decide alone: `target` is chosen through this
+   * segment and never written back except on an explicit pick (see `target`'s own doc comment), so
+   * picking the tab that is not currently showing must ALSO flip this band's local state and open it
+   * if collapsed — the exact two things the old `dockedTargetSwitch` did by hand. A tab that IS
+   * already lit is left to the shared handler alone: if it is lit because it is the band's own
+   * occupant, that handler is a no-op (nothing to close from in here); if it is lit because it sits
+   * on the RIGHT instead, the handler closes it there, which needs no local state change.
    */
-  const dockedTargetSwitch = (
-    <BandSegment label={t.whichTerminal} isMobile={false}>
-      {bandSegmentEntries(target, { cli: true, shell: true, studio: studioEnabled === true }).map(({ id, on }) => (
-        <BandSegmentTab
-          key={id}
-          on={on}
-          onClick={e => {
-            e.stopPropagation()
-            if (id === 'studio') { onSelectStudio?.(); return }
-            chooseTarget(id as TerminalTarget)
-            onSelectTerminal?.(id as TerminalTarget)
-            if (!bandOpen) setBand({ open: true })
-          }}
-          icon={id === 'studio' ? <FolderTree size={11} /> : undefined}
-          label={id === 'studio' ? 'Studio' : targetLabel(id as TerminalTarget, harness, lang)}
-        />
-      ))}
-    </BandSegment>
+  const handleBarPick = useCallback((id: PanelBarId) => {
+    if ((id === 'cli' || id === 'shell') && !barEntries?.find(e => e.id === id)?.on) {
+      chooseTarget(id)
+      if (!bandOpen) setBand({ open: true })
+    }
+    onBarPick?.(id)
+  }, [barEntries, onBarPick, chooseTarget, bandOpen, setBand])
+  /** The bar's OWN measured width (design item 7), never the window's — see `useElementWidth`'s
+   *  own header on why. */
+  const [barWidthRef, barWidth] = useElementWidth()
+  const compact = bandBarCompact(barWidth)
+  const panelBar = barEntries !== undefined && (
+    <PanelBar
+      entries={barEntries} lang={lang} studioSeen={studioSeen} harness={harness} onPick={handleBarPick}
+      compact={compact}
+    />
   )
+  /**
+   * THE OVERFLOW MENU (design item 7) — Move/Full screen/End shell, each keeping its full label
+   * INSIDE the menu (only the TRIGGER is compact). Exactly the three `BandLabeledButton`s this bar
+   * used to draw inline, same conditions, same actions — moved so the row they used to widen no
+   * longer has to hold them at all.
+   */
+  const overflowEntries: BandOverflowEntry[] = [
+    ...(prefs.open && onMoveToRight ? [{
+      id: 'move', label: lang === 'pt' ? 'Mover para a direita' : 'Move to the right',
+      icon: <PanelRightOpen size={14} />, onSelect: () => onMoveToRight(target),
+    }] : []),
+    // "Bring the Studio to the bottom" (owner feedback, 2026-09-17) — not gated on `prefs.open`
+    // like the entries above: it names what sits on the RIGHT, not what this band is doing, and a
+    // collapsed band is still a valid place to bring something into.
+    ...(extraOverflowEntries ?? []),
+    ...(prefs.open && streamId && onOpenFullscreen ? [{
+      id: 'fullscreen', label: t.fullscreen, icon: <Maximize2 size={14} />, onSelect: onOpenFullscreen,
+    }] : []),
+    ...(prefs.open && shell && target === 'shell' ? [{
+      id: 'end', label: t.close, icon: <Trash2 size={14} />, onSelect: () => { void close() },
+    }] : []),
+  ]
 
   const where = shellWhere(cwd)
 
@@ -786,31 +872,43 @@ export function ShellBand({
     }}>
       {/* The drag handle sits on the band's TOP edge — the VS Code geometry, where the panel is
           always the bottom-most strip. It is `role="separator"` and takes the arrow keys, so the
-          band is resizable without a pointer. */}
+          band is resizable without a pointer. `ResizeGrip` (design item 6) marks it. */}
       {prefs.open && (
         <div
           role="separator"
           aria-orientation="horizontal"
           aria-label={t.resize}
           tabIndex={0}
+          className="ag-resize-handle"
           onMouseDown={e => { e.preventDefault(); onDragStart(e.clientY) }}
           onKeyDown={e => {
             if (e.key === 'ArrowUp') { e.preventDefault(); setBand(resolveBandHeight(renderedHeight + 24, columnHeight)) }
             if (e.key === 'ArrowDown') { e.preventDefault(); setBand(resolveBandHeight(renderedHeight - 24, columnHeight)) }
           }}
           style={{ height: 6, cursor: 'ns-resize', background: 'transparent' }}
-        />
+        ><ResizeGrip orientation="horizontal" /></div>
       )}
-      {/* THE WHOLE BAR IS THE TOGGLE. A 26px chevron at the far right of a full-width strip is a
-          target you have to aim at, and the strip beside it did nothing at all — so the bar takes
-          the click and the chevron stays as the thing that NAMES the gesture. `role="button"`
-          rather than a real one: it contains buttons, and nesting them is invalid HTML. The
-          controls inside it stop propagation, or ending a shell would also collapse the band. */}
+      {/* THE COMPACT BAR (design item 7): task control · panel segment (icon+label, collapsing to
+          icons below ~1100px) · spacer · ONE "⋯" overflow menu · the collapse chevron as a plain
+          icon button with a tooltip. Everything that used to widen this row on its own — the
+          leading terminal icon, the uppercase target name, the `where` path, and Move/Full
+          screen/End shell as their own labelled buttons — is gone or moved into the menu: the
+          target name and the `where` path are redundant with the segment's own lit tab (which
+          already names Claude Code/Shell), and the three actions keep their labels inside the menu
+          instead of spending width on the row.
+
+          THE WHOLE BAR IS STILL THE TOGGLE (its own long-standing reasoning, unchanged): a 26px
+          chevron at the far right of a full-width strip is a target you have to aim at, and the
+          strip beside it did nothing at all. `role="button"` rather than a real one: it contains
+          buttons, and nesting them is invalid HTML. The controls inside it stop propagation, or
+          picking a tab / opening the menu / ending a shell would also collapse the band. */}
       <div
+        ref={barWidthRef}
         role="button"
         tabIndex={0}
         aria-expanded={prefs.open}
         aria-label={t.toggleBar}
+        {...(where ? { title: where } : {})}
         onClick={() => setBand({ open: !prefs.open })}
         onKeyDown={e => {
           if (e.key !== 'Enter' && e.key !== ' ') return
@@ -822,66 +920,27 @@ export function ShellBand({
           cursor: 'pointer', userSelect: 'none',
         }}
       >
-        <span style={{ color: 'var(--anthropic-orange)', display: 'inline-flex' }}><TerminalSquare size={14} /></span>
-        {/* ONE CONTROL, ONE SHAPE, ONE PLACE. It used to be two buttons on the LEFT when collapsed
-            and a segmented control on the RIGHT when open — so choosing a terminal meant finding a
-            control that had moved and changed form between two states of the same bar, and moved
-            back again on maximize. It is the segmented control, on the right, always. */}
-        <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-secondary)' }}>
-          {targetLabel(target, harness, lang).toUpperCase()}
-        </span>
-        {where && <span style={{
-          minWidth: 0, flex: 1, fontSize: 11, color: 'var(--text-tertiary)',
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{where}</span>}
-        {!where && <span style={{ flex: 1 }} />}
-        {dockedTargetSwitch}
+        {taskControl}
+        {panelBar}
         {busy && <Loader2 size={13} className="ag-spin" style={{ color: 'var(--text-tertiary)' }} />}
-        {/* MOVE WHICHEVER PANE THIS BAND IS SHOWING TO THE RIGHT SLOT (design §1.3's "plus 'move to
-            right'") — the same gesture the Studio's own band already offers, generalized to cli and
-            shell now that both can sit in the right slot too (§1.5). */}
-        {prefs.open && onMoveToRight && (
-          <BandLabeledButton
-            isMobile={false}
-            onClick={e => { e.stopPropagation(); onMoveToRight(target) }}
-            label={lang === 'pt' ? 'Mover para a direita' : 'Move to the right'}
-            visibleText={lang === 'pt' ? 'Mover para a direita' : 'Move to the right'}
-          ><PanelRightOpen size={13} /></BandLabeledButton>
-        )}
-        {/* TAKE THE WHOLE SCREEN. Offered only with a shell open and somewhere to go, so the bar of
-            a band nobody has opened carries nothing that cannot act. It is the only way to the
-            shell's own screen — the route has accepted `?pane=shell` since phase 3b and nothing
-            linked there. */}
-        {prefs.open && streamId && onOpenFullscreen && (
-          // Fix-wave review, owner follow-up #5 — the same "plain icon here was reported as
-          // confusing" complaint item 5 fixed for move/close, now closed for THIS bar's own
-          // fullscreen/close-shell/collapse trio too.
-          <BandLabeledButton
-            isMobile={false}
-            onClick={e => { e.stopPropagation(); onOpenFullscreen() }}
-            label={t.fullscreen}
-            visibleText={t.fullscreenLabel}
-          ><Maximize2 size={13} /></BandLabeledButton>
-        )}
-        {/* A shell is something the person OPENED and can end; the CLI pane is the session itself
-            and ending it here would be a kill button wearing a wastebasket. */}
-        {prefs.open && shell && target === 'shell' && (
-          <BandLabeledButton
-            isMobile={false}
-            /* A TRASH CAN, not an ✕. The ✕ read as "close this panel" next to a chevron that
-               actually closes the panel, and this one KILLS the shell — a different, irreversible
-               act. The icon is the only thing saying which of the two you are about to do. */
-            onClick={e => { e.stopPropagation(); void close() }}
-            label={t.close}
-            visibleText={t.closeLabel}
-          ><Trash2 size={13} /></BandLabeledButton>
-        )}
-        <BandLabeledButton
-          isMobile={false}
+        <span style={{ flex: 1 }} />
+        <BandOverflowMenu
+          label={lang === 'pt' ? 'Mais ações' : 'More actions'}
+          entries={overflowEntries}
+        />
+        <button
+          className="ag-tap-icon"
+          type="button"
+          title={prefs.open ? t.collapse : t.expand}
+          aria-label={prefs.open ? t.collapse : t.expand}
           onClick={e => { e.stopPropagation(); setBand({ open: !prefs.open }) }}
-          label={prefs.open ? t.collapse : t.expand}
-          visibleText={prefs.open ? t.collapseLabel : t.expandLabel}
-        >{prefs.open ? <ChevronDown size={13} /> : <ChevronUp size={13} />}</BandLabeledButton>
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            width: BAND_CONTROL_H, height: BAND_CONTROL_H, padding: 0,
+            border: 'none', borderRadius: 6, background: 'transparent',
+            color: 'var(--text-secondary)', cursor: 'pointer',
+          }}
+        >{prefs.open ? <ChevronDown size={14} /> : <ChevronUp size={14} />}</button>
       </div>
       {prefs.open && (
         <div style={{
