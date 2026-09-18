@@ -1,7 +1,7 @@
 import { join, dirname } from 'path'
 import { mkdir, rename, writeFile, open, unlink, stat, readFile, utimes } from 'node:fs/promises'
 import { AGENTISTICS_DATA_DIR, DEFAULT_AGENTISTICS_DATA_DIR, CLAUDE_DIR } from './config'
-import type { AccessibilityPrefs, BillingSettings, SavedComparison, TeamConfig } from '@agentistics/core'
+import type { AccessibilityPrefs, BillingSettings, SavedComparison, SessionPreset, TeamConfig } from '@agentistics/core'
 import { migrateTeamConfig } from '@agentistics/core'
 // TYPE-only, and the allowed direction: `server -> tui`. The arrangements are declared once, in
 // `session-dimensions.ts`, and this file stores whichever one was chosen.
@@ -142,6 +142,15 @@ export interface Preferences {
   /** Saved comparisons — N filter scopes the user asks about repeatedly, and which of them are
    *  pinned to the Home page. Local only, same as `billing`. */
   comparisons?: SavedComparison[]
+  /**
+   * Saved "quick launch" session templates — harness + first message + optional cwd/model/effort.
+   * Per-machine, local only, same as `comparisons`: a preset is a fact about how one person works,
+   * never board data, and it never travels to a central. See `@agentistics/core`'s
+   * `sessionPresets.ts` for the shape and the pure helpers (`normalizeSessionPresets` is what a
+   * reader must run this array through — never trust it verbatim, a hand-edited file can hold a
+   * relative `cwd` or a blank prompt).
+   */
+  sessionPresets?: SessionPreset[]
   /** How the app preserves session history past Claude's 30-day cleanup.
    *  `undefined` = not chosen yet (the blocking consent gate is shown).
    *    - 'consolidate' = store computed per-session metrics only (~KB, recommended)

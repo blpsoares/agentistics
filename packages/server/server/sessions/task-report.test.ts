@@ -336,7 +336,9 @@ describe('subtaskViews — the three shapes, no session counted twice', () => {
     ]
     const views = subtaskViews(task(), subs, rows, metasAll, costOf)
     expect(views).toHaveLength(2)
-    expect(views[0]).toEqual({ id: 's1', rollup: expect.objectContaining({ sessionsUsed: 1 }) })
+    expect(views[0]).toEqual({
+      id: 's1', rollup: expect.objectContaining({ sessionsUsed: 1 }), stats: expect.anything(),
+    })
     expect(views[1]!.id).toBeNull()
   })
 
@@ -436,6 +438,97 @@ describe('subtaskViews — the three shapes, no session counted twice', () => {
       expect(views[0]!.id).toBe('g1')
       expect(views[0]!.rollup.sessionsUsed).toBe(1)
       expect(views[0]!.rollup.costUSD).toBe(5)
+    })
+  })
+
+  /**
+   * `SubtaskView.stats` — the same evidence numbers `TaskDetail.stats` carries for the whole
+   * delivery, re-partitioned per bucket. See §C.5 of
+   * docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md and `scopedTaskStats`'s own doc
+   * comment in `task-stats.ts`.
+   */
+  describe('subtaskViews — stats, the same partition applied to the evidence numbers', () => {
+    const statsMeta = (id: string, over: Partial<SessionMeta> = {}) =>
+      meta({ session_id: id, files_modified: 0, lines_added: 0, lines_removed: 0, git_commits: 0, ...over })
+
+    it('a bucket with no rows filed under it gets stats: null, never an all-null block', () => {
+      const subs = [subtask({ id: 's1' }), subtask({ id: 's2' })]
+      const rows = [row({ id: 'r1', conversationId: 'c1', subtaskId: 's1' })]
+      const views = subtaskViews(task(), subs, rows, metasAll, costOf)
+      expect(views.find(v => v.id === 's2')!.stats).toBeNull()
+      expect(views.find(v => v.id === 's1')!.stats).not.toBeNull()
+    })
+
+    it('each subtask bucket carries only its own rows\' evidence numbers, never the whole task\'s', () => {
+      const subs = [subtask({ id: 's1' }), subtask({ id: 's2' })]
+      const rows = [
+        row({ id: 'r1', conversationId: 'c1', subtaskId: 's1' }),
+        row({ id: 'r2', conversationId: 'c2', subtaskId: 's2' }),
+      ]
+      const metas = metasOf(
+        statsMeta('c1', { files_modified: 3, lines_added: 20, lines_removed: 5, git_commits: 1 }),
+        statsMeta('c2', { files_modified: 99, lines_added: 999, lines_removed: 999, git_commits: 9 }),
+      )
+      const views = subtaskViews(task(), subs, rows, metas, costOf)
+      expect(views.find(v => v.id === 's1')!.stats!.filesModified).toBe(3)
+      expect(views.find(v => v.id === 's2')!.stats!.filesModified).toBe(99)
+    })
+
+    it('the direct branch\'s stats block covers only the rows filed on the delivery itself', () => {
+      const subs = [subtask({ id: 's1' })]
+      const rows = [
+        row({ id: 'r1', conversationId: 'c1' }), // direct
+        row({ id: 'r2', conversationId: 'c2', subtaskId: 's1' }),
+      ]
+      const metas = metasOf(
+        statsMeta('c1', { files_modified: 3 }),
+        statsMeta('c2', { files_modified: 99 }),
+      )
+      const views = subtaskViews(task(), subs, rows, metas, costOf)
+      expect(views.find(v => v.id === null)!.stats!.filesModified).toBe(3)
+    })
+
+    it('a GROUPED subtask\'s stats sum evidence numbers from every member\'s rows, exactly like its rollup', () => {
+      // The rollup already collapses a group into one bucket over the union of every member's rows
+      // (see the tests above); the evidence numbers must follow the identical partition, or a
+      // grouped subtask's cost and its files/lines counts would disagree about which rows they cover.
+      const subs = [
+        subtask({ id: 's1', groupId: 'g1' }),
+        subtask({ id: 's2', groupId: 'g1' }),
+      ]
+      const rows = [
+        row({ id: 'r1', conversationId: 'c1', subtaskId: 's1' }),
+        row({ id: 'r2', conversationId: 'c2', subtaskId: 's2' }),
+      ]
+      const metas = metasOf(
+        statsMeta('c1', { files_modified: 3, lines_added: 20, lines_removed: 5, git_commits: 1 }),
+        statsMeta('c2', { files_modified: 7, lines_added: 4, lines_removed: 1, git_commits: 2 }),
+      )
+      const views = subtaskViews(task(), subs, rows, metas, costOf)
+      expect(views).toHaveLength(1)
+      expect(views[0]!.stats!.filesModified).toBe(10) // 3 + 7, one bucket, both members
+      expect(views[0]!.stats!.linesAdded).toBe(24)
+      expect(views[0]!.stats!.commits).toBe(3)
+    })
+
+    it('the whole task\'s stats equal the sum of every bucket\'s (subtasks + the direct branch)', () => {
+      const subs = [subtask({ id: 's1' }), subtask({ id: 's2' })]
+      const rows = [
+        row({ id: 'r1', conversationId: 'c1' }), // direct
+        row({ id: 'r2', conversationId: 'c2', subtaskId: 's1' }),
+        row({ id: 'r3', conversationId: 'c3', subtaskId: 's2' }),
+      ]
+      const metas = metasOf(
+        statsMeta('c1', { files_modified: 5 }),
+        statsMeta('c2', { files_modified: 7 }),
+        statsMeta('c3', { files_modified: 11 }),
+      )
+      const detail = buildTaskDetail({
+        task: task(), attempts: [], rows, metas, costOf, comments: [], subtasks: subs, files: [],
+      })
+      const sum = detail.subtaskRollups.reduce((a, v) => a + (v.stats?.filesModified ?? 0), 0)
+      expect(sum).toBe(23) // 5 + 7 + 11
+      expect(detail.stats.filesModified).toBe(23)
     })
   })
 })

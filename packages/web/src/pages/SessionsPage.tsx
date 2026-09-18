@@ -33,13 +33,15 @@ import {
   type PanelGates,
 } from '../lib/panelSlots'
 import { MENTION_ADDED_TOAST } from '../lib/mentionInsert'
-import type { HarnessId } from '@agentistics/core'
+import type { HarnessId, SessionPreset } from '@agentistics/core'
 import { getCentralMachine } from '../lib/centralMachinePick'
 import type { AppContext } from '../lib/app-context'
 import { useFleet, useFleetIndex, type FleetActionId } from '../lib/fleet'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { FleetOverview } from '../components/sessions/FleetOverview'
 import { SessionCreating } from '../components/sessions/SessionCreating'
+import { NewSessionModal } from '../components/sessions/NewSessionModal'
+import { PresetLaunchConfirm } from '../components/sessions/PresetLaunchConfirm'
 
 // How long a navigation may keep claiming its session is still coming is `ARRIVAL_WAIT_MS` in
 // `lib/sessionRoute.ts`, beside the rest of the arrival rule. It lived here as `CREATE_WAIT_MS`
@@ -163,7 +165,7 @@ export default function SessionsPage() {
   const {
     lang, isCentral, theme, filters, setFilters, activeOnly, setActiveOnly,
     availableProjects, sessionCountByProject, models, availableHarnesses, derived,
-    data, currency, brlRate,
+    data, currency, brlRate, sessionPresets,
   } = ctx
   const pt = lang === 'pt'
   const { sessionId } = useParams()
@@ -184,6 +186,73 @@ export default function SessionsPage() {
    * two states to keep in step.
    */
   const [sheetOpen, setSheetOpen] = useState(false)
+
+  /**
+   * The preset launch shelf's own state — see `PresetShelf.tsx` / `PresetLaunchConfirm.tsx`.
+   *
+   * TWO PATHS, decided by whether the preset already names a folder: one WITH a `cwd` goes through
+   * `launchingPreset` (a confirm-then-POST straight to `/api/fleet/new`, the same route the wizard
+   * itself calls); one WITHOUT opens `presetPrefill`, the ordinary `NewSessionModal` pre-filled with
+   * everything but the folder — the wizard's own review step is that preset's consent gate. A
+   * preset is never launched by clicking it alone; see the board note on s-d85c7d9d9d for why.
+   */
+  const [launchingPreset, setLaunchingPreset] = useState<SessionPreset | null>(null)
+  const [presetLaunchBusy, setPresetLaunchBusy] = useState(false)
+  const [presetLaunchError, setPresetLaunchError] = useState<string | null>(null)
+  const [presetPrefill, setPresetPrefill] = useState<NonNullable<
+    Parameters<typeof NewSessionModal>[0]['initialPreset']
+  > | null>(null)
+
+  function selectPreset(preset: SessionPreset) {
+    if (preset.cwd) {
+      setLaunchingPreset(preset)
+      setPresetLaunchError(null)
+    } else {
+      setPresetPrefill({
+        harness: preset.harness, prompt: preset.promptTemplate,
+        ...(preset.model ? { model: preset.model } : {}),
+        ...(preset.effort ? { effort: preset.effort } : {}),
+        label: preset.label,
+      })
+    }
+  }
+
+  async function confirmPresetLaunch() {
+    if (!launchingPreset) return
+    setPresetLaunchBusy(true)
+    setPresetLaunchError(null)
+    try {
+      // The SAME route the wizard itself calls (`fleet-spawn.ts`'s `planFleetSpawn`) — never a
+      // second, unvalidated path. A spawn is the most powerful thing this server does.
+      const res = await fetch(`/api/fleet/new?lang=${lang}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          harness: launchingPreset.harness,
+          cwd: launchingPreset.cwd,
+          prompt: launchingPreset.promptTemplate,
+          ...(launchingPreset.model ? { model: launchingPreset.model } : {}),
+          ...(launchingPreset.effort ? { effort: launchingPreset.effort } : {}),
+          label: launchingPreset.label,
+        }),
+      })
+      const json = await res.json() as { ok: boolean; message: string; id?: string }
+      if (!json.ok) {
+        setPresetLaunchError(json.message)
+        setPresetLaunchBusy(false)
+        return
+      }
+      const started = launchingPreset
+      setLaunchingPreset(null)
+      setPresetLaunchBusy(false)
+      if (json.id) {
+        navigate(sessionPath(json.id), { state: { creating: { harness: started.harness, label: started.label } } })
+      }
+    } catch {
+      setPresetLaunchError(pt ? 'Erro de rede ao falar com esta máquina.' : 'Network error talking to this machine.')
+      setPresetLaunchBusy(false)
+    }
+  }
 
   // Never on a central: it aggregates many machines and hosts none of their sessions, so the only
   // fleet it could read is its own box's, drawn under someone else's rows.
@@ -1676,6 +1745,8 @@ export default function SessionsPage() {
               heatmap={derived.heatmapData}
               heatmapByHarness={derived.heatmapByHarness}
               baseline={fleet.baseline}
+              sessionPresets={sessionPresets}
+              onSelectPreset={selectPreset}
               {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
             />
           </div>
@@ -1750,6 +1821,8 @@ export default function SessionsPage() {
           heatmap={derived.heatmapData}
           heatmapByHarness={derived.heatmapByHarness}
           baseline={fleet.baseline}
+          sessionPresets={sessionPresets}
+          onSelectPreset={selectPreset}
           {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
         />
       </div>
@@ -1859,6 +1932,30 @@ export default function SessionsPage() {
         >
           {MENTION_ADDED_TOAST[pt ? 'pt' : 'en']}
         </div>
+      )}
+      {/* The preset launch shelf's own overlays — `position: fixed`, like `mentionNotice` above, so
+          they render correctly regardless of which of this page's several layout branches is
+          active. See `selectPreset`/`confirmPresetLaunch` for the two paths. */}
+      {launchingPreset && (
+        <PresetLaunchConfirm
+          lang={pt ? 'pt' : 'en'}
+          preset={launchingPreset}
+          busy={presetLaunchBusy}
+          error={presetLaunchError}
+          onCancel={() => { if (!presetLaunchBusy) setLaunchingPreset(null) }}
+          onConfirm={() => void confirmPresetLaunch()}
+        />
+      )}
+      {presetPrefill && (
+        <NewSessionModal
+          lang={pt ? 'pt' : 'en'}
+          onClose={() => setPresetPrefill(null)}
+          initialPreset={presetPrefill}
+          onStarted={(id, started) => {
+            setPresetPrefill(null)
+            if (id) navigate(sessionPath(id), { state: { creating: started ?? {} } })
+          }}
+        />
       )}
       {/* LAST, and always present, so adding it shifted no slot above. The return that holds the
           pane holds the question asked before the pane is dropped — see `leaveGuard`. */}

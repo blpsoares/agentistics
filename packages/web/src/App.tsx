@@ -27,9 +27,9 @@ import { useIsMobile } from './hooks/useIsMobile'
 import { useAccessibility } from './hooks/useAccessibility'
 import type { TagDef } from './lib/tagMatch'
 import { canCreateTagFromFilters, filtersToTagDraft } from './lib/filtersToTag'
-import type { BillingSettings, CostBasis, Filters, HarnessId, HealthIssue, SavedComparison, TeamConfig } from '@agentistics/core'
+import type { BillingSettings, CostBasis, Filters, HarnessId, HealthIssue, SavedComparison, SessionPreset, TeamConfig } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
-import { billingReadiness, monthlyCommitment, normalizeBillingSettings, normalizeComparisons, planAllocation, formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections, fmt, totalTokens, totalTokensExplained } from '@agentistics/core'
+import { billingReadiness, monthlyCommitment, normalizeBillingSettings, normalizeComparisons, normalizeSessionPresets, planAllocation, formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections, fmt, totalTokens, totalTokensExplained } from '@agentistics/core'
 import { buildDeniedRepoLabels } from './lib/shareRepos'
 import { StatCard } from './components/StatCard'
 import { StreakBreakdownButton } from './components/StreakBreakdownButton'
@@ -1566,6 +1566,15 @@ export default function AppLayout() {
       body: JSON.stringify({ comparisons: next }),
     })
   }, [])
+  const [sessionPresets, setSessionPresets] = useState<SessionPreset[]>([])
+  const saveSessionPresets = useCallback(async (next: SessionPreset[]) => {
+    setSessionPresets(next)
+    await fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionPresets: next }),
+    })
+  }, [])
   const [costBasisState, setCostBasisState] = useState<CostBasis>('api')
   const [billingSetupOpen, setBillingSetupOpen] = useState(false)
   // `writePreferencesTo` is a SHALLOW merge, so a partial PUT would replace the whole billing
@@ -2369,6 +2378,7 @@ export default function AppLayout() {
       setBilling(nextBilling)
       setCostBasisState(nextBilling.costBasis ?? 'api')
       setComparisons(normalizeComparisons((prefs as Record<string, unknown>).comparisons))
+      setSessionPresets(normalizeSessionPresets((prefs as Record<string, unknown>).sessionPresets))
       if (prefs.lang) setLangState(prefs.lang)
       if (prefs.theme) {
         setThemeState(prefs.theme)
@@ -3257,6 +3267,7 @@ export default function AppLayout() {
     lang, theme, currency, setCurrency, brlRate,
     billing, saveBilling, costBasis, setCostBasis, planBasis, billingReady, openBillingSetup,
     comparisons, saveComparisons,
+    sessionPresets, saveSessionPresets,
     tags: tagsList, monthCommitment,
     chatModel, setChatModel, chatSoundEnabled, setChatSoundEnabled, chatSoundId, setChatSoundId,
     savePreferences,
