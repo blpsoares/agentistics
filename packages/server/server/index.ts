@@ -1712,12 +1712,14 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             ? { subtaskId: body.subtaskId }
             : {})
         if (result.ok) return json({ ok: true })
-        // `blocked` is a 422, the same status `markTask`'s own `blocked_needs_reason` answers with
-        // — both name a piece of work this request cannot do YET, not a resource that is missing.
-        // Everything else stays 404: the ref, the session or the subtask named nothing.
+        // `blocked` and `subtask_in_group` are both 422, the same status `markTask`'s own
+        // `blocked_needs_reason` answers with — each names a piece of work this request cannot do,
+        // not a resource that is missing (the target subtask is a real, existing MEMBER of a group,
+        // §F.1 — it is simply never allowed to hold a session). Everything else stays 404: the ref,
+        // the session or the subtask named nothing.
         return json(
           { ok: false, reason: result.reason, ...(result.blockedBy ? { blockedBy: result.blockedBy } : {}) },
-          result.reason === 'blocked' ? 422 : 404,
+          result.reason === 'blocked' || result.reason === 'subtask_in_group' ? 422 : 404,
         )
       }
       if (verb === 'links') {
@@ -1736,9 +1738,10 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           if (body.remove === true) return json({ ok: await mod.removeSubtask(body.id) })
           // A bare `{id, done}` is the tick; anything else is a column edit. Both land on
           // `patchSubtask`, which derives `done` from `status` so the two cannot disagree.
-          // `done_needs_session` is a 422, the same shape `sessions`'s `blocked` answers with above
-          // — both name a piece of work this request cannot do YET, not a resource that is missing.
-          // `no_such_subtask` stays 404: the id named nothing.
+          // `done_needs_session`/`invalid_group`/`subtask_has_sessions`/`group_field_conflict` are
+          // 422, the same shape `sessions`'s `blocked` answers with above — each names a piece of
+          // work this request cannot do, not a resource that is missing. `no_such_subtask` stays
+          // 404: the id named nothing.
           if (typeof body.done === 'boolean' && Object.keys(body).length === 2) {
             const result = await mod.setSubtaskDone(body.id, body.done)
             return json(result, result.ok ? 200 : (result.message === 'done_needs_session' ? 422 : 404))
@@ -1757,16 +1760,33 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             ...(Array.isArray(body.blockedBy)
               ? { blockedBy: body.blockedBy.filter((x): x is string => typeof x === 'string') }
               : {}),
-            // The rollup group (spec §B.5). `null` is the CLEAR and is therefore matched
-            // explicitly: it is a value the caller sent, not an absent field, and the two must not
-            // collapse — an omitted `groupId` leaves the column alone, a null removes it.
+            // SUPERSEDED (§F) — kept only so the §B-era UI keeps working. `null` is the CLEAR and
+            // is matched explicitly: an omitted `groupId` leaves the column alone, a null removes it.
             ...(typeof body.groupId === 'string'
               ? { groupId: body.groupId }
               : body.groupId === null ? { groupId: null } : {}),
+            // Join/leave a group (§F.1). `patchSubtask` validates the reference server-side
+            // (`invalid_group`, 422) — this is pass-through, not a second copy of that rule.
+            ...(typeof body.parentGroupId === 'string'
+              ? { parentGroupId: body.parentGroupId }
+              : body.parentGroupId === null ? { parentGroupId: null } : {}),
           })
-          return json(result, result.ok ? 200 : (result.message === 'done_needs_session' ? 422 : 404))
+          return json(
+            result,
+            result.ok
+              ? 200
+              : (result.message === 'done_needs_session' || result.message === 'invalid_group'
+                  || result.message === 'subtask_has_sessions'
+                  || result.message === 'group_field_conflict'
+                ? 422
+                : 404),
+          )
         }
-        const ok = await mod.addSubtask(ref, String(body.title ?? ''))
+        // `isGroup: true` creates a GROUP (§F.1) instead of an ordinary subtask — decided only at
+        // creation, `addSubtask` never offers a way to change it afterwards.
+        const ok = await mod.addSubtask(ref, String(body.title ?? ''), {
+          ...(body.isGroup === true ? { isGroup: true } : {}),
+        })
         return json({ ok }, ok ? 200 : 400)
       }
       if (verb === 'claim') {

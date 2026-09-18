@@ -28,12 +28,30 @@ import { overlayPadding } from '../../lib/mobileOverlay'
 import { useDismissOverlay } from '../../lib/dismissOverlay'
 import {
   addSubtask, attachSession, createTask, detachSession, useTaskDetail, useTaskList,
-  type Subtask, type TaskListRow,
+  type AttachRefusalReason, type Subtask, type TaskListRow,
 } from '../../lib/tasks'
 import { BlockedSubtaskResolve } from './BlockedSubtaskResolve'
 import { STATUS, button, field, microLabel, pill, surface, type BoardStatus } from './board'
 import { boardCopy, statusLabel, type Lang } from './copy'
 import { BetaTag } from '../BetaTag'
+
+/**
+ * The sentence for a refusal `fileInto` does not open a dedicated dialog for. `blocked` is handled
+ * separately (`BlockedSubtaskResolve`) and never reaches this. `subtask_in_group` names the actual
+ * rule (§F.1); everything else this endpoint could still answer (a stale reference, a dropped
+ * request) gets an honest "nothing changed" rather than pretending to explain a cause the client
+ * cannot actually distinguish.
+ */
+function attachRefusalMessage(reason: AttachRefusalReason, pt: boolean): string {
+  if (reason === 'subtask_in_group') {
+    return pt
+      ? 'Esta subtarefa pertence a um grupo e não pode receber uma sessão diretamente — filie no grupo em vez dela.'
+      : 'This subtask belongs to a group and cannot hold a session directly — file it on the group instead.'
+  }
+  return pt
+    ? 'Não foi possível filiar a sessão aqui. Nada mudou — tente de novo.'
+    : 'Could not file the session here. Nothing changed — try again.'
+}
 
 export interface SessionFilingProps {
   session: { id: string; title: string; harness?: string; task?: string }
@@ -74,6 +92,14 @@ export function SessionFiling(p: SessionFilingProps) {
   const [adding, setAdding] = useState(false)
   /** Set when the server refuses an attach because the subtask is still blocked. */
   const [blocked, setBlocked] = useState<{ taskId: string; subtaskId: string; blockedBy: string[] } | null>(null)
+  /**
+   * Any OTHER refusal — `blocked` opens its own dialog above; every other reason (most notably
+   * `subtask_in_group`, §F.1: the target is a group MEMBER, which can never hold a session) used to
+   * fall through here with nothing shown, so the dialog looked as if the file had succeeded while
+   * the session stayed exactly where it was. Same lightweight pattern `BlockedSubtaskResolve` uses
+   * for its own non-blocked refusal, rather than a second modal component for one sentence.
+   */
+  const [fileError, setFileError] = useState<string | null>(null)
 
   const refresh = async () => { await reload(); await reloadDetail(); await p.onChanged() }
 
@@ -92,13 +118,21 @@ export function SessionFiling(p: SessionFilingProps) {
   /** `subtaskId` omitted files the session directly on the delivery — see spec §4.1/§4.4. */
   const fileInto = async (taskId: string, subtaskId?: string) => {
     setBusy(true)
+    setFileError(null)
     const result = await attachSession(taskId, p.session.id, subtaskId)
     setBusy(false)
-    if (!result.ok && result.reason === 'blocked' && subtaskId) {
-      // The dialog it opens is HANDED the answer, never asked to guess it — the ids `planAttach`
-      // named are exactly what it needs. A direct-on-the-delivery file can never come back
-      // `blocked` — only a subtask carries `blockedBy` — so this branch only ever fires with one.
-      setBlocked({ taskId, subtaskId, blockedBy: result.blockedBy ?? [] })
+    if (!result.ok) {
+      if (result.reason === 'blocked' && subtaskId) {
+        // The dialog it opens is HANDED the answer, never asked to guess it — the ids `planAttach`
+        // named are exactly what it needs. A direct-on-the-delivery file can never come back
+        // `blocked` — only a subtask carries `blockedBy` — so this branch only ever fires with one.
+        setBlocked({ taskId, subtaskId, blockedBy: result.blockedBy ?? [] })
+        return
+      }
+      // Every OTHER refusal (most notably `subtask_in_group`, §F.1) used to fall through here
+      // silently — the dialog just sat there as if nothing had been asked, with the session left
+      // exactly where it was and no reason on screen for why the radio never moved.
+      setFileError(attachRefusalMessage(result.reason, pt))
       return
     }
     setMoving(false)
@@ -254,6 +288,12 @@ export function SessionFiling(p: SessionFilingProps) {
             ? 'Onde a sessão fica — direto na entrega, ou em UMA subtarefa'
             : 'Where the session sits — directly on the delivery, or under ONE subtask'}
         </span>
+
+        {fileError && (
+          <p style={{ margin: 0, fontSize: 11.5, color: 'var(--accent-red)', lineHeight: 1.5 }}>
+            {fileError}
+          </p>
+        )}
 
         <div style={{ display: 'grid', gap: 2, maxHeight: 260, overflowY: 'auto' }}>
           {directRow()}

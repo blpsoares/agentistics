@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { Filters, TaskPriorityId } from '@agentistics/core'
+import type { Filters, TaskPriorityId, TaskProgress } from '@agentistics/core'
 import { getDateRangeFilter } from '../hooks/useData'
 
 export type LinkProvenance = 'assigned' | 'observed' | 'none'
@@ -202,11 +202,29 @@ export interface Subtask {
    */
   blockedBy?: string[]
   /**
-   * Subtasks that share a `groupId` are read as ONE bucket: a session filed under any member
-   * counts for all of them. Absent = not grouped — every subtask is its own group of one. See
-   * docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md §B.2.
+   * SUPERSEDED by `isGroup`/`parentGroupId` — see docs/superpowers/specs/
+   * 2026-09-11-alm-session-linking-ux.md §F, which replaces this §B "shared bucket" model (subtasks
+   * sharing a `groupId` read as one rollup) with a real hierarchy level. Mirrored here only because
+   * the server (`task-model.ts`'s `Subtask.groupId`) still writes it, for the same §B-era UI
+   * compatibility reason — no current web code should read it for bucketing.
    */
   groupId?: string
+  /**
+   * A GROUP is a real hierarchy level (§F.1), not a label two subtasks share: a peer of a loose
+   * subtask in the listing, and the only thing a session may be filed on inside this branch of the
+   * tree — never one of its own members. Absent reads as "not a group". Mirror of the server's
+   * `Subtask.isGroup` (`task-model.ts`).
+   */
+  isGroup?: boolean
+  /**
+   * The GROUP this subtask is a MEMBER of — the group's own subtask id, from the SAME task. A
+   * member never receives a session of its own and therefore has no rollup bucket of its own
+   * either (`SubtaskView.groupProgress` lives on the GROUP's own view, not the member's); it still
+   * has its own `status`/`assignee`/dates/comments, and its `status` is what feeds the group's
+   * `groupProgress`. Absent reads as "not a member". Mirror of the server's
+   * `Subtask.parentGroupId` (`task-model.ts`).
+   */
+  parentGroupId?: string
 }
 export interface TaskFile {
   id: string; taskId: string; name: string; size: number
@@ -226,6 +244,15 @@ export interface SubtaskView {
    * docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md §C.5.
    */
   stats: TaskStats | null
+  /**
+   * Present only when this bucket's `id` names a subtask GROUP (§F.1) — the group's own progress,
+   * computed from its members' `done` flags (`groupProgress`, `@agentistics/core`), the same
+   * round-down "no bar without anything to measure" rule `TaskProgress` already applies at the task
+   * level, read one hierarchy level down. Absent for a loose subtask's bucket and for the direct
+   * (`id: null`) one — neither has members to measure. Mirror of the server's
+   * `SubtaskView.groupProgress` (`task-report.ts`).
+   */
+  groupProgress?: TaskProgress
 }
 
 export interface TaskDetail {
@@ -522,6 +549,11 @@ export const removeLink = (ref: string, remove: string) =>
 export type AttachRefusalReason =
   | 'no_such_task' | 'no_such_session' | 'no_such_subtask' | 'needs_subtask' | 'wrong_delivery'
   | 'blocked'
+  /**
+   * §F.1: the target is a group MEMBER (`Subtask.parentGroupId` set) — only the group itself may
+   * hold a session (`task-attach.ts`'s `planAttach`). File on the group's own id instead.
+   */
+  | 'subtask_in_group'
   // This function's own addition — the server can never say a request never reached it.
   | 'network'
 
