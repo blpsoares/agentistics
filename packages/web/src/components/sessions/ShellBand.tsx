@@ -50,7 +50,7 @@ import { ResizeGrip } from '../ResizeGrip'
 import { keyStripShown } from '../../lib/terminalSurface'
 import { dockedShowsTarget, usePanelSlots } from '../../lib/panelSlots'
 import {
-  readTarget, targetLabel, targetScope, targetStreamId, type TerminalTarget,
+  readTarget, targetLabel, targetScope, targetStreamId, usableTarget, type TerminalTarget,
 } from '../../lib/terminalTarget'
 import {
   atCap, ceilingRows, ceilingTitle, type CeilingRow, type CeilingShell,
@@ -221,6 +221,30 @@ export interface ShellBandProps {
    */
   bottomOccupant?: 'cli' | 'shell' | null
   /**
+   * MAY THIS BAND EVER SHOW OR OPEN A SHELL — `CAPS.localShell` AND the user's own switch,
+   * threaded straight from `SessionPanel`'s own `shellEnabled` prop. It narrows this band's SHELL
+   * half only; the CLI pane is the session's own harness terminal and is never gated by it, so this
+   * component always renders once mounted — see `lib/panelBar.ts`'s `bottomBandFor` for why the
+   * caller no longer decides PRESENCE on this prop.
+   *
+   * Off, `target` can never resolve to `'shell'`: not on a fresh mount (a stored `'shell'`
+   * preference, or the module-wide default `readTarget` falls back to — see that function's own
+   * doc comment — reads as `'cli'` instead), not from a `bottomOccupant` naming it (a stale
+   * `panelSlots` record from before the switch turned off), and a band already showing `'shell'`
+   * when the switch flips off underneath it snaps back to `'cli'` — a security narrowing has to
+   * apply to the band that is ALREADY open, not only to the next one that mounts. None of this
+   * touches the STORED preference (`chooseTarget` is never called for it): re-enabling the switch
+   * later must restore exactly what the person had chosen, not whatever the narrowing showed while
+   * it was off.
+   *
+   * Defaults to `true` — the `aside`/`dedicated` placements (`SessionsPage.tsx`) mount this
+   * component only once the shell is already known to be available (`resolveForGates` never
+   * resolves the right slot to `'shell'` while the switch is off, and the dedicated `?pane=shell`
+   * route is itself gated on `shellEnabled` at that call site), so the default there is exactly
+   * what those two call sites did before this prop existed.
+   */
+  shellEnabled?: boolean
+  /**
    * THE TASK CONTROL (design item 3) — `SessionTitleFlag`, rendered at the bar's LEFT end, the same
    * element `StudioBand` and the no-terminal fallback band render. Built once by `SessionPanel` (it
    * owns the session's id/title/harness/task) and handed down as a node rather than reimplemented
@@ -250,8 +274,8 @@ export interface ShellBandProps {
 
 export function ShellBand({
   sessionId, cwd, lang, theme, harness, placement = 'docked', onOpenFullscreen,
-  barEntries, onBarPick, studioSeen = true, bottomOccupant = null, taskControl, extraOverflowEntries,
-  onMoveToRight, columnHeight = 0,
+  barEntries, onBarPick, studioSeen = true, bottomOccupant = null, shellEnabled = true, taskControl,
+  extraOverflowEntries, onMoveToRight, columnHeight = 0,
 }: ShellBandProps) {
   const t = TXT[lang]
   const isMobile = useIsMobile()
@@ -270,10 +294,24 @@ export function ShellBand({
    * SEEDED FROM `bottomOccupant` WHEN IT NAMES ONE, the stored preference otherwise — see that
    * prop's own doc comment for why: a fresh mount (this component swapping in for `StudioBand`)
    * must show what was just requested, not whatever this band happened to show last time it was up.
+   * `usableTarget` (`lib/terminalTarget.ts`) applies on the way IN, never written back to storage —
+   * see `shellEnabled`'s own doc comment on why a narrowing must not overwrite the person's stored
+   * preference.
    */
   const [target, setTarget] = useState<TerminalTarget>(
-    () => bottomOccupant ?? readTarget(readBandPrefs().target),
+    () => usableTarget(bottomOccupant ?? readTarget(readBandPrefs().target), shellEnabled),
   )
+  /**
+   * THE SWITCH NARROWING A BAND THAT IS ALREADY OPEN — `usableTarget` only clamps VALUES flowing
+   * IN (a fresh mount, a `bottomOccupant` update); it does nothing for a band that was already
+   * showing `'shell'` when `shellEnabled` flips off underneath it elsewhere (Settings → Sessions,
+   * in another tab or another poll of `/api/team/session`). `setTarget` directly, never
+   * `chooseTarget` — this is a narrowing, not a choice, and must not overwrite the stored
+   * preference the person actually made.
+   */
+  useEffect(() => {
+    if (!shellEnabled && target === 'shell') setTarget('cli')
+  }, [shellEnabled, target])
   const scope = targetScope(target)
   /**
    * EXCLUSIVITY WITH THE RIGHT SLOT (C3) — only the DOCKED placement needs this. This band's own
@@ -318,7 +356,13 @@ export function ShellBand({
    * choice the person made by clicking inside this band itself.
    */
   useEffect(() => {
-    if (bottomOccupant && bottomOccupant !== target) chooseTarget(bottomOccupant)
+    if (!bottomOccupant) return
+    const next = usableTarget(bottomOccupant, shellEnabled)
+    if (next !== target) chooseTarget(next)
+    // `shellEnabled` is intentionally excluded from the dependency list here: a band already
+    // showing `'shell'` when the switch narrows underneath it is handled by this component's OWN
+    // effect above — adding it here too would just run both on the same render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bottomOccupant, target, chooseTarget])
 
   const setBand = useCallback((next: Partial<{ open: boolean; height: number; full: boolean }>) => {
@@ -353,7 +397,10 @@ export function ShellBand({
   // EXCLUDED (C3): the right slot already resolves/streams this exact target, so the docked band
   // must not also open or reuse it — that is the second live reader `dockedShowsTarget` exists to
   // prevent.
-  const wanted = shellResolveWanted(band) && target === 'shell' && !excludedFromDocked
+  // `&& shellEnabled`: belt and suspenders alongside the two effects above that already keep
+  // `target` off `'shell'` while the switch is off — a shell must never be opened or reused for a
+  // request this band should not have been able to make in the first place.
+  const wanted = shellResolveWanted(band) && target === 'shell' && shellEnabled && !excludedFromDocked
   const wantedRef = useRef(wanted)
   wantedRef.current = wanted
   useEffect(() => {
@@ -556,10 +603,14 @@ export function ShellBand({
    * THE ONE CONTROL THAT PICKS A TERMINAL. It replaced the header's `Conversa | Terminal` toggle —
    * a session opens on its conversation, and this band is the door to both panes. The CLI segment
    * is named after the HARNESS, so it names what is on the screen instead of a concept.
+   *
+   * `shell: shellEnabled` — the mobile segment's own gate, mirroring `panelBarEntries`' `shell`
+   * entry on the docked bar: with the switch off, the Shell tab is simply absent here too, never
+   * present and refusing.
    */
   const targetSwitch = (
     <BandSegment label={t.whichTerminal} isMobile={isMobile}>
-      {bandSegmentEntries(target, { cli: true, shell: true, studio: false }).map(({ id, on }) => (
+      {bandSegmentEntries(target, { cli: true, shell: shellEnabled, studio: false }).map(({ id, on }) => (
         <BandSegmentTab
           key={id}
           on={on}

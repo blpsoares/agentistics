@@ -34,6 +34,23 @@ export function readTarget(raw: unknown): TerminalTarget {
   return raw === 'cli' ? 'cli' : 'shell'
 }
 
+/**
+ * A `'shell'` READING IS UNUSABLE ONCE THE SHELL SWITCH IS OFF — `shellEnabled` (`CAPS.localShell`
+ * AND the user's own switch, see `ShellBand`'s own prop of the same name). Read `'cli'` instead —
+ * the session's own harness terminal, which is never gated by it and is always there.
+ *
+ * `readTarget`'s own default is `'shell'`, so a fresh session with no stored preference at all
+ * would otherwise resolve to a pane that cannot open the moment the switch is off — the exact bug
+ * `ShellBand`'s `shellEnabled` prop exists to close. Applied on the way IN only (a fresh mount, a
+ * `bottomOccupant` naming `'shell'`); `ShellBand` handles the band ALREADY showing `'shell'` when
+ * the switch narrows underneath it with its own effect, deliberately not through this function —
+ * see that component's own doc comment on why the narrowing must never overwrite the STORED
+ * preference (`chooseTarget` is never called for it).
+ */
+export function usableTarget(want: TerminalTarget, shellEnabled: boolean): TerminalTarget {
+  return want === 'shell' && !shellEnabled ? 'cli' : want
+}
+
 /** Which of the two channels this target speaks. Never inferred from an id — an id is opaque. */
 export function targetScope(target: TerminalTarget): TerminalScope {
   return target === 'cli' ? 'fleet' : 'shell'

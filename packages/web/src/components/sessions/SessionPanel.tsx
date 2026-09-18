@@ -30,7 +30,8 @@ import { useElementWidth } from '../../hooks/useElementWidth'
 import { resolveForViewport, rightSlotShowing, usePanelSlots } from '../../lib/panelSlots'
 import { closeArtifacts, openArtifacts, useArtifacts } from '../../lib/artifactsStore'
 import {
-  bandBarCompact, panelBarEntries, type PanelBarEntry, type PanelBarGates, type PanelBarId,
+  bandBarCompact, bottomBandFor, gatedBottomOccupant, panelBarEntries,
+  type PanelBarEntry, type PanelBarGates, type PanelBarId,
 } from '../../lib/panelBar'
 import { targetLabel } from '../../lib/terminalTarget'
 import { RelayedScreen } from './RelayedScreen'
@@ -87,10 +88,13 @@ export interface SessionPanelProps {
    * May this machine serve a per-session utility SHELL right now — `CAPS.localShell` AND the
    * user's own switch, as `/api/team/session` reports it.
    *
-   * Absent reads as OFF, and the band is then ABSENT rather than present-and-refusing: a control
-   * that is there and says no teaches nothing, while Settings → Sessions is where the switch lives
-   * and says so. It is never inferred from `capabilities.localShell` alone — that is the profile's
-   * answer, and the switch may only ever narrow it further.
+   * Absent reads as OFF. It no longer decides whether the bottom band exists at all — see
+   * `lib/panelBar.ts`'s own `bottomBandFor` for why that was the bug — only whether `ShellBand`
+   * offers the SHELL half of what it can show: with it off, the segment drops the Shell tab
+   * (`panelBarEntries`' own `shell` gate) and `ShellBand` itself never shows or opens a shell pane
+   * (its own `shellEnabled` prop), while the CLI pane — the session's own harness terminal, not the
+   * shell — stays fully reachable. It is never inferred from `capabilities.localShell` alone — that
+   * is the profile's answer, and the switch may only ever narrow it further.
    */
   shellEnabled?: boolean
   /**
@@ -171,6 +175,11 @@ export function SessionPanel({
   const slotLayout = resolveForViewport(rawSlotLayout, isMobile)
   const bottomIsStudio = !isMobile && editorEnabled === true && slotLayout.bottom === 'studio'
 
+  /** WHICH BAND RENDERS AT THE FOOT OF THE PANEL — `lib/panelBar.ts`'s own `bottomBandFor`. Kept
+   *  here as one small pure call rather than as a JSX ternary so the decision can be planted and
+   *  tested without mounting anything; see that function's own doc comment for the rule itself. */
+  const bottomBand = bottomBandFor({ bottomIsStudio, relayed, isMobile })
+
   /**
    * THE ONE PANEL BAR (design item 1) — computed here, where `slotLayout`/`artifactsStore`/`relayed`
    * are all already in scope, and handed down as data + one callback to whichever bottom band
@@ -189,13 +198,16 @@ export function SessionPanel({
    */
   const art = useArtifacts()
   const rightOccupant = rightSlotShowing(slotLayout, art.open)
-  const bottomOccupant = slotLayout.bottom
   const panelBarGates: PanelBarGates = {
     editorEnabled: editorEnabled === true,
     shellEnabled: shellEnabled === true,
     relayed,
     hardwareOffered: hardwareOffered === true,
   }
+  // GATED — a stale `bottom: 'shell'` left over from before the switch turned off reads as `'cli'`
+  // here too, or the bar would light no tab at all over a pane `ShellBand` draws anyway (its own
+  // `target` is clamped the same way independently). See `gatedBottomOccupant`'s own doc comment.
+  const bottomOccupant = gatedBottomOccupant(slotLayout.bottom, panelBarGates.shellEnabled)
   const barEntries = panelBarEntries(rightOccupant, bottomOccupant, panelBarGates)
   const onPanelBarPick = useCallback((id: PanelBarId) => {
     if (id === 'contents') {
@@ -392,9 +404,12 @@ export function SessionPanel({
           screen. It is keyed by session, so switching rows unmounts it — which is also what drops
           its stream, the client half of the unwatch discipline.
 
-          Absent on a RELAYED session for the same reason the live stream is: those routes are the
-          machine's own and a central refuses them outright, so a band there could only ever draw a
-          refusal. Absent when the machine does not serve shells at all — see `shellEnabled`.
+          WHICH BAND renders is `bottomBand` (`lib/panelBar.ts`'s `bottomBandFor`, computed above).
+          `shellEnabled` no longer decides PRESENCE — only `ShellBand`'s own shell half, through its
+          own `shellEnabled` prop below. Absent on a RELAYED session for the same reason the live
+          stream is: those routes are the machine's own and a central refuses them outright, so a
+          band there could only ever draw a refusal (`bar-only`, or `none` on a phone — untouched by
+          this fix, see `bottomBandFor`'s own doc comment).
 
           THE STUDIO CAN OCCUPY THIS SAME BAND (`lib/panelSlots.ts`'s `bottom` slot), and when it
           does this renders a SEPARATE small band rather than teaching `ShellBand` a third target:
@@ -403,7 +418,7 @@ export function SessionPanel({
           neither, and its own persistent host (`StudioHost`, mounted once by `SessionsPage`) is what
           must never be torn down by an ordinary collapse. `key={session.id}` still resets the band's
           own open/collapsed feel per session; the Studio's own mount lives one level up. */}
-      {bottomIsStudio ? (
+      {bottomBand === 'studio' ? (
         <StudioBand
           key={session.id}
           lang={lang}
@@ -419,7 +434,7 @@ export function SessionPanel({
           extraOverflowEntries={moveDownEntries}
           {...(onStudioBandRef ? { contentRef: onStudioBandRef } : {})}
         />
-      ) : shellEnabled && !relayed ? (
+      ) : bottomBand === 'shell' ? (
         <ShellBand
           key={session.id}
           sessionId={session.id}
@@ -432,6 +447,9 @@ export function SessionPanel({
           barEntries={barEntries}
           onBarPick={onPanelBarPick}
           studioSeen={studioSeen}
+          // The security narrowing: WHICH of the two panes ShellBand may ever show/open, never
+          // whether it renders at all — see this prop's own doc comment on `ShellBand`.
+          shellEnabled={panelBarGates.shellEnabled}
           bottomOccupant={bottomOccupant === 'cli' || bottomOccupant === 'shell' ? bottomOccupant : null}
           taskControl={taskControl}
           extraOverflowEntries={moveDownEntries}
@@ -447,13 +465,14 @@ export function SessionPanel({
            */
           onMoveToRight={id => openSlotPanel(id, 'right')}
         />
-      ) : !isMobile && (
-        /* NEITHER BAND EXISTS (design item 1: "It must also be present when no terminal is shown at
-           the bottom") — the session is relayed, or the shell is off, or nothing has ever been
-           placed at the bottom. Contents/Studio/Hardware must stay reachable regardless, or removing
-           the header's own copy of this bar (item 2) would make them unreachable on desktop
-           entirely. `PanelBarBand` is the same bar in the same slim shape `ShellBand`'s own
-           collapsed bar takes, minus a stream it has nothing to show. */
+      ) : bottomBand === 'bar-only' && (
+        /* THE ONLY CASE LEFT (design item 1: "It must also be present when no terminal is shown at
+           the bottom") — a RELAYED session on desktop: no `cli`/`shell` stream of its own to dock,
+           the one gap this fix leaves exactly as it found it (`bottomBandFor`'s own doc comment).
+           Contents/Studio/Hardware must stay reachable regardless, or removing the header's own copy
+           of this bar (item 2) would make them unreachable entirely. `PanelBarBand` is the same bar
+           in the same slim shape `ShellBand`'s own collapsed bar takes, minus a stream it has
+           nothing to show. */
         <PanelBarBand
           key={session.id}
           lang={lang}
@@ -464,7 +483,7 @@ export function SessionPanel({
           studioSeen={studioSeen}
           taskControl={taskControl}
           extraOverflowEntries={moveDownEntries}
-          reason={relayed ? 'relayed' : 'shell-off'}
+          reason="relayed"
         />
       )}
     </div>
@@ -662,10 +681,16 @@ function StudioBand({
 
 /**
  * PanelBarBand — the panel bar with nothing docked behind it (design item 1: "It must also be
- * present when no terminal is shown at the bottom"). Renders when the session is relayed (no
- * `cli`/`shell` stream of its own to show) or the shell is off — the two cases that used to leave
- * the bottom of the panel with NOTHING at all, which made Contents/Studio/Hardware unreachable on
- * desktop the moment the header's own copy of this bar (design item 2) was removed.
+ * present when no terminal is shown at the bottom"). Renders on a RELAYED session — no `cli`/`shell`
+ * stream of its own to show — the one case left with genuinely nothing to dock, so
+ * Contents/Studio/Hardware stay reachable rather than vanishing along with the terminal streams.
+ *
+ * `reason` used to also carry `'shell-off'`: before `bottomBandFor` (`lib/panelBar.ts`) existed, a
+ * LOCAL session with the shell switched off fell through to this same band, because `ShellBand` was
+ * gated on `shellEnabled` at the call site instead of on its own `shellEnabled` prop. That was the
+ * bug this pass fixes — a local session always gets `ShellBand` now (its own CLI pane is the
+ * session's harness terminal, never gated by the shell switch), so this band is relayed-only and the
+ * reason is no longer a choice.
  *
  * A SLIM BAR ONLY — the same header row `ShellBand`'s own collapsed bar takes (same height, same
  * toggle), minus a stream it has nothing to show. Expanding it reveals one sentence naming WHY there
@@ -685,17 +710,13 @@ function PanelBarBand({
   /** "Bring [Studio/cli] to the bottom" (owner feedback, 2026-09-17) — see `SessionPanel`'s own
    *  `moveDownEntries`. `BandOverflowMenu` itself renders nothing when this is empty. */
   extraOverflowEntries?: readonly BandOverflowEntry[]
-  reason: 'relayed' | 'shell-off'
+  reason: 'relayed'
 }) {
   const pt = lang === 'pt'
-  const REASON_TEXT: Record<'relayed' | 'shell-off', { en: string; pt: string }> = {
+  const REASON_TEXT: Record<'relayed', { en: string; pt: string }> = {
     relayed: {
       en: 'This session belongs to another machine — no terminal to show here.',
       pt: 'Esta sessão pertence a outra máquina — não há terminal para mostrar aqui.',
-    },
-    'shell-off': {
-      en: 'This machine’s shell is off — turn it on in Settings → Sessions to dock a terminal here.',
-      pt: 'O shell desta máquina está desligado — ative em Configurações → Sessões para encaixar um terminal aqui.',
     },
   }
   const [barWidthRef, barWidth] = useElementWidth()

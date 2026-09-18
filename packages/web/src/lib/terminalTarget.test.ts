@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  TERMINAL_TARGETS, readTarget, targetLabel, targetScope, targetStreamId,
+  TERMINAL_TARGETS, readTarget, targetLabel, targetScope, targetStreamId, usableTarget,
 } from './terminalTarget'
 
 describe('the two things a terminal band can show', () => {
@@ -57,5 +57,34 @@ describe('the stored target', () => {
   test('a stored target is honoured', () => {
     expect(readTarget('cli')).toBe('cli')
     expect(readTarget('shell')).toBe('shell')
+  })
+})
+
+// `ShellBand`'s own security narrowing: the shell switch decides CONTENT (which pane a docked band
+// may ever show or open), never PRESENCE — see `lib/panelBar.ts`'s own `bottomBandFor`. This is
+// the ONE place that narrowing is computed, so `ShellBand`'s fresh-mount seed and its
+// `bottomOccupant`-follow effect can never disagree about what a `'shell'` reading becomes.
+describe('usableTarget — a "shell" reading is unusable once the switch is off', () => {
+  test('shellEnabled: every target passes through unchanged', () => {
+    expect(usableTarget('cli', true)).toBe('cli')
+    expect(usableTarget('shell', true)).toBe('shell')
+  })
+
+  test('shellEnabled off: "shell" reads as "cli" — the session\'s own pane, always there', () => {
+    expect(usableTarget('shell', false)).toBe('cli')
+  })
+
+  test('shellEnabled off: "cli" passes through unchanged — it was never gated by the switch', () => {
+    expect(usableTarget('cli', false)).toBe('cli')
+  })
+
+  // `readTarget`'s own default is `'shell'` (see above) — this is exactly the composition
+  // `ShellBand`'s fresh-mount `useState` initializer runs, and the case the whole fix exists for:
+  // a session with no stored preference at all, on a machine where the shell switch is off.
+  test('composed with readTarget\'s own default: a fresh, unreadable preference resolves to "cli" once the switch is off', () => {
+    for (const raw of [undefined, null, '', 'nope', 7]) {
+      expect(usableTarget(readTarget(raw), false), String(raw)).toBe('cli')
+      expect(usableTarget(readTarget(raw), true), String(raw)).toBe('shell')
+    }
   })
 })
