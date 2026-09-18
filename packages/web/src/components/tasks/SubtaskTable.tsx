@@ -30,6 +30,7 @@ import { Plus, Trash2 } from 'lucide-react'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { COLUMN_ORDER, STATUS, fmtTokens, microLabel, numeric, surface, type BoardStatus } from './board'
 import { SessionPicker } from './SessionPicker'
+import { DoneNeedsSessionDialog } from './DoneNeedsSessionDialog'
 import { DatePicker } from '../DatePicker'
 import { TaskProgressBar } from './TaskProgressBar'
 import { subtaskSessions } from './SubtaskSessions'
@@ -37,7 +38,7 @@ import { SubtaskBlockedBy } from './SubtaskBlockedBy'
 import { boardCopy, statusLabel, type Lang } from './copy'
 import { useMoney } from './money'
 import { costCaveat, costCellFor, subtaskRollupOf } from './subtaskRollup'
-import type { Subtask, SubtaskView, TaskSessionRow, TaskStatus } from '../../lib/tasks'
+import type { StatusWriteResult, Subtask, SubtaskView, TaskSessionRow, TaskStatus } from '../../lib/tasks'
 
 function StatusPick({ value, lang, onPick }: {
   value: TaskStatus
@@ -102,7 +103,9 @@ export interface SubtaskTableProps {
   subtaskRollups: readonly SubtaskView[]
   lang: Lang
   onAdd: (title: string) => void | Promise<void>
-  onPatch: (id: string, patch: Partial<Subtask>) => void | Promise<void>
+  /** Returns the write's outcome — the status pick below needs it to catch `done_needs_session`
+   *  and open the resolution dialog, rather than swallow the refusal like every other patch. */
+  onPatch: (id: string, patch: Partial<Subtask>) => Promise<StatusWriteResult>
   onRemove: (id: string) => void | Promise<void>
   /** File a session under a subtask. */
   onAttach: (subtaskId: string, sessionId: string) => void | Promise<void>
@@ -118,6 +121,16 @@ export function SubtaskTable(p: SubtaskTableProps) {
   const money = useMoney()
   const [draft, setDraft] = useState('')
   const [linking, setLinking] = useState<string | null>(null)
+  /** Set when a status write refused `done` for having no session filed yet — see
+   *  `DoneNeedsSessionDialog`. Named so its shortcut can reopen `SessionPicker` for the SAME row. */
+  const [doneRefusal, setDoneRefusal] = useState<{ id: string; title: string } | null>(null)
+
+  const pickStatus = async (t: Subtask, status: TaskStatus) => {
+    const result = await p.onPatch(t.id, { status })
+    if (!result.ok && result.reason === 'done_needs_session') {
+      setDoneRefusal({ id: t.id, title: t.title })
+    }
+  }
 
   const done = p.subtasks.filter(t => t.done).length
 
@@ -184,7 +197,7 @@ export function SubtaskTable(p: SubtaskTableProps) {
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'nowrap' }}>
                   <StatusPick
                     value={t.status} lang={p.lang}
-                    onPick={s => void p.onPatch(t.id, { status: s })}
+                    onPick={s => void pickStatus(t, s)}
                   />
                   {/* Blockers are SIBLINGS of this same delivery — `p.subtasks` already IS that
                       pool, so no second fetch is needed. */}
@@ -193,7 +206,7 @@ export function SubtaskTable(p: SubtaskTableProps) {
                     blockedBy={t.blockedBy ?? []}
                     siblings={p.subtasks}
                     lang={p.lang}
-                    onChange={ids => p.onPatch(t.id, { blockedBy: ids })}
+                    onChange={ids => void p.onPatch(t.id, { blockedBy: ids })}
                   />
                 </span>
               </td>
@@ -289,6 +302,22 @@ export function SubtaskTable(p: SubtaskTableProps) {
           // out, since every attach read-modify-writes the same store.
           onPick={async ids => { for (const id of ids) await p.onAttach(linking, id) }}
           onClose={() => setLinking(null)}
+        />
+      )}
+
+      {doneRefusal && (
+        <DoneNeedsSessionDialog
+          title={doneRefusal.title}
+          scope="subtask"
+          lang={p.lang}
+          onCancel={() => setDoneRefusal(null)}
+          onFile={() => {
+            // The SAME shortcut `SubtaskSessions`' own "filiar" button opens — this row's
+            // `SessionPicker`, not a second implementation of it.
+            const id = doneRefusal.id
+            setDoneRefusal(null)
+            setLinking(id)
+          }}
         />
       )}
     </div>

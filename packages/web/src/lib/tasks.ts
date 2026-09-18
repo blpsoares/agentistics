@@ -357,28 +357,48 @@ export function useTaskDetail(ref: string | undefined, filters?: Filters) {
   return { detail, error, reload: load }
 }
 
-export async function markTask(
+/**
+ * A status write the server can refuse for a NAMED reason — same shape `attachSession` uses for
+ * `blocked`. `done_needs_session` is `task-web.ts`'s refusal of a `done` with no session filed
+ * under the task or subtask yet; the caller opens the matching dialog rather than reporting a bare
+ * failure, so the rule reads as a question and not as a bug. A refusal with no `reason` is anything
+ * else (a bad ref, a network hiccup) — nothing this shape names, so there is nothing to ask about.
+ */
+export type StatusRefusalReason = 'done_needs_session'
+export type StatusWriteResult = { ok: true } | { ok: false; reason?: StatusRefusalReason }
+
+async function postStatus(path: string, body: unknown): Promise<StatusWriteResult> {
+  try {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (res.ok) return { ok: true }
+    // A 422 is the server refusing a `blocked` with nothing to say, or a `done` with no session
+    // filed — both name a piece of work this request cannot do YET. Read the body for WHICH one;
+    // anything else stays a bare refusal.
+    if (res.status === 422) {
+      const refused = await res.json().catch(() => null) as { message?: string } | null
+      if (refused?.message === 'done_needs_session') return { ok: false, reason: 'done_needs_session' }
+    }
+    return { ok: false }
+  } catch {
+    return { ok: false }
+  }
+}
+
+export function markTask(
   ref: string,
   status: TaskStatus,
   o: { reason?: string; blockedBy?: string[]; actor?: string } = {},
-): Promise<boolean> {
-  try {
-    const res = await fetch(`/api/tasks/${encodeURIComponent(ref)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        status,
-        ...(o.reason ? { reason: o.reason } : {}),
-        ...(o.blockedBy ? { blockedBy: o.blockedBy } : {}),
-        ...(o.actor ? { actor: o.actor } : {}),
-      }),
-    })
-    // A 422 is the server refusing a `blocked` with nothing to say — the caller opens the dialog
-    // rather than reporting a failure, so the rule reads as a question and not as a bug.
-    return res.ok
-  } catch {
-    return false
-  }
+): Promise<StatusWriteResult> {
+  return postStatus(`/api/tasks/${encodeURIComponent(ref)}`, {
+    status,
+    ...(o.reason ? { reason: o.reason } : {}),
+    ...(o.blockedBy ? { blockedBy: o.blockedBy } : {}),
+    ...(o.actor ? { actor: o.actor } : {}),
+  })
 }
 
 async function post(path: string, body: unknown): Promise<boolean> {
@@ -438,7 +458,7 @@ export const addSubtask = (ref: string, title: string) =>
   post(`/api/tasks/${encodeURIComponent(ref)}/subtasks`, { title })
 
 export const setSubtaskDone = (ref: string, id: string, done: boolean) =>
-  post(`/api/tasks/${encodeURIComponent(ref)}/subtasks`, { id, done })
+  postStatus(`/api/tasks/${encodeURIComponent(ref)}/subtasks`, { id, done })
 
 export async function deleteTask(ref: string): Promise<boolean> {
   try {
@@ -550,7 +570,7 @@ export const patchSubtask = (
   patch: Partial<Pick<Subtask,
     'title' | 'status' | 'assignee' | 'dueDate' | 'startDate' | 'sessionId' | 'notes' | 'blockedBy'
   >>,
-) => post(`/api/tasks/${encodeURIComponent(ref)}/subtasks`, { id, ...patch })
+) => postStatus(`/api/tasks/${encodeURIComponent(ref)}/subtasks`, { id, ...patch })
 
 export const removeSubtask = (ref: string, id: string) =>
   post(`/api/tasks/${encodeURIComponent(ref)}/subtasks`, { id, remove: true })
