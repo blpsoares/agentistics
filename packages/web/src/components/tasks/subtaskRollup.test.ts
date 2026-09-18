@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { costCaveat, costCellFor, rollupKeyOf, subtaskRollupOf, subtaskStatsOf } from './subtaskRollup'
+import { costCaveat, costCellFor, isUntracked, rollupKeyOf, subtaskRollupOf, subtaskStatsOf, tokensCellFor } from './subtaskRollup'
 import type { AttemptRollup, Subtask, SubtaskView, TaskStats } from '../../lib/tasks'
 
 function rollup(over: Partial<AttemptRollup> = {}): AttemptRollup {
@@ -93,6 +93,20 @@ test('subtaskRollupOf: an ungrouped subtask beside a group is unaffected', () =>
   expect(subtaskRollupOf(views, sub('s3'))).toBe(mine)
 })
 
+// --- isUntracked -------------------------------------------------------------------------------
+
+test('isUntracked: no bucket at all is untracked', () => {
+  expect(isUntracked(undefined)).toBe(true)
+})
+
+test('isUntracked: a bucket with sessionsUsed 0 is untracked', () => {
+  expect(isUntracked(rollup({ sessionsUsed: 0 }))).toBe(true)
+})
+
+test('isUntracked: a bucket with at least one session filed is tracked', () => {
+  expect(isUntracked(rollup({ sessionsUsed: 1 }))).toBe(false)
+})
+
 // --- subtaskStatsOf ----------------------------------------------------------------------------
 // Mirrors `subtaskRollupOf`'s own tests: same key resolution, over the evidence-numbers field
 // instead of the cost/session rollup. See docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md
@@ -131,17 +145,26 @@ test('subtaskStatsOf: two subtasks sharing a groupId read the SAME stats bucket,
 
 // --- costCellFor -----------------------------------------------------------------------------
 
-test('costCellFor: no bucket at all renders N/A, never a 0', () => {
-  expect(costCellFor(undefined)).toEqual({ kind: 'na' })
+test('costCellFor: no bucket at all renders as an empty cell, not even N/A', () => {
+  expect(costCellFor(undefined)).toEqual({ kind: 'empty' })
 })
 
-test('costCellFor: a subtask with no session filed yet — sessionsUsed 0, costUSD null — is honest N/A, not a fake 0', () => {
+test('costCellFor: a subtask with no session filed yet — sessionsUsed 0 — renders as an empty cell, not a fake 0 nor N/A', () => {
+  // Reasoning: a subtask with nothing filed under it has not been "measured and found unpriceable"
+  // — it simply has no metric to show yet. It gains one the moment a session is linked.
   const r = rollup({ sessionsUsed: 0, sessionsLinked: 0, rounds: null, activeMinutes: null, tokens: null, costUSD: null })
-  expect(costCellFor(r)).toEqual({ kind: 'money', usd: null })
+  expect(costCellFor(r)).toEqual({ kind: 'empty' })
 })
 
 test('costCellFor: an ordinary priced subtask renders its dollar figure', () => {
   expect(costCellFor(rollup({ costUSD: 12.34 }))).toEqual({ kind: 'money', usd: 12.34 })
+})
+
+test('costCellFor: a LINKED session whose cost cannot be computed still renders N/A, never empty', () => {
+  // The transition case this correction must not blur: once a session IS filed, a genuinely
+  // unpriceable cost is a real (empty) measurement, not "nothing filed yet".
+  const r = rollup({ sessionsUsed: 1, sessionsLinked: 1, costUSD: null, credits: null })
+  expect(costCellFor(r)).toEqual({ kind: 'money', usd: null })
 })
 
 test('costCellFor: mixed currency takes the credits branch even if costUSD is set', () => {
@@ -152,6 +175,33 @@ test('costCellFor: mixed currency takes the credits branch even if costUSD is se
 test('costCellFor: Copilot-only credits with no USD figure takes the credits branch', () => {
   const r = rollup({ mixedCurrency: false, costUSD: null, credits: { nanoAiu: 0, premiumRequests: 2 } })
   expect(costCellFor(r)).toEqual({ kind: 'credits', premiumRequests: 2 })
+})
+
+// --- tokensCellFor ---------------------------------------------------------------------------
+
+test('tokensCellFor: no bucket at all renders as an empty cell', () => {
+  expect(tokensCellFor(undefined)).toEqual({ kind: 'empty' })
+})
+
+test('tokensCellFor: sessionsUsed 0 renders as an empty cell', () => {
+  expect(tokensCellFor(rollup({ sessionsUsed: 0, tokens: null }))).toEqual({ kind: 'empty' })
+})
+
+test('tokensCellFor: a linked session with a real token count renders it', () => {
+  expect(tokensCellFor(rollup({ sessionsUsed: 1, tokens: 4321 }))).toEqual({ kind: 'tokens', n: 4321 })
+})
+
+test('tokensCellFor: a linked session whose tokens could not be read renders N/A (not empty)', () => {
+  expect(tokensCellFor(rollup({ sessionsUsed: 1, tokens: null }))).toEqual({ kind: 'tokens', n: null })
+})
+
+test('tokensCellFor: gaining a session flips a subtask from empty to a real figure', () => {
+  const before = rollup({ sessionsUsed: 0, sessionsLinked: 0, tokens: null, costUSD: null })
+  const after = rollup({ sessionsUsed: 1, sessionsLinked: 1, tokens: 500, costUSD: 0.25 })
+  expect(tokensCellFor(before)).toEqual({ kind: 'empty' })
+  expect(costCellFor(before)).toEqual({ kind: 'empty' })
+  expect(tokensCellFor(after)).toEqual({ kind: 'tokens', n: 500 })
+  expect(costCellFor(after)).toEqual({ kind: 'money', usd: 0.25 })
 })
 
 // --- costCaveat ------------------------------------------------------------------------------
