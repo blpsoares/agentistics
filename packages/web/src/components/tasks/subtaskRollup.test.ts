@@ -25,13 +25,15 @@ function sub(id: string, groupId?: string): Pick<Subtask, 'id' | 'groupId'> {
 }
 
 // --- rollupKeyOf -----------------------------------------------------------------------------
+// §F (docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md) supersedes §B's shared-bucket
+// model: `subtaskViews()` now buckets EVERY subtask by its own id, always. `groupId` is inert.
 
-test('rollupKeyOf: an ungrouped subtask is bucketed under its own id', () => {
+test('rollupKeyOf: a subtask with no groupId is bucketed under its own id', () => {
   expect(rollupKeyOf(sub('s1'))).toBe('s1')
 })
 
-test('rollupKeyOf: a grouped subtask is bucketed under the group id, never its own', () => {
-  expect(rollupKeyOf(sub('s1', 'g1'))).toBe('g1')
+test('rollupKeyOf: a legacy `groupId` is INERT — the subtask is still bucketed under its OWN id, never the group\'s', () => {
+  expect(rollupKeyOf(sub('s1', 'g1'))).toBe('s1')
 })
 
 // --- subtaskRollupOf -----------------------------------------------------------------------------
@@ -55,36 +57,32 @@ test('subtaskRollupOf: the id:null direct-branch bucket is not confused with a r
   expect(subtaskRollupOf(views, sub('s1'))).toBeUndefined()
 })
 
-test('subtaskRollupOf: two subtasks sharing a groupId read the SAME bucket, keyed by the group', () => {
-  // The server collapses a group into ONE view keyed by the group id (task-report.ts's `keyOf`),
-  // so neither member's own id appears in the list at all.
-  const shared = rollup({ costUSD: 8, sessionsUsed: 2, sessionsLinked: 2 })
+test('subtaskRollupOf: two subtasks that still carry the SAME legacy groupId read their OWN separate buckets, never a shared one', () => {
+  // §F supersedes §B's shared-bucket model: `subtaskViews()` no longer collapses a `groupId` into
+  // one view, so each subtask's own id is its own bucket — `groupId` is inert.
+  const own1 = rollup({ costUSD: 8, sessionsUsed: 2, sessionsLinked: 2 })
+  const own2 = rollup({ costUSD: 1 })
   const views: SubtaskView[] = [
-    { id: 'g1', rollup: shared, stats: null },
-    { id: 's3', rollup: rollup({ costUSD: 1 }), stats: null },
+    { id: 's1', rollup: own1, stats: null },
+    { id: 's2', rollup: own2, stats: null },
   ]
-  const a = subtaskRollupOf(views, sub('s1', 'g1'))
-  const b = subtaskRollupOf(views, sub('s2', 'g1'))
-  expect(a).toBe(shared)
-  expect(b).toBe(shared)
-  // The SAME object, never two sums: reading it per member is what would multiply the cost by the
-  // group's size.
-  expect(a).toBe(b!)
+  expect(subtaskRollupOf(views, sub('s1', 'g1'))).toBe(own1)
+  expect(subtaskRollupOf(views, sub('s2', 'g1'))).toBe(own2)
 })
 
-test('subtaskRollupOf: a grouped subtask never falls back to a bucket under its own id', () => {
-  // If the list somehow still carried a per-member bucket, the group's key must win — the member
-  // id is not the effective key and reading it would be a second, smaller sum.
+test('subtaskRollupOf: a subtask with a legacy groupId never falls back to a bucket keyed by the group', () => {
+  // If the list happened to carry a stray bucket keyed by the old group id, the subtask's OWN id
+  // must still win — reading the group's bucket instead is exactly the §B behaviour this supersedes.
   const own = rollup({ costUSD: 1 })
-  const group = rollup({ costUSD: 9 })
+  const strayGroupBucket = rollup({ costUSD: 9 })
   const views: SubtaskView[] = [
     { id: 's1', rollup: own, stats: null },
-    { id: 'g1', rollup: group, stats: null },
+    { id: 'g1', rollup: strayGroupBucket, stats: null },
   ]
-  expect(subtaskRollupOf(views, sub('s1', 'g1'))).toBe(group)
+  expect(subtaskRollupOf(views, sub('s1', 'g1'))).toBe(own)
 })
 
-test('subtaskRollupOf: an ungrouped subtask beside a group is unaffected', () => {
+test('subtaskRollupOf: a subtask with no groupId is unaffected by an unrelated bucket', () => {
   const mine = rollup({ costUSD: 4 })
   const views: SubtaskView[] = [
     { id: 'g1', rollup: rollup({ costUSD: 8 }), stats: null },
@@ -131,16 +129,15 @@ test('subtaskStatsOf: null when the bucket exists but nothing is filed under it 
   expect(subtaskStatsOf(views, sub('s1'))).toBeNull()
 })
 
-test('subtaskStatsOf: two subtasks sharing a groupId read the SAME stats bucket, keyed by the group', () => {
-  const shared = stats({ filesModified: 10 })
+test('subtaskStatsOf: two subtasks that still carry the SAME legacy groupId read their OWN separate stats buckets, never a shared one', () => {
+  const own1 = stats({ filesModified: 10 })
+  const own2 = stats({ filesModified: 1 })
   const views: SubtaskView[] = [
-    { id: 'g1', rollup: rollup(), stats: shared },
-    { id: 's3', rollup: rollup(), stats: stats({ filesModified: 1 }) },
+    { id: 's1', rollup: rollup(), stats: own1 },
+    { id: 's2', rollup: rollup(), stats: own2 },
   ]
-  const a = subtaskStatsOf(views, sub('s1', 'g1'))
-  const b = subtaskStatsOf(views, sub('s2', 'g1'))
-  expect(a).toBe(shared)
-  expect(b).toBe(shared)
+  expect(subtaskStatsOf(views, sub('s1', 'g1'))).toBe(own1)
+  expect(subtaskStatsOf(views, sub('s2', 'g1'))).toBe(own2)
 })
 
 // --- costCellFor -----------------------------------------------------------------------------

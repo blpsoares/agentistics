@@ -18,27 +18,28 @@
 import type { AttemptRollup, Subtask, SubtaskView, TaskStats } from '../../lib/tasks'
 
 /**
- * The EFFECTIVE bucket key of a subtask — the same one the server bucketed by.
+ * The bucket key of a subtask — the same one the server bucketed by.
  *
- * `subtaskViews()` (`task-report.ts`) keys a bucket by `s.groupId ?? s.id`, so a group of subtasks
- * collapses into ONE view filed under the group id and NEITHER member's own id appears in the list.
- * Reading a grouped subtask by its own id therefore finds nothing — or, worse, a stale per-member
- * bucket — and a member would show N/A (or a second, smaller sum) beside siblings showing the
- * group's real figure. See docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md §B.3.
+ * SUPERSEDED §B's `groupId ?? id` reading — docs/superpowers/specs/
+ * 2026-09-11-alm-session-linking-ux.md §F replaces the shared-bucket model with a real hierarchy
+ * level. `subtaskViews()` (`task-report.ts`) now buckets every non-member subtask by its OWN id,
+ * always — a loose subtask exactly as before, and a GROUP (`isGroup: true`) the same way, since a
+ * group's bucket is simply the sessions filed on its own id (no member can ever carry one — see
+ * `task-attach.ts`'s `subtask_in_group`). `groupId` is no longer read here: production carries
+ * zero subtasks with it set, and the field survives only as an inert, still-writable column for the
+ * already-shipped §B-era write path — see its own docblock in `packages/server/server/sessions/
+ * task-model.ts`. Kept as its own function, rather than inlined at each call site, so there is
+ * exactly ONE place this ever reads from — the same reason it existed before.
  */
-export function rollupKeyOf(subtask: Pick<Subtask, 'id' | 'groupId'>): string {
-  return subtask.groupId ?? subtask.id
+export function rollupKeyOf(subtask: Pick<Subtask, 'id'>): string {
+  return subtask.id
 }
 
 /** The rollup for one subtask, or `undefined` when the server has no bucket for it at all — which
- *  reads exactly like an empty one: nothing measured, never a `0` standing in for it.
- *
- *  It takes the SUBTASK and not a bare id on purpose: the effective key is the group's whenever
- *  there is one, and a signature accepting a plain string is one a caller can satisfy with
- *  `t.id` — silently reading the wrong bucket for every grouped row. */
+ *  reads exactly like an empty one: nothing measured, never a `0` standing in for it. */
 export function subtaskRollupOf(
   views: readonly SubtaskView[],
-  subtask: Pick<Subtask, 'id' | 'groupId'>,
+  subtask: Pick<Subtask, 'id'>,
 ): AttemptRollup | undefined {
   const key = rollupKeyOf(subtask)
   return views.find(v => v.id === key)?.rollup
@@ -64,12 +65,11 @@ export function isUntracked(r: AttemptRollup | undefined): boolean {
  * them reported anything measurable. See
  * docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md §C.5.
  *
- * Same effective-key resolution as `subtaskRollupOf` — a grouped subtask's evidence numbers live
- * under the GROUP's bucket, never a per-member one.
+ * Same key resolution as `subtaskRollupOf` — see `rollupKeyOf`.
  */
 export function subtaskStatsOf(
   views: readonly SubtaskView[],
-  subtask: Pick<Subtask, 'id' | 'groupId'>,
+  subtask: Pick<Subtask, 'id'>,
 ): TaskStats | null | undefined {
   const key = rollupKeyOf(subtask)
   return views.find(v => v.id === key)?.stats
