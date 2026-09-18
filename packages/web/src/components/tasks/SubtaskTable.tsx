@@ -4,8 +4,7 @@
  * One component drawn in two places, deliberately: a subtask that shows five columns on the board
  * and a checkbox on the detail page is two different records as far as the reader is concerned, and
  * the one with fewer columns teaches people the fields do not exist. (`TaskTable.tsx`'s inline
- * subitem rows mirror the base columns but do NOT yet draw the two below — a gap worth closing
- * there too, tracked separately rather than done as a side effect of this file.)
+ * subitem rows mirror the base columns, including the group-forming controls below.)
  *
  * A subtask carries a SESSION — which piece of work is being done where — and now a ROLLUP of its
  * own: cost, rounds and tokens are still measured per SESSION, never stored on the subtask itself,
@@ -14,15 +13,23 @@
  * of them — nothing here double-counts a session or invents a split the data does not record. See
  * docs/superpowers/specs/2026-09-10-task-session-hierarchy-design.md §4.2.
  *
- * The Cost/Tokens columns below read `p.subtaskRollups` through `subtaskRollupOf`, which resolves
- * the EFFECTIVE key — a subtask's own id, or its `groupId` when it is one of a group, since the
- * server files a whole group under ONE bucket (see `rollupKeyOf`) — and render them with
- * the exact same formatters `TaskTable.tsx`'s own cost/tokens cells use (`useMoney()`, `fmtTokens`).
- * A subtask with no session filed yet still gets a bucket from the server (`sessionsUsed: 0`, every
- * metric `null`), and that renders as an EMPTY cell — no field at all, not even "N/A" — through
- * `costCellFor`/`tokensCellFor`'s `isUntracked` check: metric tracking starts the moment a session
- * is actually linked, not before. "N/A" is reserved for a session that IS linked but whose figure
- * genuinely cannot be produced. See `subtaskRollup.ts`.
+ * **Subtask GROUPS (§F.1 of docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md) are a real
+ * hierarchy level, not a label two subtasks share** — a peer row in this same table, never a nested
+ * sub-list. A GROUP is the only thing in its branch that may hold a session; a MEMBER never carries
+ * one (refused server-side, `subtask_in_group`) and therefore has no rollup bucket of its own at all
+ * — `subtaskRollupOf` returns `undefined` for it by construction, which already renders as the fully
+ * empty cost/tokens cells below, the same convention every untracked subtask uses. `SubtaskGroupMenu`
+ * draws the create/join/leave/dissolve gestures; `subtaskGroups.ts` holds the pure reads
+ * (`isGroupSubtask`/`isGroupMember`/`groupOf`/candidate lists) this file and `TaskTable.tsx` share.
+ *
+ * The Cost/Tokens columns below read `p.subtaskRollups` through `subtaskRollupOf`, which resolves by
+ * the subtask's OWN id, always (`rollupKeyOf` — the legacy `groupId`-based union §B once used is
+ * superseded and inert) — and render them with the exact same formatters `TaskTable.tsx`'s own
+ * cost/tokens cells use (`useMoney()`, `fmtTokens`). A subtask with no session filed yet still gets a
+ * bucket from the server (`sessionsUsed: 0`, every metric `null`), and that renders as an EMPTY cell
+ * — no field at all, not even "N/A" — through `costCellFor`/`tokensCellFor`'s `isUntracked` check:
+ * metric tracking starts the moment a session is actually linked, not before. "N/A" is reserved for a
+ * session that IS linked but whose figure genuinely cannot be produced. See `subtaskRollup.ts`.
  *
  * The `id: null` direct-branch bucket (sessions filed straight on the delivery, under no subtask —
  * see `task-attach.ts` and docs/superpowers/specs/2026-09-10-task-session-hierarchy-design.md §4.1)
@@ -41,11 +48,15 @@ import { DatePicker } from '../DatePicker'
 import { TaskProgressBar } from './TaskProgressBar'
 import { subtaskSessions } from './SubtaskSessions'
 import { SubtaskBlockedBy } from './SubtaskBlockedBy'
+import { SubtaskGroupMenu } from './SubtaskGroupMenu'
+import { groupOf, isGroupMember, isGroupSubtask } from './subtaskGroups'
 import { SessionRef } from './SessionRef'
 import { boardCopy, statusLabel, type Lang } from './copy'
 import { useMoney, type Money } from './money'
 import { costCaveat, costCellFor, subtaskRollupOf, tokensCellFor, type CostCell, type TokensCell } from './subtaskRollup'
-import type { AttemptRollup, StatusWriteResult, Subtask, SubtaskView, TaskSessionRow, TaskStatus } from '../../lib/tasks'
+import type {
+  AttemptRollup, StatusWriteResult, Subtask, SubtaskPatch, SubtaskView, TaskSessionRow, TaskStatus,
+} from '../../lib/tasks'
 
 function StatusPick({ value, lang, onPick }: {
   value: TaskStatus
@@ -136,9 +147,16 @@ export interface SubtaskTableProps {
   lang: Lang
   onAdd: (title: string) => void | Promise<void>
   /** Returns the write's outcome — the status pick below needs it to catch `done_needs_session`
-   *  and open the resolution dialog, rather than swallow the refusal like every other patch. */
-  onPatch: (id: string, patch: Partial<Subtask>) => Promise<StatusWriteResult>
+   *  and open the resolution dialog, rather than swallow the refusal like every other patch; the
+   *  group menu needs it the same way for `invalid_group`/`subtask_has_sessions`/
+   *  `group_field_conflict` (§F.1). Generic over id, so the group menu can patch a SIBLING (the one
+   *  being joined) as well as this row. */
+  onPatch: (id: string, patch: SubtaskPatch) => Promise<StatusWriteResult>
   onRemove: (id: string) => void | Promise<void>
+  /** Mint a new GROUP subtask (§F.1) and return its id, or `null` on failure — the first step of
+   *  "create a group with…", which then joins both the picked sibling and the row it started from
+   *  to it. */
+  onCreateGroup: (title: string) => Promise<string | null>
   /** File a session under a subtask. */
   onAttach: (subtaskId: string, sessionId: string) => void | Promise<void>
   /** Take a session out of wherever it is filed. */
@@ -213,9 +231,18 @@ export function SubtaskTable(p: SubtaskTableProps) {
             </tr>
           )}
           {p.subtasks.map(t => {
+            // A GROUP MEMBER (§F.1) never carries a session of its own — refused server-side
+            // (`subtask_in_group`) — so it has no rollup bucket at all (`subtaskViews` excludes it
+            // outright). `r` is therefore `undefined` for it by construction, which already renders
+            // as the fully empty cost/tokens cells below — the same "nothing filed here yet"
+            // convention every untracked subtask uses, never a fake zero.
+            const isMember = isGroupMember(t)
+            const isGroup = isGroupSubtask(t)
             const r = subtaskRollupOf(p.subtaskRollups, t)
             const cost = costCellFor(r)
             const tok = tokensCellFor(r)
+            const view = p.subtaskRollups.find(v => v.id === t.id)
+            const parentGroup = isMember ? groupOf(t, p.subtasks) : undefined
             return (
             <tr key={t.id}>
               <td style={{ ...cell, minWidth: 180 }}>
@@ -229,11 +256,28 @@ export function SubtaskTable(p: SubtaskTableProps) {
                     fontSize: 12.5,
                   }}
                 />
+                {/* A GROUP's own progress, from its members' `status` (§F.1's `groupProgress`) —
+                    the same round-down bar the header above draws for the whole delivery, one
+                    hierarchy level down. Absent when the group has no members yet. */}
+                {isGroup && view?.groupProgress && (
+                  <TaskProgressBar done={view.groupProgress.done} total={view.groupProgress.total} height={3} />
+                )}
+                {/* A MEMBER names which group it belongs to right on the row — the popover below
+                    repeats it, but this is the fact a reader should not have to open anything to
+                    see. */}
+                {isMember && (
+                  <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                    {p.lang === 'pt' ? 'parte do grupo: ' : 'part of group: '}
+                    <span style={{ color: 'var(--text-secondary)' }}>
+                      {parentGroup?.title ?? (p.lang === 'pt' ? '(não encontrado)' : '(not found)')}
+                    </span>
+                  </div>
+                )}
               </td>
-              {/* `minWidth` + `nowrap`: the status chip and the blocked-by badge are two small
+              {/* `minWidth` + `nowrap`: the status chip and the blocked-by/group badges are small
                   controls meant to sit on ONE line — without a floor here `table-layout: auto`
-                  could squeeze this column below their combined width and wrap the badge onto
-                  its own row, which reads as a broken layout rather than two controls. */}
+                  could squeeze this column below their combined width and wrap a badge onto
+                  its own row, which reads as a broken layout rather than several controls. */}
               <td style={{ ...cell, minWidth: 130, whiteSpace: 'nowrap' }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'nowrap' }}>
                   <StatusPick
@@ -241,13 +285,24 @@ export function SubtaskTable(p: SubtaskTableProps) {
                     onPick={s => void pickStatus(t, s)}
                   />
                   {/* Blockers are SIBLINGS of this same delivery — `p.subtasks` already IS that
-                      pool, so no second fetch is needed. */}
+                      pool, so no second fetch is needed. A group or a member keeps its own
+                      `blockedBy` exactly like a loose subtask (§F.1: it still has its own status). */}
                   <SubtaskBlockedBy
                     subtaskId={t.id}
                     blockedBy={t.blockedBy ?? []}
                     siblings={p.subtasks}
                     lang={p.lang}
                     onChange={ids => void p.onPatch(t.id, { blockedBy: ids })}
+                  />
+                  {/* The group-forming gestures (§F.1) — create/join for a loose subtask, dissolve
+                      for a group, leave for a member. Same siblings pool as `SubtaskBlockedBy`. */}
+                  <SubtaskGroupMenu
+                    subtask={t}
+                    siblings={p.subtasks}
+                    lang={p.lang}
+                    onPatch={p.onPatch}
+                    onCreateGroup={p.onCreateGroup}
+                    onRemove={p.onRemove}
                   />
                 </span>
               </td>
@@ -275,13 +330,16 @@ export function SubtaskTable(p: SubtaskTableProps) {
                 />
               </td>
               <td style={{ ...cell, minWidth: 190 }}>
-                {subtaskSessions({
+                {/* A MEMBER can never hold a session (`subtask_in_group`, refused server-side) —
+                    so it gets no filing control at all, not a control that always refuses. Its
+                    own chips are moot for the same reason: it has none, and never a UNION of its
+                    group's — that was §B's shared-bucket model, superseded by §F.1. */}
+                {!isMember && subtaskSessions({
                   subtaskId: t.id,
-                  // The row's group siblings show the identical chip list — see
-                  // docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md §B.4.
-                  subtaskIds: t.groupId
-                    ? p.subtasks.filter(s => s.groupId === t.groupId).map(s => s.id)
-                    : [t.id],
+                  // A GROUP's own chips are its own direct sessions — never a union of its
+                  // members', who can never carry one. See
+                  // docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md §F.3.
+                  subtaskIds: [t.id],
                   sessions: p.sessions,
                   lang: p.lang,
                   mobile: isMobile,
@@ -290,9 +348,10 @@ export function SubtaskTable(p: SubtaskTableProps) {
                   onOpen: p.onOpenSession,
                 })}
               </td>
-              {/* `r` absent (no bucket at all) or `sessionsUsed: 0` (a bucket, but nobody has
-                  filed a session here yet) both render as a fully EMPTY cell — no field at all,
-                  not even "N/A" — via `CostCellView`/`TokensCellView`'s `isUntracked` check. */}
+              {/* `r` absent (no bucket at all — always true for a MEMBER) or `sessionsUsed: 0` (a
+                  bucket, but nobody has filed a session here yet) both render as a fully EMPTY
+                  cell — no field at all, not even "N/A" — via `CostCellView`/`TokensCellView`'s
+                  `isUntracked` check. */}
               <td style={{ ...cell, textAlign: 'right' }}>
                 <CostCellView r={r} cost={cost} money={money} />
               </td>
