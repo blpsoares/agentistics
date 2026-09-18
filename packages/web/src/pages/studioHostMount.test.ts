@@ -44,6 +44,7 @@ describe('mountStudioHostPanel — the real call site SessionsPage.tsx uses', ()
     expect(el?.props).toEqual({
       sessionId: 'session-1', lang: 'en', autosave: false, turns: [], onExit: BASE.onExit, target: null,
       harness: undefined, composerMounted: true, onMention: BASE.onMention,
+      fullscreen: undefined, onToggleFullscreen: undefined,
     })
   })
 

@@ -196,6 +196,13 @@ export interface AppContext {
    *  does: `SessionsPage`/`SessionPanel` gate on `=== true`, never on "not `=== false`". */
   shellEnabled?: boolean
 
+  /** The in-memory "Enable now" override's own raw value (`shell-override-store.ts`), reported
+   *  apart from the combined `shellEnabled` above so a reader can say WHICH of the two put it on:
+   *  "ligado" (the ordinary preference) and "ligado até reiniciar o servidor" (this override) are
+   *  different sentences, and collapsing them into one boolean makes the second unreachable.
+   *  `undefined` is the same not-loaded-yet reading every other flag on this object carries. */
+  shellOverride?: boolean
+
   /** What `/api/fleet/tree*` will ACTUALLY answer: `CAPS.localShell` AND the user's own switch,
    *  resolved by the server (`sessions/editor-gate.ts`) and reported by `GET /api/team/session`.
    *  The UI may NEVER re-derive it from `capabilities.localShell` + a preference — the resolved

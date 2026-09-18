@@ -96,7 +96,8 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
   AlertTriangle, ArrowLeft, ArrowLeftRight, Check, ChevronDown, ChevronLeft, ChevronRight, FilePlus,
-  FolderPlus, Loader, PanelLeftClose, PanelLeftOpen, Plus, Search, Undo2, X,
+  FolderPlus, Loader, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings,
+  Undo2, X,
 } from 'lucide-react'
 import {
   applyChildren, applyError, baseNameOf, canMoveInto, closeTab, destinationPath, flattenVisible,
@@ -122,7 +123,7 @@ import { RepoSearchView } from './RepoSearchView'
 import { RepoTreeView, toggleDirectory, treeViewState, type TreeOps } from './RepoTreeView'
 import { RepoNote } from './repoNote'
 import { insertMention } from '../../lib/mentionInsert'
-import { BandLabeledButton } from './bandControls'
+import { BandOverflowMenu, type BandOverflowEntry } from './bandControls'
 import type { HarnessId } from '@agentistics/core'
 
 export interface StudioProps {
@@ -163,6 +164,22 @@ export interface StudioProps {
    * "Adicionado à mensagem" toast (`MENTION_ADDED_TOAST`, `mentionInsert.ts`).
    */
   onMention?: (result: { text: string; needsSwitch: boolean }) => void
+  /**
+   * IS THE STUDIO'S BAND CURRENTLY TRUE FULL SCREEN — the whole viewport, not merely "fills the
+   * centre column". Owned by whoever mounts this component (`SessionsPage`, through `StudioHost`),
+   * because the band that actually draws the full-screen BOX is a sibling of this one, reached a
+   * different way (`StudioBand`, `SessionPanel.tsx`) — this component only reads the flag to draw
+   * its own gear menu's "current value" and to answer Esc, never to size anything itself.
+   */
+  fullscreen?: boolean
+  /**
+   * Absent wherever full screen has nowhere to apply — the Studio is not bottom-docked (it sits in
+   * the right slot, which has no drag handle and no giant-band gesture to escalate from). The gear
+   * menu's full-screen row is then ABSENT too, the same "offered only where there is somewhere to
+   * go" rule `ShellBand`'s own fullscreen control already follows for its `aside`/`dedicated`
+   * placements — never present and refusing.
+   */
+  onToggleFullscreen?: () => void
 }
 
 /** Which layer the panel is showing while no file is open. */
@@ -506,6 +523,71 @@ function storeTreeSide(side: TreeSide): void {
   try { localStorage.setItem(TREE_SIDE_KEY, side) } catch { /* private mode */ }
 }
 
+// --- the gear menu (§2: replacing the header row) -------------------------------------------------
+
+export type StudioGearItemId = 'tree-toggle' | 'tree-side' | 'fullscreen' | 'close'
+
+export interface StudioGearItem { id: StudioGearItemId; label: string }
+
+/**
+ * THE GEAR MENU'S OWN ROWS, AS DATA — what each one SAYS, given the state it is offered in.
+ *
+ * Split out from the JSX that wires an icon and an `onSelect` to each row so the LABELS — the part
+ * a reader actually reads, and the part most likely to drift — are testable without a DOM: this
+ * package has none, so a menu built only ever inline inside JSX would leave "does it say the RIGHT
+ * thing" untested, the same gap `studioLayout`/`resolveTreeShown` already exist to close for the
+ * panes themselves. Each label STATES its current value rather than a bare verb — "Ocultar árvore"
+ * / "Mostrar árvore", "Mover árvore para a direita" / "…para a esquerda", "Tela cheia" / "Sair da
+ * tela cheia" — because a menu a reader cannot glance at and tell apart from its own opposite is a
+ * menu they have to open to find out, every time.
+ *
+ * ORDER is stable and deliberate: the tree's own two rows first — what this menu REPLACED
+ * (`StudioBar`'s former "Ocultar árvore"/"Árvore à direita") stay adjacent to each other, exactly
+ * as they were two separate buttons side by side — full screen next (the newer control), close
+ * LAST (the one row whose effect is leaving the panel, and the one `StudioBand`'s own "Mais ações"
+ * already offers a second path to whenever the Studio is bottom-docked).
+ *
+ * A row is ABSENT rather than present-and-refusing when it has nothing to act on:
+ * `treeCollapsible` (the exact gate `StudioBar` used to read for both tree rows) and
+ * `fullscreenAvailable` (whether the caller even offered `onToggleFullscreen` — absent wherever the
+ * Studio is not bottom-docked, see `SessionsPage`'s own comment on why). "Close" has no gate: it is
+ * the one row this menu always carries, the reason `onExit` stays a REQUIRED prop on `Studio`
+ * itself (see this file's header on why an exit that can be absent is a reader trapped in a panel).
+ */
+export function studioGearEntries({
+  lang, treeCollapsible: canToggleTree, treeCollapsed, treeSide, fullscreenAvailable, fullscreen,
+}: {
+  lang: 'pt' | 'en'
+  treeCollapsible: boolean
+  treeCollapsed: boolean
+  treeSide: TreeSide
+  fullscreenAvailable: boolean
+  fullscreen: boolean
+}): StudioGearItem[] {
+  const pt = lang === 'pt'
+  const items: StudioGearItem[] = []
+  if (canToggleTree) {
+    items.push({
+      id: 'tree-toggle',
+      label: treeCollapsed ? (pt ? 'Mostrar árvore' : 'Show tree') : (pt ? 'Ocultar árvore' : 'Hide tree'),
+    })
+    items.push({
+      id: 'tree-side',
+      label: treeSide === 'left'
+        ? (pt ? 'Mover árvore para a direita' : 'Move tree to the right')
+        : (pt ? 'Mover árvore para a esquerda' : 'Move tree to the left'),
+    })
+  }
+  if (fullscreenAvailable) {
+    items.push({
+      id: 'fullscreen',
+      label: fullscreen ? (pt ? 'Sair da tela cheia' : 'Exit full screen') : (pt ? 'Tela cheia' : 'Full screen'),
+    })
+  }
+  items.push({ id: 'close', label: pt ? 'Fechar Studio' : 'Close Studio' })
+  return items
+}
+
 /**
  * Applying the root's re-read the same way EVERYWHERE it happens: on success, the real listing; on
  * refusal, the tree's own error state carrying the SAME sentence every other failure in this feature
@@ -579,6 +661,7 @@ export function nextGoTo(
 
 export function Studio({
   sessionId, lang, autosave, turns, onExit, harness, composerMounted = true, onMention,
+  fullscreen = false, onToggleFullscreen,
 }: StudioProps) {
   const isMobile = useIsMobile()
   const pt = lang === 'pt'
@@ -931,27 +1014,69 @@ export function Studio({
     storeTreeWidth(w)
   }
 
+  /**
+   * ESC LEAVES FULL SCREEN — unless the editor has focus, where Escape already belongs to Monaco
+   * (closing a suggestion widget, clearing a multi-cursor selection, …) and stealing it would break
+   * typing in the one place a keystroke matters most. `.monaco-editor` is Monaco's own root class on
+   * every instance it creates, so this reads whichever of `EditorStack`'s several mounted editors
+   * currently holds focus without reaching into any one editor's own JS handle.
+   */
+  useEffect(() => {
+    if (!fullscreen || !onToggleFullscreen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      const active = typeof document === 'undefined' ? null : document.activeElement
+      if (active instanceof Element && active.closest('.monaco-editor')) return
+      onToggleFullscreen()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [fullscreen, onToggleFullscreen])
+
+  /**
+   * THE GEAR MENU (§2 — replacing the header row). `studioGearEntries` decides WHAT is offered and
+   * what each row SAYS; this only wires an icon and an action to each id, and only for the ids that
+   * come back — a row this function did not return is a row with nothing to act on, never a
+   * disabled one. `BandOverflowMenu` is the SAME popover `StudioBand`'s own "Mais ações" renders
+   * (`bandControls.tsx`), given its own `Settings` icon so the two read as different menus at a
+   * glance rather than two triggers that look alike and open onto different things.
+   */
+  const gearIds = studioGearEntries({
+    lang, treeCollapsible: collapsible, treeCollapsed, treeSide,
+    fullscreenAvailable: onToggleFullscreen !== undefined, fullscreen,
+  })
+  const gearAction: Record<StudioGearItemId, { icon: ReactNode; onSelect: () => void }> = {
+    'tree-toggle': {
+      icon: treeCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />,
+      onSelect: () => setTreeCollapsed(!treeCollapsed),
+    },
+    'tree-side': {
+      icon: <ArrowLeftRight size={14} />,
+      onSelect: () => setTreeSide(treeSide === 'left' ? 'right' : 'left'),
+    },
+    fullscreen: {
+      icon: fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />,
+      onSelect: () => onToggleFullscreen?.(),
+    },
+    close: { icon: <X size={14} />, onSelect: onExit },
+  }
+  const gearEntries: BandOverflowEntry[] = gearIds.map(item => ({
+    id: item.id, label: item.label, ...gearAction[item.id],
+  }))
+  const gearMenu = (
+    <BandOverflowMenu
+      label={pt ? 'Opções do Studio' : 'Studio options'}
+      icon={<Settings size={14} />}
+      entries={gearEntries}
+      isMobile={isMobile}
+    />
+  )
+
   return (
     <div style={{
       flex: 1, minHeight: 0, minWidth: 0, boxSizing: 'border-box',
       display: 'flex', flexDirection: 'column',
     }}>
-      <StudioBar
-        isMobile={isMobile}
-        lang={lang}
-        onExit={onExit}
-        {...(collapsible
-          ? {
-            tree: {
-              collapsed: treeCollapsed,
-              onToggle: () => setTreeCollapsed(!treeCollapsed),
-              side: treeSide,
-              onFlipSide: () => setTreeSide(treeSide === 'left' ? 'right' : 'left'),
-            },
-          }
-          : {})}
-      />
-
       {tabs.length > 0 && (
         <TabStrip
           tabs={tabs}
@@ -999,6 +1124,12 @@ export function Studio({
               lang={lang}
               onSearch={() => setView('search')}
               onNew={kind => setCreating({ parentPath: '', kind, name: '', busy: false, error: null })}
+              trailing={<>
+                {/* Dropped on mobile for room (§2) — the gear itself still carries "Studio" nowhere
+                    special to say, and the panel bar / mobile session menu already name it. */}
+                {!isMobile && <BetaTag what={pt ? 'O Studio' : 'The Studio'} />}
+                {gearMenu}
+              </>}
             />
           )}
 
@@ -1136,137 +1267,6 @@ export function deleteMessage(entry: PendingDelete, hasDirty: boolean, pt: boole
   return pt
     ? `${base} Há mudanças não salvas nele — elas serão perdidas.`
     : `${base} It has unsaved changes — they will be lost.`
-}
-
-/**
- * THE STUDIO'S OWN TOP EDGE — and the only chrome it has.
- *
- * The Studio covers the aside's header and its tab strip (see the file header), so the way out has
- * to be here.
- *
- * IT IS A CLOSE, NEVER A LINK NAMED AFTER ANOTHER PANEL — and that is a fix, not the original
- * design. This used to read "‹ Conteúdo": today the Studio is a MODE of `ArtifactsAside` and `onExit`
- * puts that panel's own chrome back, so the button named the destination it happened to land on. But
- * the design this component is built toward (see
- * `docs/superpowers/specs/2026-09-12-studio-slots-and-references-design.md` §1) makes the Studio a
- * PANEL of its own, openable without the Contents tab ever having been open at all — a control that
- * always says "Conteúdo" would be lying on that path from the day it ships. `X` plus "Fechar
- * Studio"/"Close Studio" says only what is true in both worlds: this closes the Studio. `onExit`
- * itself is unchanged — see its own doc for why it may never unmount this component.
- *
- * ONE ROW, and as short as a row can be: the whole reason this surface took the aside over is
- * vertical space. It earns its height by being the exit and by saying what this is — the product
- * name in full, with the beta caveat the nav entries already carry, so the mark is on every surface
- * that names the feature rather than on some of them.
- *
- * IT IS ALSO WHERE THE TREE IS MINIMIZED AND BROUGHT BACK, and that is a placement decision. A rail
- * down the side of the collapsed column would have cost horizontal space permanently, in the one
- * direction this panel has none to give; this row is already on screen in every arrangement, and a
- * control whose whole job is to give the reader their width back should not itself take any. The
- * toggle is ABSENT only where there is truly nothing for it to act on — a phone, or a file open on a
- * panel too narrow for the split — never merely because no file happens to be open: see
- * `treeCollapsible` in `Studio` itself, which is what fixed the "no file open, can't minimize" gap
- * (fix-wave review, Critical #1).
- */
-export function StudioBar({ isMobile, lang, onExit, tree }: {
-  isMobile: boolean
-  lang: 'pt' | 'en'
-  onExit: () => void
-  /** The tree column's collapse and side, whenever there is something for it to act on — the split,
-   *  or the no-file-open panel, on anything but a phone. See `Studio`'s own `treeCollapsible`. */
-  tree?: { collapsed: boolean; onToggle: () => void; side: TreeSide; onFlipSide: () => void }
-}) {
-  const pt = lang === 'pt'
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, minWidth: 0,
-      // 44px is the MOBILE figure and only the mobile figure — applied on desktop it would make
-      // this thin bar as tall as the tab strip under it.
-      minHeight: isMobile ? 44 : 30,
-      // The STATUS BAR is not padding this bar may spend on mobile — the Studio is a true
-      // full-screen `Layer` there (`mobileOverlay.ts`'s own concern), and this bar is its first
-      // child, flush with the viewport's own top edge. Same rule as `overlayPadding`, applied to a
-      // bar with its own left/right/bottom values rather than the common `0 0` shape that helper
-      // returns.
-      padding: isMobile ? 'var(--safe-top) 8px 0 2px' : '0 8px 0 2px',
-      borderBottom: '1px solid var(--border)',
-    }}>
-      <button
-        onClick={onExit}
-        aria-label={pt ? 'Fechar Studio' : 'Close Studio'}
-        title={pt ? 'Fechar Studio' : 'Close Studio'}
-        style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-          // `studioLayout` answers `layers` for every mobile render, so `tree` (the only other
-          // control this bar can hold) is never passed on a phone — this is the SOLE control on
-          // this side of a bar that is already 44px tall there. `.ag-tap-icon`'s projected box
-          // (22px painted + the default 7px grow) tops out at 36px, short of 44 on ITS OWN doc's
-          // claim (see `TabStrip`'s own back-arrow, measured 34x35) — so with nothing beside it to
-          // steal from, this one pays its mobile target in paint rather than in a box that would
-          // still fall short.
-          // @touch-intentional icon-only, alone on this side of the bar — see above.
-          minHeight: isMobile ? 44 : 26, width: isMobile ? 44 : undefined,
-          // @overlay-intentional the status bar inset is reserved on the BAR's own padding above —
-          // this button's zero is its icon centring, not a full-screen dialog's top edge.
-          padding: isMobile ? 0 : '0 7px 0 3px', // @overlay-intentional see comment above
-          border: 'none', borderRadius: 8, background: 'transparent',
-          color: 'var(--text-secondary)', cursor: 'pointer',
-          fontFamily: 'inherit', fontSize: isMobile ? 13 : 11.5,
-        }}
-      >
-        <X size={isMobile ? 18 : 15} />
-      </button>
-
-      {tree !== undefined && (
-        <BandLabeledButton
-          label={tree.collapsed
-            ? (pt ? 'Mostrar a árvore de arquivos' : 'Show the file tree')
-            : (pt ? 'Esconder a árvore de arquivos' : 'Hide the file tree')}
-          // The short word is what rides on screen (design item 5) — the fuller sentence above
-          // stays the tooltip/aria-label, which is what a screen reader announces regardless.
-          visibleText={tree.collapsed ? (pt ? 'Mostrar árvore' : 'Show tree') : (pt ? 'Ocultar árvore' : 'Hide tree')}
-          isMobile={isMobile}
-          pressed={!tree.collapsed}
-          onClick={tree.onToggle}
-        >
-          {tree.collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
-        </BandLabeledButton>
-      )}
-
-      {/* MOVE THE TREE TO THE OTHER SIDE (design item 10, "move side bar right") — a control on the
-          Studio bar, labelled, next to the collapse toggle it shares a gate with (both are
-          meaningless outside the split). It flips `treeSide`, which `StudioBody` reads to mirror the
-          whole column arrangement — the resize handle and the drag direction both follow it; see
-          that component's own header. */}
-      {tree !== undefined && (
-        <BandLabeledButton
-          label={tree.side === 'left'
-            ? (pt ? 'Mover a árvore para a direita' : 'Move the tree to the right')
-            : (pt ? 'Mover a árvore para a esquerda' : 'Move the tree to the left')}
-          visibleText={tree.side === 'left' ? (pt ? 'Árvore à direita' : 'Tree right') : (pt ? 'Árvore à esquerda' : 'Tree left')}
-          isMobile={isMobile}
-          onClick={tree.onFlipSide}
-        >
-          <ArrowLeftRight size={14} />
-        </BandLabeledButton>
-      )}
-
-      <span style={{
-        display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto', minWidth: 0,
-      }}>
-        <span style={{
-          fontSize: isMobile ? 12 : 11, fontWeight: 700, letterSpacing: 0.3,
-          color: 'var(--text-primary)',
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>
-          {/* The full product name where there is room for it; the tab and the header button say
-              `Studio` alone, which is what the feature is called in conversation. */}
-          {isMobile ? 'Studio' : 'Agentistics Studio'}
-        </span>
-        <BetaTag what={pt ? 'O Studio' : 'The Studio'} />
-      </span>
-    </div>
-  )
 }
 
 // --- the chrome ----------------------------------------------------------------------------------
@@ -1803,18 +1803,25 @@ export function Watermark() {
 }
 
 /**
- * Search, New, and whether the agent is busy.
+ * Search, New, whether the agent is busy, and — since §2 — everything that used to sit in the
+ * Studio's own header ROW: the BETA badge and the gear menu (layout options, full screen, close).
  *
  * The dot is not a decoration: it is the answer to "is something else writing in here right now",
  * which is the question a person is about to edit a file against. It carries its own label, because
  * a coloured circle says nothing to a reader who cannot see it.
+ *
+ * `trailing` is a slot, not a name this component knows anything about: `Studio.tsx` decides what
+ * goes there (the badge, the gear) so this row stays reusable and stays ignorant of the gear menu's
+ * own contract. It shares ONE `marginLeft: 'auto'` wrapper with the working dot rather than the dot
+ * keeping its own — two independently-right-aligned items would sit apart instead of as a group.
  */
-export function Toolbar({ working, isMobile, lang, onSearch, onNew }: {
+export function Toolbar({ working, isMobile, lang, onSearch, onNew, trailing }: {
   working: boolean
   isMobile: boolean
   lang: 'pt' | 'en'
   onSearch: () => void
   onNew: (kind: 'file' | 'dir') => void
+  trailing?: ReactNode
 }) {
   const pt = lang === 'pt'
   return (
@@ -1842,17 +1849,20 @@ export function Toolbar({ working, isMobile, lang, onSearch, onNew }: {
         isMobile={isMobile}
         onClick={() => onNew('dir')}
       />
-      {working && (
-        <span
-          role="img"
-          aria-label={pt ? 'O agente está trabalhando nesta sessão' : 'The agent is working in this session'}
-          title={pt ? 'O agente está trabalhando nesta sessão' : 'The agent is working in this session'}
-          style={{
-            width: 7, height: 7, borderRadius: '50%', flexShrink: 0, marginLeft: 'auto',
-            background: 'var(--accent-green, #22c55e)',
-          }}
-        />
-      )}
+      <span style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto', flexShrink: 0 }}>
+        {working && (
+          <span
+            role="img"
+            aria-label={pt ? 'O agente está trabalhando nesta sessão' : 'The agent is working in this session'}
+            title={pt ? 'O agente está trabalhando nesta sessão' : 'The agent is working in this session'}
+            style={{
+              width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+              background: 'var(--accent-green, #22c55e)',
+            }}
+          />
+        )}
+        {trailing}
+      </span>
     </div>
   )
 }
@@ -2455,8 +2465,11 @@ function IconButton({ label, onClick, disabled, pressed, children }: {
   )
 }
 
-// The Studio bar's own tree controls (collapse toggle, flip-side) now render through
-// `BandLabeledButton` (`bandControls.tsx`) — the same component the bottom band's own move/close/
-// collapse trio uses (design item 3, screenshot 1: "the buttons are non-standard sizes"). A local
-// `LabeledIconButton` used to live here, agreeing on height with the band's own `labeledBtn` but
-// not on border/background (a ghost button beside bordered pills) — see that shared file's header.
+// The Studio's own header row is gone (§2) — the tree controls (collapse toggle, flip-side), full
+// screen and close it used to carry as separate bordered pills now render as ROWS of the gear menu
+// (`studioGearEntries`, above, plus the `gearAction` map in `Studio` itself), through
+// `BandOverflowMenu` (`bandControls.tsx`) — the SAME popover the bottom band's own "Mais ações"
+// renders, given its own `Settings` trigger icon so the two read as different menus. A local
+// `LabeledIconButton` used to live here before that, agreeing on height with the band's own
+// `labeledBtn` but not on border/background (a ghost button beside bordered pills) — see that
+// shared file's header for the fuller history.

@@ -24,7 +24,7 @@ import { PROJECTS_DIR, AGENTISTICS_DATA_DIR } from './config'
 import { safeReadDir } from './utils'
 import { decodeProjectDir } from './git'
 import { getEnabledAdapters } from './adapters/types'
-import { handleLogout, handleSession, getPrincipal, getPrincipalSession, makePrincipalSessionCookieHeader, SESSION_REFRESH_MS } from './auth'
+import { handleLogout, handleSession, getPrincipal, getPrincipalSession, makePrincipalSessionCookieHeader, SESSION_REFRESH_MS, isAuthed } from './auth'
 import { routeCapability, capabilityDenied } from './capability-guard'
 
 /**
@@ -61,7 +61,8 @@ async function readLocalLiveSnapshot(sessions: SessionMeta[]): Promise<{
 import { AUTH_PUBLIC, isAdminPath, MFA_EXEMPT } from './index-routes'
 import { CAPS, PROFILE } from './exposure'
 import { chatAllowed } from './chat-gate'
-import { shellAllowed } from './sessions/shell-gate'
+import { shellAllowedNow } from './sessions/shell-gate'
+import { getShellOverride, setShellOverride } from './sessions/shell-override-store'
 import { editorAllowed } from './sessions/editor-gate'
 import { limiter, RULES, rateRuleFor, tooManyRequests } from './rate-limit'
 import { resolveClientIp } from './client-ip'
@@ -2649,7 +2650,33 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
-      if (!shellAllowed(CAPS.localShell, (await readPreferences()).shellEnabled)) {
+      // "ENABLE NOW" — the disabled-shell empty state's temporary button. It sets the in-memory
+      // override (`shell-override-store.ts`) and nothing else: never `preferences.json`, which is
+      // "Enable permanently"'s own door (`PUT /api/preferences`, unchanged). Checked BEFORE the
+      // `shellAllowedNow` gate below on purpose — that gate is what this very route exists to get
+      // past, so gating IT with itself would refuse the one request that is supposed to work while
+      // the preference is off. `CAPS.localShell` still applies first: an override can only ever
+      // restore what the PREFERENCE narrowed, never what the exposure profile denied outright.
+      if (url.pathname === '/api/shell/enable-now' && req.method === 'POST') {
+        if (!CAPS.localShell) {
+          return new Response(JSON.stringify({ error: 'shell_disabled' }), {
+            status: 403,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        if (!isAuthed(req)) {
+          return new Response(JSON.stringify({ error: 'auth_required' }), {
+            status: 401,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        setShellOverride(true)
+        void writeAudit({ action: 'shell.override.enabled', ip: clientIp })
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      if (!shellAllowedNow(CAPS.localShell, (await readPreferences()).shellEnabled, getShellOverride())) {
         return new Response(JSON.stringify({ error: 'shell_disabled' }), {
           status: 403,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },

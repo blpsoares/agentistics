@@ -1,7 +1,8 @@
 import { describe, expect, it, test } from 'bun:test'
 import {
-  BAND_MIN_PX, BAND_SNAP_THRESHOLD_PX, DEFAULT_BAND_PREFS, clampBandHeight, readBandPrefs,
-  resolveBandHeight, shellErrorText,
+  BAND_FULLSCREEN_OVERSHOOT_PX, BAND_MIN_PX, BAND_SNAP_THRESHOLD_PX, DEFAULT_BAND_PREFS,
+  clampBandHeight, readBandPrefs, resolveBandHeight, resolveStudioBandDrag, shellErrorText,
+  wantsFullscreen,
   bandGeometry, shellApiUrl, shellWatching, shellWhere, writeBandGeometry, writeBandPrefs, type BandPrefs,
 } from './shellBand'
 
@@ -95,6 +96,48 @@ describe('resolveBandHeight — the free-resize snap (design item 7)', () => {
 
   it('the floor still applies underneath the snap logic', () => {
     expect(resolveBandHeight(10, 900)).toEqual({ height: BAND_MIN_PX, full: false })
+  })
+})
+
+describe('wantsFullscreen / resolveStudioBandDrag — the Studio full-screen threshold', () => {
+  it('an ordinary height, well short of the column, never wants full screen', () => {
+    expect(wantsFullscreen(400, 900)).toBe(false)
+  })
+
+  it('reaching exactly the column top (ordinary `full`) is not YET full screen', () => {
+    expect(wantsFullscreen(900, 900)).toBe(false)
+  })
+
+  it('one pixel short of the overshoot threshold is still not full screen', () => {
+    expect(wantsFullscreen(900 + BAND_FULLSCREEN_OVERSHOOT_PX - 1, 900)).toBe(false)
+  })
+
+  it('right at the overshoot threshold PAST the column, it wants full screen', () => {
+    expect(wantsFullscreen(900 + BAND_FULLSCREEN_OVERSHOOT_PX, 900)).toBe(true)
+  })
+
+  it('dragged all the way to the top of the screen — the reported freeze — wants full screen', () => {
+    expect(wantsFullscreen(10_000, 900)).toBe(true)
+  })
+
+  it('an unmeasured column never wants full screen — there is no top edge to have gone past', () => {
+    expect(wantsFullscreen(10_000, 0)).toBe(false)
+    expect(wantsFullscreen(10_000, Number.NaN)).toBe(false)
+  })
+
+  it('resolveStudioBandDrag bundles the ordinary snap with the fullscreen want, in one call', () => {
+    expect(resolveStudioBandDrag(400, 900)).toEqual({ height: 400, full: false, fullscreen: false })
+    expect(resolveStudioBandDrag(900, 900)).toEqual({ height: 900, full: true, fullscreen: false })
+  })
+
+  it('once past the overshoot, height/full stay exactly what the ORDINARY snap would have answered', () => {
+    // The whole point: the band is never told to remember the raw, enormous overshoot as its own
+    // height — `height`/`full` here are identical to `resolveBandHeight(10_000, 900)` alone, so
+    // leaving full screen can fall back to this record and land on a sane, column-filling band
+    // rather than on whatever the drag's raw number happened to be.
+    const dragged = resolveStudioBandDrag(10_000, 900)
+    expect(dragged).toEqual({ height: 900, full: true, fullscreen: true })
+    expect({ height: dragged.height, full: dragged.full }).toEqual(resolveBandHeight(10_000, 900))
   })
 })
 

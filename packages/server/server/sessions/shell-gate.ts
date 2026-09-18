@@ -25,3 +25,20 @@
 export function shellAllowed(capable: boolean, preference: boolean | undefined): boolean {
   return capable && preference !== false
 }
+
+/**
+ * THE EFFECTIVE ANSWER once a temporary OVERRIDE exists ("Enable now" on the disabled-shell empty
+ * state — see `shell-override-store.ts`). `capable` still governs absolutely: an override can only
+ * ever RESTORE what `preference` narrowed, never widen past what the exposure profile allows. So
+ * `capable === false` stays off however `override` reads — the same rule `shellAllowed` already
+ * carries for `preference`, extended to the one new input.
+ *
+ * `override` is checked only as a FALLBACK for a `false` preference — an explicit `true` (or the
+ * absent-reads-as-on default) never needs it, and folding it into an `||` up front would make the
+ * override look load-bearing on a machine where the switch was never touched.
+ */
+export function shellAllowedNow(
+  capable: boolean, preference: boolean | undefined, override: boolean,
+): boolean {
+  return capable && (shellAllowed(capable, preference) || override)
+}

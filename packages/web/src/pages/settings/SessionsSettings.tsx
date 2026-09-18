@@ -22,6 +22,10 @@ export default function SessionsSettings() {
   // The PROFILE's answer, which the switch may only ever narrow. Undefined on an older server that
   // had no capability model — read as permitted, the same reading the rest of the app uses.
   const shellCapable = ctx.capabilities?.localShell !== false
+  // The disabled-shell empty state's "Enable now" button — a PER-PROCESS override, never written
+  // to `preferences.json`. Read straight off `ctx`, never re-derived: it is the server's own
+  // in-memory flag (`shell-override-store.ts`), and this screen has no other way to know it.
+  const shellOverride = ctx.shellOverride === true
 
   // The Studio's own switch, shaped exactly like the shell's above and read the same way. It rides
   // the SAME capability — `sessions/editor-gate.ts` records why there is no separate `localEditor`
@@ -226,7 +230,13 @@ export default function SessionsSettings() {
 
       <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.6 }}>
         {/* The sentence that distinguishes "your profile allows this, you have it off" from "your
-            profile denies it" — the two are one disabled toggle apart and mean different things. */}
+            profile denies it" — the two are one disabled toggle apart and mean different things.
+            A THIRD reading sits between them: the PERSISTED preference is off (this toggle stays
+            off, and reflects exactly that — the permanent choice) while the "Enable now" button on
+            the disabled-shell empty state has turned the shell on for the rest of THIS process. The
+            toggle deliberately does not move for it — pressing it would write the persisted
+            preference, not clear a memory the server itself forgets on restart — so this sentence is
+            the only place that override is visible here. */}
         {!shellCapable
           ? (pt
             ? 'O perfil desta instância já nega o shell; nada aqui pode reabri-lo.'
@@ -235,9 +245,13 @@ export default function SessionsSettings() {
             ? (pt
               ? 'Seu perfil permite e você está com isso LIGADO (o padrão desta instância). Cada sessão ganha uma faixa "Shell" abaixo do compositor; no máximo 8 terminais abertos ao mesmo tempo.'
               : 'Your profile allows this and you have it ON (this instance’s default). Each session gets a "Shell" band below the composer; at most 8 terminals open at once.')
-            : (pt
-              ? 'Seu perfil permite isso, mas você DESLIGOU. Com o shell desligado, /api/shell/* responde 403 — o servidor é quem decide.'
-              : 'Your profile allows this, but you have turned it OFF. With the shell off, /api/shell/* answers 403 — the server is what decides.')}
+            : shellOverride
+              ? (pt
+                ? 'Você DESLIGOU isso, mas está ligado até reiniciar o servidor — alguém clicou "Habilitar agora" numa sessão. A preferência salva continua desligada; reiniciar o servidor volta a desligar de verdade.'
+                : 'You have turned this OFF, but it is on until the server restarts — someone clicked "Enable now" on a session. The saved preference stays off; restarting the server turns it off for real.')
+              : (pt
+                ? 'Seu perfil permite isso, mas você DESLIGOU. Com o shell desligado, /api/shell/* responde 403 — o servidor é quem decide.'
+                : 'Your profile allows this, but you have turned it OFF. With the shell off, /api/shell/* answers 403 — the server is what decides.')}
       </div>
 
       <Divider />

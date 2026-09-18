@@ -87,6 +87,52 @@ export function resolveBandHeight(wantedPx: number, columnHeight: number): { hei
   return { height: clamped, full: false }
 }
 
+/**
+ * HOW FAR PAST THE COLUMN'S OWN TOP a drag must push before the gesture means real, whole-screen
+ * full screen rather than a giant band (design: Studio full screen).
+ *
+ * Reached only once `resolveBandHeight` has ALREADY snapped to `full` — there is nothing left to
+ * negotiate for HEIGHT at that point, since the ceiling is the column's own edge, so the next
+ * stretch of the same gesture can only be answered "no, further than the column: all of it."
+ * Measured on the RAW, unclamped want (`wantedPx`), never on `resolveBandHeight`'s own result,
+ * which caps at the column and so can never see how far past it a drag actually reached — the exact
+ * gap that let a drag to the very top of the screen read as merely "some giant band" and stop
+ * there, one screenshot short of what the reader was plainly asking for.
+ *
+ * Kept here beside `resolveBandHeight` — not inside `StudioBand`'s own component — so any band that
+ * reuses this resize code reads the SAME threshold rather than a forked one, the same rule
+ * `BAND_SNAP_THRESHOLD_PX` already follows for the "fill the column" snap one step before this.
+ */
+export const BAND_FULLSCREEN_OVERSHOOT_PX = 40
+
+/**
+ * Does this drag (or keyboard step) want FULL SCREEN — see `BAND_FULLSCREEN_OVERSHOOT_PX`'s own
+ * header for why this is measured on `wantedPx` rather than on an already-clamped height.
+ *
+ * An unmeasured column (`0`, `NaN`) never triggers it — the same "nothing to snap TO" rule
+ * `resolveBandHeight` already applies one step earlier, for the identical reason: there is no top
+ * edge to have gone past.
+ */
+export function wantsFullscreen(wantedPx: number, columnHeight: number): boolean {
+  return Number.isFinite(columnHeight) && columnHeight > 0
+    && wantedPx - columnHeight >= BAND_FULLSCREEN_OVERSHOOT_PX
+}
+
+/**
+ * ONE CALL FOR THE WHOLE DRAG STEP — `resolveBandHeight`'s clamped `{height, full}` plus whether
+ * this same want ALSO crosses into full screen, bundled so a band's move handler asks once rather
+ * than reaching into two functions and risking they disagree about what `wantedPx` was measured
+ * against. `height`/`full` never reflect the overshoot itself — they stay exactly what
+ * `resolveBandHeight` would have answered alone (clamped at the column, sane) — which is what makes
+ * leaving full screen able to fall back to THIS record rather than to the drag's own raw, possibly
+ * enormous number: the band was never told to remember the overshoot in the first place.
+ */
+export function resolveStudioBandDrag(
+  wantedPx: number, columnHeight: number,
+): { height: number; full: boolean; fullscreen: boolean } {
+  return { ...resolveBandHeight(wantedPx, columnHeight), fullscreen: wantsFullscreen(wantedPx, columnHeight) }
+}
+
 /** The route-level refusal codes, which carry no sentence of their own. */
 const ERROR_TEXT: Record<string, { en: string; pt: string }> = {
   shell_disabled: {
