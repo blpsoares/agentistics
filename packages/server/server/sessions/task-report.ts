@@ -12,7 +12,7 @@ import { groupProgress, sessionTokenTotal } from '@agentistics/core'
 import type {
   Attempt, AttemptStatus, Subtask, Task, TaskComment, TaskFile,
 } from './task-model'
-import { groupMembers, legacyTaskId } from './task-model'
+import { groupMembers, isGroupMember, isGroupSubtask, legacyTaskId } from './task-model'
 import { rollupAttempt, type AttemptRollup, type RollupSession } from './task-rollup'
 import { scopedTaskStats, taskStats, type TaskStats } from './task-stats'
 import type { ManagedSession } from './types'
@@ -257,7 +257,19 @@ export function subtaskViews(
   // Every subtask that is NOT a group member gets its own bucket, keyed by its own id — a loose
   // subtask exactly as before, a group by the same rule (its rollup is simply the rows filed on
   // its own id, since no member can ever carry one).
-  const bucketable = mine.filter(s => !s.parentGroupId)
+  const bucketable = mine.filter(s => !isGroupMember(s))
+  // One pass over `mine`, building the group -> members mapping `groupMembers` would otherwise
+  // re-derive per group inside the `.map()` below (an O(groups × subtasks) re-scan instead of this
+  // single O(subtasks) pass) — same membership `groupMembers` computes, just computed once. Order
+  // matches `groupMembers`'s own "in the order they were created": `mine` is already in that order,
+  // and this appends members as they are encountered.
+  const membersByGroup = new Map<string, Subtask[]>()
+  for (const s of mine) {
+    if (!isGroupMember(s)) continue
+    const list = membersByGroup.get(s.parentGroupId!)
+    if (list) list.push(s)
+    else membersByGroup.set(s.parentGroupId!, [s])
+  }
   const views: SubtaskView[] = bucketable.map(s => {
     const mineRows = rows.filter(r => r.subtaskId === s.id)
     return {
@@ -267,8 +279,8 @@ export function subtaskViews(
         rows: mineRows, metas, createdAt: task.createdAt,
         ...(task.deliveredAt ? { deliveredAt: task.deliveredAt } : {}),
       }),
-      ...(s.isGroup === true
-        ? { groupProgress: groupProgress(groupMembers(s.id, mine).map(m => m.done)) }
+      ...(isGroupSubtask(s)
+        ? { groupProgress: groupProgress((membersByGroup.get(s.id) ?? []).map(m => m.done)) }
         : {}),
     }
   })
@@ -301,9 +313,8 @@ export function subtaskViews(
  */
 export function groupVisibility(groupId: string, subtasks: readonly Subtask[]): readonly string[] {
   const group = subtasks.find(s => s.id === groupId)
-  if (!group || group.isGroup !== true) return []
-  const members = subtasks.filter(s => s.parentGroupId === groupId)
-  return [group.id, ...members.map(m => m.id)]
+  if (!group || !isGroupSubtask(group)) return []
+  return [group.id, ...groupMembers(groupId, subtasks).map(m => m.id)]
 }
 
 /**
