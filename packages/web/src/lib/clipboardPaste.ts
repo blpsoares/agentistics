@@ -15,13 +15,35 @@ export function clipboardPasteAvailable(): boolean {
 }
 
 /**
- * Read the clipboard and hand it to `sendPaste` — an EMPTY clipboard sends nothing (there is
- * nothing to paste), and a denied/failed read is swallowed rather than thrown, the same "the button
- * did nothing rather than crash the page" rule every strip press already follows.
+ * What happened when the strip's `paste` button was pressed — the button is offered only when
+ * `clipboardPasteAvailable()` is true, so `readText` existing is never in question here; what is
+ * still unknown until the call resolves is whether the PERMISSION PROMPT was granted.
+ *
+ *  - `'sent'`  — text was read and handed to `sendPaste`.
+ *  - `'empty'` — the clipboard genuinely had nothing in it; not a failure, nothing to report.
+ *  - `'denied'` — the read THREW: a denied/blocked permission, a revoked grant, or any other reason
+ *    the browser refused the read. This is the one outcome the CALLER must turn into a sentence
+ *    (I1) — otherwise a denied permission and an empty clipboard are the same "nothing happened",
+ *    and a person has no way to tell "there was nothing to paste" from "the browser would not let
+ *    me" from "the button is broken".
  */
-export async function pasteFromClipboard(sendPaste: (text: string) => void): Promise<void> {
+export type ClipboardPasteResult = 'sent' | 'empty' | 'denied'
+
+/**
+ * Read the clipboard and hand it to `sendPaste` — an EMPTY clipboard sends nothing (there is
+ * nothing to paste). A denied/failed read is never thrown to the caller (the same "the button did
+ * nothing rather than crash the page" rule every strip press already follows), but IS reported back
+ * as `'denied'` so the caller can show the existing `stripNote`/`ctrlNote` sentence instead of
+ * leaving the tap silently inert.
+ */
+export async function pasteFromClipboard(sendPaste: (text: string) => void): Promise<ClipboardPasteResult> {
+  let text: string
   try {
-    const text = await navigator.clipboard.readText()
-    if (text) sendPaste(text)
-  } catch { /* denied, empty, or unsupported at the call site — nothing to send */ }
+    text = await navigator.clipboard.readText()
+  } catch {
+    return 'denied'
+  }
+  if (!text) return 'empty'
+  sendPaste(text)
+  return 'sent'
 }

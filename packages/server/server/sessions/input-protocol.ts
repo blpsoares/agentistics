@@ -39,6 +39,7 @@
  * is exactly why `sendKeysLiteralArgs` and `sendKeysNamedArgs` are separate downstream.
  */
 import { originAllowed } from '../cors'
+import { sanitizePasteText } from '@agentistics/core'
 
 /** A `text` payload longer than this is refused. Direct typing is small — a batched `xterm.onData`
  *  chunk from a person's own keystrokes — and 8 KiB is generous headroom for one. A PASTE is a
@@ -164,9 +165,20 @@ export function parseInputMessage(raw: string): ParseResult {
     const data = rec.data
     if (typeof data !== 'string') return { ok: false, seq, reason: 'bad_message' }
     if (data.length === 0) return { ok: false, seq, reason: 'empty_text' }
-    // REFUSED, never truncated — see `MAX_PASTE_TEXT`.
+    // REFUSED, never truncated — see `MAX_PASTE_TEXT`. Checked on the RAW length, before
+    // sanitizing: the cap bounds what one WS message may carry, not what survives sanitizing.
     if (data.length > MAX_PASTE_TEXT) return { ok: false, seq, reason: 'paste_too_long' }
-    return { ok: true, msg: { seq, kind: 'paste', text: data } }
+    // THE security check for this whole message kind: neutralize a bracketed-paste breakout
+    // (`\x1b[200~`/`\x1b[201~`) and every other C0 control byte / DEL before this text ever
+    // reaches a tmux buffer. This is the ONE place both write channels (the Shell's
+    // `/api/shell/input` and the assistant terminal's `/api/fleet/input`) route a paste through —
+    // see `pasteSanitize.ts` for why sanitizing here is the fix, not a refusal-with-reason-code.
+    // A payload that sanitizes down to nothing carried no real content (entirely markers/control
+    // bytes), so it is refused exactly like an outright empty paste — never silently accepted as a
+    // no-op "success".
+    const text = sanitizePasteText(data)
+    if (text.length === 0) return { ok: false, seq, reason: 'empty_text' }
+    return { ok: true, msg: { seq, kind: 'paste', text } }
   }
   return { ok: false, seq, reason: 'bad_message' }
 }

@@ -44,6 +44,7 @@ import '@xterm/xterm/css/xterm.css'
 import { xtermTheme, type TerminalFrame } from '../lib/terminalStream'
 import { shortcutDecision } from '../lib/terminalShortcuts'
 import { terminalScrollTop, stillFollowing } from '../lib/terminalScroll'
+import { sanitizePasteText } from '@agentistics/core'
 
 interface Props {
   frame: TerminalFrame | null
@@ -461,12 +462,22 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1, in
        * otherwise ALSO fire and hand the same text to `onData` a second time. Only intercepted while
        * `interactive` and a handler is actually wired; otherwise it falls through to xterm's default
        * (unchanged for any caller that has not opted in).
+       *
+       * `sanitizePasteText` runs here too, NOT because the client is trusted — the server
+       * (`input-protocol.ts`) re-applies the exact same function and is the actual authority — but
+       * because a clipboard payload carrying a planted bracketed-paste end marker
+       * (`\x1b[201~touch …\r`) is a real command-injection payload, and refusing it before it ever
+       * leaves the browser is strictly better than refusing it a round trip later. Same shared
+       * `@agentistics/core` function on both sides, so the two can never disagree about what
+       * "sanitized" means.
        */
       onPasteEvent = (e: ClipboardEvent) => {
         if (!interactiveRef.current || !onPasteRef.current) return
-        const text = e.clipboardData?.getData('text/plain')
+        const raw = e.clipboardData?.getData('text/plain')
         e.preventDefault()
         e.stopPropagation()
+        if (!raw) return
+        const text = sanitizePasteText(raw)
         if (text) onPasteRef.current(text)
       }
       pasteTarget = boxRef.current

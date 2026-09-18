@@ -18,6 +18,7 @@ import {
   sendKeysNamedArgs, clearHistoryArgs, pasteBufferName, setBufferArgs, pasteBufferArgs,
 } from './tmux-cli'
 import type { TerminalCapture } from './types'
+import { sanitizePasteText } from '@agentistics/core'
 
 export interface TmuxResult { code: number; out: string; err: string }
 export type TmuxRun = (args: string[]) => Promise<TmuxResult>
@@ -81,9 +82,13 @@ export function createShellTerminal(run: TmuxRun): ShellTerminal {
       return ok
     },
 
+    // `sanitizePasteText` runs AGAIN here — see `backend-tmux.ts`'s twin for why: this is the
+    // primitive that actually writes the buffer tmux pastes into the pane, a second boundary
+    // independent of whatever the WS channel above it already checked.
     async sendPaste(id, text) {
       const name = pasteBufferName(id)
-      if ((await run(setBufferArgs(name, text, SHELL_SOCKET))).code !== 0) return false
+      const safe = sanitizePasteText(text)
+      if ((await run(setBufferArgs(name, safe, SHELL_SOCKET))).code !== 0) return false
       return (await run(pasteBufferArgs(id, name, SHELL_SOCKET))).code === 0
     },
   }

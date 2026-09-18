@@ -83,6 +83,9 @@ interface T {
   back: string
   ctrlHint: string
   ctrlRefused: (c: string) => string
+  // I1: shown via `ctrlNote` when the strip's `paste` button hits a denied/blocked clipboard
+  // permission — before this, that outcome and an empty clipboard were the same silence.
+  pasteDenied: string
   resize: string
   retry: string
   fullscreen: string
@@ -109,6 +112,7 @@ const TXT: Record<'pt' | 'en', T> = {
     back: 'Back to the session',
     ctrlHint: 'ctrl is armed — press a letter',
     ctrlRefused: c => `ctrl+${c} is not one of the keys this channel sends.`,
+    pasteDenied: 'Could not read the clipboard — check the browser permission.',
     resize: 'Drag to resize the shell',
     retry: 'Try again',
     fullscreen: 'Open the shell full screen',
@@ -131,6 +135,7 @@ const TXT: Record<'pt' | 'en', T> = {
     back: 'Voltar para a sessão',
     ctrlHint: 'ctrl armado — pressione uma letra',
     ctrlRefused: c => `ctrl+${c} não é uma das teclas que este canal envia.`,
+    pasteDenied: 'Não foi possível ler a área de transferência — verifique a permissão do navegador.',
     resize: 'Arraste para redimensionar o shell',
     retry: 'Tentar de novo',
     fullscreen: 'Abrir o shell em tela cheia',
@@ -428,9 +433,16 @@ export function ShellBand({
     if (!entry) return
     if (entry.kind === 'modifier') { setCtrlNote(null); setCtrlArmed(a => !a); return }
     setCtrlArmed(false)
-    if (entry.kind === 'paste') { void pasteFromClipboard(sendPasteText); return }
+    if (entry.kind === 'paste') {
+      // I1: a denied/blocked clipboard permission must not be the same silence as an empty
+      // clipboard — `pasteFromClipboard`'s result says which one happened.
+      void pasteFromClipboard(sendPasteText).then(result => {
+        setCtrlNote(result === 'denied' ? t.pasteDenied : null)
+      })
+      return
+    }
     write.send(keyBytes(entry.key))
-  }, [write, clipboardReadable, sendPasteText])
+  }, [write, clipboardReadable, sendPasteText, t])
 
   const close = useCallback(async () => {
     if (!shell) return
