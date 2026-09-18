@@ -3706,6 +3706,7 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
         ...(c.remote ? { repo: repoShortName(c.remote) } : {}),
         detail: candidatePath(c, homedir()),
         source: c.source,
+        ...(c.worktree ? { worktree: true } : {}),
       })) }
     },
 
