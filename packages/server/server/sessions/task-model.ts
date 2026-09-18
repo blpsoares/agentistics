@@ -324,6 +324,11 @@ export interface Subtask {
    * migrate away from, only a UI surface to stop reading it once it is rewritten. New code should
    * use `isGroup`/`parentGroupId` instead; this field should be removed once the UI no longer names
    * it.
+   *
+   * **Never coexists, on one record, with `isGroup: true` or a set `parentGroupId`** — two
+   * independent, unreconciled "which group" answers on one subtask. `task-web.ts`'s `patchSubtask`
+   * refuses a write that would create that state (`group_field_conflict`, 422), checked only when
+   * the patch actually touches one of the two fields.
    */
   groupId?: string
   /**

@@ -209,3 +209,54 @@ test('setSubtaskDone still refuses an ordinary LOOSE subtask with no session —
   `)
   expect(out).toEqual({ result: { ok: false, message: 'done_needs_session' }, status: 'todo', done: false })
 })
+
+/**
+ * §F.1, third review round: `patchSubtask` used to gate the `done_needs_session` exemption on
+ * `isGroupMember(found)` — the PRE-patch record — rather than on the EFFECTIVE post-patch state.
+ * A single PATCH combining `parentGroupId: ''` (leaving the group) with `status: 'done'` still saw
+ * `found.parentGroupId` naming the old group and skipped the gate entirely, so a member could leave
+ * its group and reach `done` in the same request with ZERO sessions ever filed on it — the exact
+ * invariant this whole feature exists to hold. This reproduces that exact scenario and its two
+ * control cases.
+ */
+test('patchSubtask REFUSES leaving a group and going `done` in ONE call when the subtask has no session — must not skip the gate on the stale pre-patch state', async () => {
+  const out = await run(`
+    ${task('t1')}
+    ${subtask('g1', 't1', 'isGroup: true,')}
+    ${subtask('m1', 't1', "parentGroupId: 'g1',")}
+    const result = await web.patchSubtask('m1', { parentGroupId: '', status: 'done' })
+    const after = await store.read()
+    const row = after.subtasks.find(s => s.id === 'm1')
+    console.log(JSON.stringify({ result, status: row.status, done: row.done, parentGroupId: row.parentGroupId ?? null }))
+  `)
+  expect(out).toEqual({
+    result: { ok: false, message: 'done_needs_session' },
+    status: 'todo', done: false, parentGroupId: 'g1',
+  })
+})
+
+test('patchSubtask control: leaving a group with NO status change still succeeds normally', async () => {
+  const out = await run(`
+    ${task('t1')}
+    ${subtask('g1', 't1', 'isGroup: true,')}
+    ${subtask('m1', 't1', "parentGroupId: 'g1',")}
+    const result = await web.patchSubtask('m1', { parentGroupId: '' })
+    const after = await store.read()
+    const row = after.subtasks.find(s => s.id === 'm1')
+    console.log(JSON.stringify({ result, parentGroupId: row.parentGroupId ?? null }))
+  `)
+  expect(out).toEqual({ result: { ok: true }, parentGroupId: null })
+})
+
+test('patchSubtask control: `status: done` on an existing, still-current group member (no parentGroupId change) is still exempted', async () => {
+  const out = await run(`
+    ${task('t1')}
+    ${subtask('g1', 't1', 'isGroup: true,')}
+    ${subtask('m1', 't1', "parentGroupId: 'g1',")}
+    const result = await web.patchSubtask('m1', { status: 'done' })
+    const after = await store.read()
+    const row = after.subtasks.find(s => s.id === 'm1')
+    console.log(JSON.stringify({ result, status: row.status, done: row.done, parentGroupId: row.parentGroupId ?? null }))
+  `)
+  expect(out).toEqual({ result: { ok: true }, status: 'done', done: true, parentGroupId: 'g1' })
+})
