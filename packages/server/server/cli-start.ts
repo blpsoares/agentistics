@@ -155,7 +155,7 @@ import { readMemory, readRss } from './sessions/memory-probe'
 import { conversationHeldBy } from './sessions/conversation-claim'
 import { withResumeLock } from './sessions/resume-lock'
 import { liveConversationHolders } from './sessions/live-claims'
-import type { ManagedSession, SpawnPlanError } from './sessions/types'
+import type { ManagedSession, SessionBackend, SpawnPlanError } from './sessions/types'
 import {
   addSession, newSessionId, patchSession, readRegistry, retireFallenSessions, retireSession, touchSessions,
 } from './sessions/registry'
@@ -1458,10 +1458,21 @@ async function execAttachTicket(ticket: AttachTicket, s: CliStrings): Promise<vo
  */
 let sessionsPoller: SessionsPoller | null = null
 
-async function ensureSessionsPoller(): Promise<SessionsPoller> {
-  if (sessionsPoller) return sessionsPoller
-  const backend = await resolveBackend()
-  sessionsPoller = createSessionsPoller({
+/**
+ * The production poller's options — extracted from `ensureSessionsPoller` so a test can inspect the
+ * exact object the running server builds without constructing the singleton (which needs a real
+ * backend) or waiting on a poll.
+ *
+ * FIXWAVE 1 round 2, Finding 1: `resolveProcessLog` was IMPORTED and used inline inside
+ * `linkProcessConversationSoon`'s own retry loop, but never reached this object — so the collision
+ * guard in `sessions-host.ts`'s poll loop (gated on `if (o.resolveProcessLog)`) was silently dead
+ * code on every ordinary `/api/fleet` poll. Two antigravity sessions spawned in the same second and
+ * still alive past the retry window got cross-linked to one shared log's conversation on the very
+ * next poll — confirmed live. `cli-start.test.ts` asserts this object carries `resolveProcessLog`
+ * by identity, so deleting it here fails a test instead of shipping quietly again.
+ */
+export function sessionsPollerOptions(backend: SessionBackend): Parameters<typeof createSessionsPoller>[0] {
+  return {
     backend, readRegistry, scanProcesses, loadConversations, touchSessions,
     loadHarnessSessions,
     // Written once per session, not once per poll — the poller only calls this when the harness's
@@ -1476,6 +1487,14 @@ async function ensureSessionsPoller(): Promise<SessionsPoller> {
     // `cli-session.ts`'s poller: that one is a one-shot command and writes nothing, exactly as it
     // takes no heartbeat.
     readProcessConversation,
+    // Which log a live pid holds open, WITHOUT reading its content — the collision guard's own
+    // input (see `sessions-host.ts`'s `createSessionsPoller` doc for `resolveProcessLog`, and
+    // `agy-conversation.ts` for what it protects). This is the ONE production caller of
+    // `createSessionsPoller` behind the continuous `/api/fleet` poll — the poller `cli-session.ts`
+    // and `events/producer.ts` build for a one-shot command / the event daemon pass no
+    // `recordConversation` at all, so their procLink write block never runs and they have nothing
+    // to guard.
+    resolveProcessLog,
     // The `/rename` name, persisted so the title survives the process — same once-per-change
     // discipline. See `ManagedSession.harnessName` and `pickTitle`.
     recordHarnessName: (id, name, since) =>
@@ -1483,7 +1502,13 @@ async function ensureSessionsPoller(): Promise<SessionsPoller> {
     // Take back a running session whose registry record was lost. Called only with a non-empty
     // list, so a healthy fleet never writes. See `session-adopt.ts` for what may be adopted.
     adoptSessions: async records => { for (const r of records) await addSession(r) },
-  })
+  }
+}
+
+async function ensureSessionsPoller(): Promise<SessionsPoller> {
+  if (sessionsPoller) return sessionsPoller
+  const backend = await resolveBackend()
+  sessionsPoller = createSessionsPoller(sessionsPollerOptions(backend))
   return sessionsPoller
 }
 
