@@ -61,6 +61,12 @@ export interface BoardCopy {
   nothingBrokenOut: string
   remove: string
   /**
+   * The footer row under the subtask grid, drawn only when the delivery has sessions filed
+   * directly on it (no subtask) — the server's `id: null` bucket in `subtaskViews()`. Not a
+   * subtask's name; it labels a bucket, so it stays a phrase rather than a title.
+   */
+  directSessions: string
+  /**
    * Stopping a session, which is the moment somebody actually knows whether the work is done.
    *
    * It replaces two standing verbs on the session row — "open the whole task" and "finish task" —
@@ -169,6 +175,7 @@ const EN: BoardCopy = {
     'Nothing broken out yet. A session is filed under a SUBTASK, never under the delivery itself — '
     + 'so break the work into parts here, and the delivery’s cost becomes the cost of its parts.',
   remove: 'Remove',
+  directSessions: 'Sessions filed directly on the delivery',
   endSession: 'End this session?',
   endSessionWhat: 'Whatever it is doing stops now.',
   deliveredQuestion: 'Is this delivery finished?',
@@ -267,6 +274,7 @@ const PT: BoardCopy = {
     'Nada dividido ainda. Uma sessão se filia a uma SUBTAREFA, nunca à entrega em si — divida o '
     + 'trabalho em partes aqui, e o custo da entrega passa a ser o custo das partes dela.',
   remove: 'Remover',
+  directSessions: 'Sessões diretas na entrega',
   endSession: 'Encerrar esta sessão?',
   endSessionWhat: 'O que ela estiver fazendo para agora.',
   deliveredQuestion: 'Esta entrega está finalizada?',

@@ -17,12 +17,18 @@
  * The Cost/Tokens columns below read `p.subtaskRollups` through `subtaskRollupOf`, which resolves
  * the EFFECTIVE key — a subtask's own id, or its `groupId` when it is one of a group, since the
  * server files a whole group under ONE bucket (see `rollupKeyOf`) — and render them with
- * the exact same formatters `TaskTable.tsx`'s own cost/tokens cells use (`useMoney()`, `fmtTokens`,
- * `NA`) — a second formatting rule here would be a second answer for the same figure. A subtask
- * with no session filed yet still gets a bucket from the server (`sessionsUsed: 0`, every metric
- * `null`), and `null` renders as `NA` — never a `0` pretending to be a measurement. The `id: null`
- * direct-branch bucket (sessions filed straight on the delivery) is deliberately NOT drawn as a row
- * here — that footer is `s-2cb8108f97`'s job, once this lands.
+ * the exact same formatters `TaskTable.tsx`'s own cost/tokens cells use (`useMoney()`, `fmtTokens`).
+ * A subtask with no session filed yet still gets a bucket from the server (`sessionsUsed: 0`, every
+ * metric `null`), and that renders as an EMPTY cell — no field at all, not even "N/A" — through
+ * `costCellFor`/`tokensCellFor`'s `isUntracked` check: metric tracking starts the moment a session
+ * is actually linked, not before. "N/A" is reserved for a session that IS linked but whose figure
+ * genuinely cannot be produced. See `subtaskRollup.ts`.
+ *
+ * The `id: null` direct-branch bucket (sessions filed straight on the delivery, under no subtask —
+ * see `task-attach.ts` and docs/superpowers/specs/2026-09-10-task-session-hierarchy-design.md §4.1)
+ * is drawn as a FOOTER row below the subtask rows, styled distinctly (no status chip, no due date —
+ * it is not a piece of planned work, it is "everything not broken out") and only when the server
+ * actually reports one — a task with no direct sessions gets no footer row at all, per §4.4.
  */
 
 import { useState } from 'react'
@@ -34,10 +40,11 @@ import { DatePicker } from '../DatePicker'
 import { TaskProgressBar } from './TaskProgressBar'
 import { subtaskSessions } from './SubtaskSessions'
 import { SubtaskBlockedBy } from './SubtaskBlockedBy'
+import { SessionRef } from './SessionRef'
 import { boardCopy, statusLabel, type Lang } from './copy'
-import { useMoney } from './money'
-import { costCaveat, costCellFor, subtaskRollupOf } from './subtaskRollup'
-import type { Subtask, SubtaskView, TaskSessionRow, TaskStatus } from '../../lib/tasks'
+import { useMoney, type Money } from './money'
+import { costCaveat, costCellFor, subtaskRollupOf, tokensCellFor, type CostCell, type TokensCell } from './subtaskRollup'
+import type { AttemptRollup, Subtask, SubtaskView, TaskSessionRow, TaskStatus } from '../../lib/tasks'
 
 function StatusPick({ value, lang, onPick }: {
   value: TaskStatus
@@ -93,12 +100,37 @@ const bare: React.CSSProperties = {
   color: 'var(--text-secondary)', fontSize: 12, fontFamily: 'inherit',
 }
 
+/** One rendering for the cost cell — the subtask rows and the direct-sessions footer row draw the
+ *  EXACT same figure the exact same way, so this lives once rather than being copy-pasted twice. */
+function CostCellView({ r, cost, money }: { r: AttemptRollup | undefined; cost: CostCell; money: Money }) {
+  if (cost.kind === 'empty') return null
+  if (cost.kind === 'credits') {
+    return <span style={{ ...numeric, fontSize: 12 }}>{cost.premiumRequests} req</span>
+  }
+  return (
+    <span
+      style={{ ...numeric, fontSize: 12, color: cost.usd === null ? 'var(--text-tertiary)' : 'var(--anthropic-orange)' }}
+      title={costCaveat(r)}
+    >{money(cost.usd)}</span>
+  )
+}
+
+/** The tokens column's own version of `CostCellView`. */
+function TokensCellView({ tok }: { tok: TokensCell }) {
+  if (tok.kind === 'empty') return null
+  return (
+    <span style={{ ...numeric, fontSize: 12, color: tok.n === null ? 'var(--text-tertiary)' : undefined }}>
+      {fmtTokens(tok.n)}
+    </span>
+  )
+}
+
 export interface SubtaskTableProps {
   subtasks: Subtask[]
   /** The DELIVERY's sessions. Each row shows the ones filed under it — see `SubtaskSessions`. */
   sessions: readonly TaskSessionRow[]
-  /** One rollup per subtask (and the `id: null` direct-branch bucket this table does not draw
-   *  yet) — `TaskDetail.subtaskRollups`, straight off the server's `subtaskViews()`. */
+  /** One rollup per subtask, plus the `id: null` direct-branch bucket drawn as the footer row —
+   *  `TaskDetail.subtaskRollups`, straight off the server's `subtaskViews()`. */
   subtaskRollups: readonly SubtaskView[]
   lang: Lang
   onAdd: (title: string) => void | Promise<void>
@@ -120,6 +152,14 @@ export function SubtaskTable(p: SubtaskTableProps) {
   const [linking, setLinking] = useState<string | null>(null)
 
   const done = p.subtasks.filter(t => t.done).length
+
+  // The direct-branch footer row — sessions filed straight on the delivery, under no subtask.
+  // `subtaskRollupOf` only resolves a SUBTASK's bucket (it takes `{ id, groupId }`, never `null`),
+  // so the `id: null` view is read straight off the list here instead.
+  const directView = p.subtaskRollups.find(v => v.id === null)
+  const directSessions = p.sessions.filter(s => s.subtaskId === null)
+  const directCost = costCellFor(directView?.rollup)
+  const directTok = tokensCellFor(directView?.rollup)
 
   return (
     <div style={{ ...surface, overflowX: 'auto' }}>
@@ -162,6 +202,7 @@ export function SubtaskTable(p: SubtaskTableProps) {
           {p.subtasks.map(t => {
             const r = subtaskRollupOf(p.subtaskRollups, t)
             const cost = costCellFor(r)
+            const tok = tokensCellFor(r)
             return (
             <tr key={t.id}>
               <td style={{ ...cell, minWidth: 180 }}>
@@ -236,25 +277,14 @@ export function SubtaskTable(p: SubtaskTableProps) {
                   onOpen: p.onOpenSession,
                 })}
               </td>
+              {/* `r` absent (no bucket at all) or `sessionsUsed: 0` (a bucket, but nobody has
+                  filed a session here yet) both render as a fully EMPTY cell — no field at all,
+                  not even "N/A" — via `CostCellView`/`TokensCellView`'s `isUntracked` check. */}
               <td style={{ ...cell, textAlign: 'right' }}>
-                {/* `r` absent (no bucket at all) reads exactly like an empty one — the "not
-                    measured yet" answer for a subtask nobody has filed a session under. */}
-                {cost.kind === 'credits' ? (
-                  <span style={{ ...numeric, fontSize: 12 }}>{cost.premiumRequests} req</span>
-                ) : (
-                  <span
-                    style={{
-                      ...numeric, fontSize: 12,
-                      color: cost.kind === 'na' || cost.usd === null ? 'var(--text-tertiary)' : 'var(--anthropic-orange)',
-                    }}
-                    title={costCaveat(r)}
-                  >{money(cost.kind === 'money' ? cost.usd : null)}</span>
-                )}
+                <CostCellView r={r} cost={cost} money={money} />
               </td>
               <td style={{ ...cell, textAlign: 'right' }}>
-                <span style={{ ...numeric, fontSize: 12, color: !r || r.tokens === null ? 'var(--text-tertiary)' : undefined }}>
-                  {fmtTokens(r?.tokens ?? null)}
-                </span>
+                <TokensCellView tok={tok} />
               </td>
               <td style={{ ...cell, textAlign: 'right' }}>
                 <button
@@ -265,6 +295,45 @@ export function SubtaskTable(p: SubtaskTableProps) {
             </tr>
             )
           })}
+          {directView && (
+            // The `id: null` direct-branch bucket — sessions filed straight on the delivery,
+            // under no subtask. Styled distinctly from a real subtask row: no status chip, no
+            // due date, because this is not a piece of planned work — it is "everything not
+            // broken out". See docs/superpowers/specs/2026-09-10-task-session-hierarchy-design.md
+            // §4.4. It disappears entirely when there is nothing filed directly (the server only
+            // emits this bucket when `direct.length > 0` — see `subtaskViews()`).
+            <tr>
+              <td style={{ ...cell, minWidth: 180, color: 'var(--text-tertiary)', fontStyle: 'italic', fontSize: 12 }}>
+                {copy.directSessions}
+              </td>
+              <td style={cell} />
+              <td style={cell} />
+              <td style={cell} />
+              <td style={cell} />
+              <td style={{ ...cell, minWidth: 190 }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', minWidth: 0 }}>
+                  {directSessions.map(s => (
+                    <SessionRef
+                      key={s.id}
+                      id={s.id}
+                      title={s.label}
+                      harness={s.harness}
+                      lang={p.lang}
+                      onOpen={p.onOpenSession}
+                      onUnfile={sid => void p.onUnfile(sid)}
+                    />
+                  ))}
+                </span>
+              </td>
+              <td style={{ ...cell, textAlign: 'right' }}>
+                <CostCellView r={directView.rollup} cost={directCost} money={money} />
+              </td>
+              <td style={{ ...cell, textAlign: 'right' }}>
+                <TokensCellView tok={directTok} />
+              </td>
+              <td style={cell} />
+            </tr>
+          )}
           <tr>
             <td colSpan={9} style={{ ...cell }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, width: '100%' }}>
