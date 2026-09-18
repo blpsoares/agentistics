@@ -4,6 +4,7 @@ import { Check, HardDrive, FolderClock, ExternalLink, DatabaseZap } from 'lucide
 import type { AppContext } from '../../lib/app-context'
 import type { ArchiveMode } from '../../components/ArchiveConsentModal'
 import { Divider, PrefRow, SectionHeader, Toggle } from './primitives'
+import SessionPresetsSection from './SessionPresetsSection'
 
 const ARCHIVE_DOCS_URL = 'https://code.claude.com/docs/en/settings'
 
@@ -187,6 +188,11 @@ export default function SessionsSettings() {
 
   return (
     <div>
+      {/* Presets are their own section, placed first: they are the most actionable thing on this
+          page — a saved template to fire from the Sessions workspace — while the rest below is
+          switches and a one-time preservation choice. */}
+      <SessionPresetsSection />
+
       {/* THE SHELL SWITCH. A raw PTY on the host is strictly more powerful than the chat — which
           `chat-gate.ts` already calls the most powerful thing this server does, and the chat at
           least runs a NAMED assistant CLI — but the SECURITY model is entirely the exposure

@@ -44,3 +44,4 @@ export * from './session-profile'
 // too: what a message carried is recorded from the text being typed into the pane, and the browser
 // reads the same lines back out of the transcript. One implementation, or the two disagree.
 export * from './attachments'
+export * from './sessionPresets'
