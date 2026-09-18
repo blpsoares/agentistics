@@ -45,6 +45,7 @@ import { useMoney } from './money'
 import { boardCopy, statusLabel, type Lang } from './copy'
 import { BetaTag } from '../BetaTag'
 import { BlockedDialog } from './BlockedDialog'
+import { DoneNeedsSessionDialog } from './DoneNeedsSessionDialog'
 import { RailSection } from './RailSection'
 import { StatusChip } from './StatusChip'
 import { SubtaskTable } from './SubtaskTable'
@@ -1220,6 +1221,8 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
   const [confirmDelete, setConfirmDelete] = useState(false)
   /** Set while the task is on its way to `blocked` — see the list view's `toStatus`. */
   const [blocking, setBlocking] = useState(false)
+  /** Set when a `done` write refused for having no session filed under this delivery yet. */
+  const [doneRefusal, setDoneRefusal] = useState(false)
   /** Set when a subtask's own `blockedBy` refused an attach — see `task-attach.ts`. */
   const [subtaskBlocked, setSubtaskBlocked] = useState<
     { subtaskId: string; sessionId: string; blockedBy: string[] } | null
@@ -1341,7 +1344,16 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
               subtaskRollups={detail.subtaskRollups}
               lang={lang}
               onAdd={title => run(() => addSubtask(id, title))}
-              onPatch={(sid, patch) => run(() => patchSubtask(id, sid, patch))}
+              onPatch={async (sid, patch) => {
+                // Same shape as `run()`, but the RESULT reaches the caller — `SubtaskTable` needs
+                // it to catch `done_needs_session` and open its own dialog instead of a swallowed
+                // refusal.
+                setBusy(true)
+                const result = await patchSubtask(id, sid, patch)
+                await reload()
+                setBusy(false)
+                return result
+              }}
               onRemove={sid => run(() => removeSubtask(id, sid))}
               onAttach={async (subtaskId, sessionId) => {
                 setBusy(true)
@@ -1385,7 +1397,11 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
             onPatch={async patch => { await run(() => editTask(id, patch)) }}
             onStatus={async st => {
               if (st === 'blocked') { setBlocking(true); return }
-              await run(() => markTask(id, st))
+              setBusy(true)
+              const result = await markTask(id, st)
+              setBusy(false)
+              if (!result.ok && result.reason === 'done_needs_session') { setDoneRefusal(true); return }
+              await reload()
             }}
             onClaim={async release => {
               // `force` on a release: this is a person at the board, and the whole reason the lease
@@ -1469,6 +1485,21 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
           onConfirm={async ({ reason, blockedBy }) => {
             setBlocking(false)
             await run(() => markTask(id, 'blocked', { reason, blockedBy }))
+          }}
+        />
+      )}
+
+      {doneRefusal && (
+        <DoneNeedsSessionDialog
+          title={detail.task.title}
+          scope="task"
+          lang={lang}
+          onCancel={() => setDoneRefusal(false)}
+          onFile={() => {
+            // Every filing control this delivery owns lives on the Subtasks tab — there is no
+            // second, separate "file a session" surface here to jump to instead.
+            setDoneRefusal(false)
+            setTab('subtasks')
           }}
         />
       )}
