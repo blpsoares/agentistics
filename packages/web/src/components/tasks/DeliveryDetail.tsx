@@ -347,7 +347,10 @@ function ChipSelect({ value, options, disabled, onPick }: {
   )
 }
 
-function Stat({ label, value, accent, title }: { label: string; value: string; accent?: boolean; title?: string }) {
+// Exported for `SubtaskDetail.tsx` — the subtask-scoped sibling of this component reuses these
+// small, purely presentational pieces (and `CommentsTab`, further down) unmodified rather than
+// duplicating them; see §C.5 of docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md.
+export function Stat({ label, value, accent, title }: { label: string; value: string; accent?: boolean; title?: string }) {
   const absent = value === NA
   return (
     <div style={{ minWidth: 76 }} title={title}>
@@ -377,7 +380,7 @@ function Caveats({ r }: { r: AttemptRollup }) {
   )
 }
 
-function Rollup({ r, lang }: { r: AttemptRollup; lang: Lang }) {
+export function Rollup({ r, lang }: { r: AttemptRollup; lang: Lang }) {
   const fmt = useMoney()
   const copy = boardCopy(lang)
   const money = r.mixedCurrency || (r.credits !== null && r.costUSD === null)
@@ -1030,7 +1033,7 @@ function DescriptionEditor({ id, task, files, lang, onSaved }: {
   )
 }
 
-function CommentsTab({ id, detail, onChanged }: {
+export function CommentsTab({ id, detail, onChanged }: {
   id: string
   detail: TaskDetail
   onChanged: () => Promise<void> | void

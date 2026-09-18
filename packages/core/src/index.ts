@@ -45,3 +45,8 @@ export * from './session-profile'
 // reads the same lines back out of the transcript. One implementation, or the two disagree.
 export * from './attachments'
 export * from './sessionPresets'
+// The paste sanitizer lives here rather than in either the server or the web bundle because BOTH
+// need it: the server is the authority (the actual check that matters) and the client applies the
+// same rule as a courtesy, before the text ever leaves the browser. One implementation, or the two
+// could disagree about what "sanitized" means.
+export * from './pasteSanitize'
