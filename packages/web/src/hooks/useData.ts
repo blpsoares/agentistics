@@ -567,10 +567,22 @@ export function calcLongestStreak(activeDates: Set<string>): number {
   return longest
 }
 
-/** Blended cost per token using global model usage proportions */
+/**
+ * Blended cost per token using global model usage proportions.
+ *
+ * `cacheWrite` is unchanged — still the blend, by model volume, of each model's 5-minute-TTL
+ * `cacheWrite` rate, exactly as before this field existed. `cacheWrite1h` is its twin: the SAME
+ * per-model volume weights, priced at each model's `cacheWrite1h` rate instead (imported off
+ * `MODEL_PRICING` via `getModelPrice` — never a hand-typed 2x, see `packages/core/src/types.ts`).
+ * Computing it needs no TTL split at THIS aggregate level (there is none — `modelUsage` here is
+ * `statsCache.modelUsage`/`globalModelUsage`, which nothing in the pipeline accumulates a 1h/5m
+ * split into): it only needs "what would this same volume have cost, entirely at the 1h rate",
+ * which `getModelPrice` already answers per model. `blendedSessionCost` below is what actually
+ * SELECTS between the two, per session, using that session's own real split.
+ */
 export function blendedCostPerToken(modelUsage: Record<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }>) {
   let totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalCacheWrite = 0
-  let weightedInput = 0, weightedOutput = 0, weightedCacheRead = 0, weightedCacheWrite = 0
+  let weightedInput = 0, weightedOutput = 0, weightedCacheRead = 0, weightedCacheWrite = 0, weightedCacheWrite1h = 0
 
   for (const [modelId, u] of Object.entries(modelUsage)) {
     const price = getModelPrice(modelId)
@@ -582,6 +594,7 @@ export function blendedCostPerToken(modelUsage: Record<string, { inputTokens: nu
     weightedOutput += u.outputTokens * price.output
     weightedCacheRead += u.cacheReadInputTokens * price.cacheRead
     weightedCacheWrite += u.cacheCreationInputTokens * price.cacheWrite
+    weightedCacheWrite1h += u.cacheCreationInputTokens * price.cacheWrite1h
   }
 
   return {
@@ -589,6 +602,10 @@ export function blendedCostPerToken(modelUsage: Record<string, { inputTokens: nu
     output: totalOutput > 0 ? weightedOutput / totalOutput : 15,
     cacheRead: totalCacheRead > 0 ? weightedCacheRead / totalCacheRead : 0.3,
     cacheWrite: totalCacheWrite > 0 ? weightedCacheWrite / totalCacheWrite : 3.75,
+    // Sonnet-class fallback at the same 2x-base-input rate `MODEL_PRICING` derives every row's
+    // `cacheWrite1h` at (see `packages/core/src/types.ts`) — matches the pre-existing convention
+    // of restating the Sonnet-class numbers here rather than importing the fallback object.
+    cacheWrite1h: totalCacheWrite > 0 ? weightedCacheWrite1h / totalCacheWrite : 6,
   }
 }
 
@@ -601,13 +618,32 @@ export type BlendedRates = ReturnType<typeof blendedCostPerToken>
  * column) wrote this by hand over `input` and `output` only, so a session with no model was priced
  * on the 4 % of its volume that is not cache. Pricing the cache as fresh input would be the
  * opposite error — about tenfold too high — which is why the four rates exist separately.
+ *
+ * The cache-write portion is TTL-aware, unlike `rates.cacheWrite` alone: a session WITHOUT a model
+ * id can still carry its own `cache_creation_1h_input_tokens`/`cache_creation_5m_input_tokens` (see
+ * `ModelUsage.cacheCreation1hInputTokens`) — the model is unknown, not the TTL split — so each
+ * portion is priced at its own blended rate (`rates.cacheWrite1h` / `rates.cacheWrite`). Same
+ * BOTH-OR-NEITHER rule `calcCost` applies: a session with only one TTL half stated, or with
+ * neither (an older transcript, a non-Claude harness — genuinely no way to know the split here),
+ * is priced the way this function always has — the WHOLE counter at the single blended 5-minute
+ * rate, the conservative reading.
  */
-export function blendedSessionCost(s: Parameters<typeof sessionTokens>[0], rates: BlendedRates): number {
+export function blendedSessionCost(
+  s: Parameters<typeof sessionTokens>[0]
+    & Pick<SessionMeta, 'cache_creation_1h_input_tokens' | 'cache_creation_5m_input_tokens'>,
+  rates: BlendedRates,
+): number {
   const b = sessionTokens(s)
+  const has1hSplit = s.cache_creation_1h_input_tokens !== undefined
+    && s.cache_creation_5m_input_tokens !== undefined
+  const cacheWriteCost = has1hSplit
+    ? ((s.cache_creation_1h_input_tokens ?? 0) / 1_000_000) * rates.cacheWrite1h
+      + ((s.cache_creation_5m_input_tokens ?? 0) / 1_000_000) * rates.cacheWrite
+    : (b.cacheWrite / 1_000_000) * rates.cacheWrite
   return (b.input / 1_000_000) * rates.input
     + (b.output / 1_000_000) * rates.output
     + (b.cacheRead / 1_000_000) * rates.cacheRead
-    + (b.cacheWrite / 1_000_000) * rates.cacheWrite
+    + cacheWriteCost
 }
 
 export function filterByHarness<T extends { harness?: HarnessId }>(sessions: T[], harness?: HarnessId): T[] {

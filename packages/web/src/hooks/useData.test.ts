@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals, apportionModelUsage, summarizeApiCostByDay, computeDerivedStats, resolvePresenceScope, claudeExactUsageByDay, reconcileClaudeDayCoverage } from './useData'
+import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals, apportionModelUsage, summarizeApiCostByDay, computeDerivedStats, resolvePresenceScope, blendedCostPerToken, blendedSessionCost, claudeExactUsageByDay, reconcileClaudeDayCoverage } from './useData'
 import type { ClaudeDaySession } from './useData'
 import { EMPTY_TOKENS, mergeStatsCaches, totalTokens, calcCost } from '@agentistics/core'
 import type { RepoSortKey, RepoStat } from './useData'
@@ -2004,6 +2004,128 @@ describe('the hour chart under a date filter', () => {
   })
 })
 
+describe('blendedCostPerToken — cache-write TTL rate', () => {
+  test('a single model blends to exactly that model\'s own rates', () => {
+    const rates = blendedCostPerToken({
+      'claude-opus-4-8': {
+        inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 100_000,
+      },
+    })
+    // opus-4-8: input 5 -> cacheWrite (5m, 1.25x) 6.25, cacheWrite1h (2x) 10.
+    expect(rates.cacheWrite).toBeCloseTo(6.25)
+    expect(rates.cacheWrite1h).toBeCloseTo(10)
+  })
+
+  test('two models blend cacheWrite1h by the SAME cache-write volume weights as cacheWrite', () => {
+    const rates = blendedCostPerToken({
+      // opus-4-8: cacheWrite 6.25, cacheWrite1h 10
+      'claude-opus-4-8': {
+        inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 100_000,
+      },
+      // sonnet-4-6: cacheWrite 3.75, cacheWrite1h 6
+      'claude-sonnet-4-6': {
+        inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 300_000,
+      },
+    })
+    // (100_000*6.25 + 300_000*3.75) / 400_000 = 4.375
+    expect(rates.cacheWrite).toBeCloseTo(4.375)
+    // (100_000*10 + 300_000*6) / 400_000 = 7
+    expect(rates.cacheWrite1h).toBeCloseTo(7)
+  })
+
+  test('no cache-write volume at all falls back to the Sonnet-class fallback for BOTH rates', () => {
+    const rates = blendedCostPerToken({
+      'claude-opus-4-8': { inputTokens: 1_000_000, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+    })
+    expect(rates.cacheWrite).toBeCloseTo(3.75)
+    expect(rates.cacheWrite1h).toBeCloseTo(6)
+  })
+})
+
+describe('blendedSessionCost — TTL-aware cache-write pricing for a session with no model id', () => {
+  // Sonnet-class blended rates, as `blendedCostPerToken` would return them with no cache-write
+  // volume of its own — cacheWrite1h = cacheWrite's own 2x-base-input twin, imported off
+  // MODEL_PRICING rather than hand-typed here.
+  const rates = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 }
+
+  const baseSession = {
+    input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0,
+  }
+
+  test('a 1h-only cache write (both TTL fields stated, all of it 1h) is priced at 2x, not 1.25x', () => {
+    const s = {
+      ...baseSession,
+      cache_creation_input_tokens: 100_000,
+      cache_creation_1h_input_tokens: 100_000,
+      cache_creation_5m_input_tokens: 0,
+    }
+    // (100_000 / 1e6) * 6
+    expect(blendedSessionCost(s, rates)).toBeCloseTo(0.6)
+  })
+
+  test('a 5m-only cache write (both TTL fields stated, all of it 5m) is priced at 1.25x', () => {
+    const s = {
+      ...baseSession,
+      cache_creation_input_tokens: 100_000,
+      cache_creation_1h_input_tokens: 0,
+      cache_creation_5m_input_tokens: 100_000,
+    }
+    // (100_000 / 1e6) * 3.75
+    expect(blendedSessionCost(s, rates)).toBeCloseTo(0.375)
+  })
+
+  test('a mixed 1h/5m cache write sums each portion at its own blended rate', () => {
+    const s = {
+      ...baseSession,
+      cache_creation_input_tokens: 100_000,
+      cache_creation_1h_input_tokens: 60_000,
+      cache_creation_5m_input_tokens: 40_000,
+    }
+    // (60_000/1e6)*6 + (40_000/1e6)*3.75 = 0.36 + 0.15
+    expect(blendedSessionCost(s, rates)).toBeCloseTo(0.51)
+  })
+
+  test('a HALF-present breakdown (one TTL field stated, the other genuinely undefined) falls back to the WHOLE counter at the conservative 5-minute rate', () => {
+    const s = {
+      ...baseSession,
+      cache_creation_input_tokens: 100_000,
+      cache_creation_1h_input_tokens: 30_000,
+      // cache_creation_5m_input_tokens intentionally left undefined.
+    }
+    // (100_000 / 1e6) * 3.75 — NOT (30_000/1e6)*6, which would drop the unstated 70_000 remainder.
+    expect(blendedSessionCost(s, rates)).toBeCloseTo(0.375)
+  })
+
+  test('no TTL fields at all (an older transcript, or a non-Claude harness) keeps the pre-fix flat rate', () => {
+    const s = { ...baseSession, cache_creation_input_tokens: 100_000 }
+    expect(blendedSessionCost(s, rates)).toBeCloseTo(0.375)
+  })
+
+  test('a zero-cache session prices to exactly zero on the cache-write term, whichever branch runs', () => {
+    const withSplit = {
+      input_tokens: 1_000_000, output_tokens: 500_000, cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0, cache_creation_1h_input_tokens: 0, cache_creation_5m_input_tokens: 0,
+    }
+    // (1_000_000/1e6)*3 + (500_000/1e6)*15 = 3 + 7.5
+    expect(blendedSessionCost(withSplit, rates)).toBeCloseTo(10.5)
+
+    const noSplit = { input_tokens: 1_000_000, output_tokens: 500_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+    expect(blendedSessionCost(noSplit, rates)).toBeCloseTo(10.5)
+  })
+
+  test('input/output/cacheRead still price at their own blended rate alongside a TTL-split cache write', () => {
+    const s = {
+      input_tokens: 200_000, output_tokens: 100_000, cache_read_input_tokens: 50_000,
+      cache_creation_input_tokens: 100_000,
+      cache_creation_1h_input_tokens: 100_000,
+      cache_creation_5m_input_tokens: 0,
+    }
+    // (200_000/1e6)*3 + (100_000/1e6)*15 + (50_000/1e6)*0.3 + (100_000/1e6)*6
+    // = 0.6 + 1.5 + 0.015 + 0.6
+    expect(blendedSessionCost(s, rates)).toBeCloseTo(2.715)
+  })
+})
+
 /**
  * DEFECT A — a date-filtered view priced an ESTIMATED token split even on days the exact session
  * data was sitting right there in `filteredSessions`. Fixture is the real one from the
@@ -2303,4 +2425,3 @@ describe('computeDerivedStats — date-filtered cost prices from the sessions\' 
     expect(totalTokens(d.tokenTotals)).toBe(REAL_TOTAL + day2Total)
   })
 })
-

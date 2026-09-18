@@ -407,6 +407,16 @@ export interface ClaudeParseState {
   daily: Map<string, SessionDayUsage>
   cacheReadTokens: number
   cacheCreationTokens: number
+  /**
+   * The TTL split of `cacheCreationTokens` — see `ModelUsage.cacheCreation1hInputTokens`. Summed
+   * from `message.usage.cache_creation.{ephemeral_1h,ephemeral_5m}_input_tokens`, under the SAME
+   * dedupe gate as every other usage counter. `sawCacheCreationBreakdown` tracks whether at least
+   * one counted line carried the nested object at all — an older transcript format has none, and
+   * these stay unwritten rather than a guessed 0/0 split.
+   */
+  cacheCreation1hTokens: number
+  cacheCreation5mTokens: number
+  sawCacheCreationBreakdown: boolean
   /** How full the window was on the LAST turn — a gauge, reassigned rather than accumulated. */
   contextTokens: number
   /**
@@ -492,6 +502,7 @@ export function emptyClaudeParse(): ClaudeParseState {
     userMsgs: 0, assistantMsgs: 0, inputTokens: 0, outputTokens: 0,
     daily: new Map(),
     cacheReadTokens: 0, cacheCreationTokens: 0,
+    cacheCreation1hTokens: 0, cacheCreation5mTokens: 0, sawCacheCreationBreakdown: false,
     contextTokens: 0, contextTokensAny: 0,
     countedUsageIds: new Set(),
     gitCommits: 0, gitPushes: 0,
@@ -711,11 +722,20 @@ export function foldClaudeParse(state: ClaudeParseState, lines: Iterable<string>
       // walk summed per LINE, so a real session's tokens — and the cost priced from them — read
       // 60-90 % high; see `usage-dedupe.ts` for the three sessions that proved it.
       if (msg?.usage && countUsage(msg.id, state.countedUsageIds)) {
-        const u = msg.usage as Record<string, number>
+        const u = msg.usage as Record<string, number> & { cache_creation?: Record<string, unknown> }
         state.inputTokens         += u.input_tokens ?? 0
         state.outputTokens        += u.output_tokens ?? 0
         state.cacheReadTokens     += u.cache_read_input_tokens ?? 0
         state.cacheCreationTokens += u.cache_creation_input_tokens ?? 0
+        // The TTL split of THIS line's cache-write portion, when the record states it — see
+        // `usage.cache_creation` on `message.usage`. Under the SAME dedupe gate as every other
+        // counter here, so a repeated line cannot double either portion.
+        const ttl = u.cache_creation
+        if (ttl && typeof ttl === 'object') {
+          state.sawCacheCreationBreakdown = true
+          state.cacheCreation1hTokens += typeof ttl.ephemeral_1h_input_tokens === 'number' ? ttl.ephemeral_1h_input_tokens : 0
+          state.cacheCreation5mTokens += typeof ttl.ephemeral_5m_input_tokens === 'number' ? ttl.ephemeral_5m_input_tokens : 0
+        }
         // The SAME four counters, against the day this turn happened on. A turn with no readable
         // timestamp contributes to the lifetime totals and to no day — it cannot be placed, and
         // placing it on the session's start day would be inventing the one fact this exists to
@@ -933,6 +953,18 @@ export async function finishClaudeSession(
     output_tokens: state.outputTokens,
     cache_read_input_tokens: state.cacheReadTokens,
     cache_creation_input_tokens: state.cacheCreationTokens,
+    // BOTH-OR-NEITHER, and only when the running split RECONCILES exactly against the total this
+    // session already reports — see `SessionMeta.cache_creation_1h_input_tokens`. A transcript
+    // that mixed pre- and post-breakdown usage lines (or any line whose ephemeral fields did not
+    // parse as numbers) would sum to less than `cacheCreationTokens`, and writing a partial split
+    // as if it were the whole session's would price the unaccounted remainder at $0 instead of the
+    // conservative 5-minute rate a MISSING split already falls back to.
+    ...(state.sawCacheCreationBreakdown && state.cacheCreation1hTokens + state.cacheCreation5mTokens === state.cacheCreationTokens
+      ? {
+          cache_creation_1h_input_tokens: state.cacheCreation1hTokens,
+          cache_creation_5m_input_tokens: state.cacheCreation5mTokens,
+        }
+      : {}),
     // Absent rather than zero when nothing was measured — a confident "0% of the window" on a
     // session that simply recorded no usage is the same lie `HARNESS_CAPABILITIES` prevents.
     ...(state.contextTokens > 0 ? { context_tokens: state.contextTokens } : {}),

@@ -28,6 +28,23 @@ const user = (ts: string, text: string) => JSON.stringify({
   type: 'user', timestamp: ts, cwd: '/w', message: { content: [{ type: 'text', text }] },
 }) + '\n'
 
+/**
+ * An assistant turn carrying the 1h/5m cache-write TTL breakdown — see
+ * `jsonl-cache-ttl.test.ts` and `ClaudeParseState.cacheCreation1hTokens`.
+ */
+const assistantTtl = (id: string, ts: string, cacheCreation: number, ttl1h: number, ttl5m: number) => JSON.stringify({
+  type: 'assistant', timestamp: ts, cwd: '/w',
+  message: {
+    id, model: 'claude-opus-5',
+    usage: {
+      input_tokens: 2, output_tokens: 10,
+      cache_creation_input_tokens: cacheCreation,
+      cache_creation: { ephemeral_1h_input_tokens: ttl1h, ephemeral_5m_input_tokens: ttl5m },
+    },
+    content: [],
+  },
+}) + '\n'
+
 const TRANSCRIPT =
   user('2026-09-10T10:00:00.000Z', 'primeiro') +
   assistant('m1', '2026-09-10T10:00:05.000Z', 10, 20) +
@@ -186,6 +203,48 @@ describe('claudeTranscriptState', () => {
     const incr = await finishClaudeSession(r!.state, f, 'sid', '/fallback', 'jsonl')
     const whole = await parseSessionJsonl(f, 'sid', '/fallback', 'jsonl')
     expect(incr).toEqual(whole)
+  })
+
+  /**
+   * The TTL split (`cacheCreation1hTokens`/`cacheCreation5mTokens`, see `jsonl-cache-ttl.test.ts`)
+   * is folded on `ClaudeParseState` under the SAME dedupe gate as every other usage counter, so it
+   * must survive the append fold exactly the way `inputTokens`/`cacheCreationTokens` already do —
+   * accumulated across chunks, never re-summed from zero and never doubled on a later read. The
+   * first chunk ends MID-CONVERSATION (after two turns, one 1h-only and one 5m-only); the second
+   * chunk is appended later and adds two more turns, including further 1h writes. The result must
+   * equal folding the whole transcript in one pass — the property `foldClaudeParse`'s own docstring
+   * claims ("the same numbers, and the numbers are the ones this parser has always produced").
+   */
+  test('a TTL cache-write split accumulated across two appended chunks matches a single full read', async () => {
+    const f = join(await tempDir(), 's.jsonl')
+    const chunk1 =
+      user('2026-09-11T09:00:00.000Z', 'primeiro') +
+      assistantTtl('t1', '2026-09-11T09:00:05.000Z', 100_000, 100_000, 0) +
+      user('2026-09-11T09:05:00.000Z', 'segundo') +
+      assistantTtl('t2', '2026-09-11T09:05:09.000Z', 50_000, 0, 50_000)
+    const chunk2 =
+      assistantTtl('t3', '2026-09-11T09:10:00.000Z', 200_000, 200_000, 0) +
+      user('2026-09-11T09:15:00.000Z', 'terceiro') +
+      assistantTtl('t4', '2026-09-11T09:15:09.000Z', 75_000, 25_000, 50_000)
+
+    await writeFile(f, chunk1)
+    await claudeTranscriptState(f)
+    await appendFile(f, chunk2)
+    const r = await claudeTranscriptState(f)
+    expect(r!.info.mode).toBe('append')
+
+    // A single full read of the whole transcript, for comparison — never the incremental path.
+    const whole = emptyClaudeParse()
+    foldClaudeParse(whole, iterLines(chunk1 + chunk2))
+
+    expect(r!.state.cacheCreation1hTokens).toBe(whole.cacheCreation1hTokens)
+    expect(r!.state.cacheCreation5mTokens).toBe(whole.cacheCreation5mTokens)
+    expect(r!.state.cacheCreationTokens).toBe(whole.cacheCreationTokens)
+    expect(r!.state.sawCacheCreationBreakdown).toBe(true)
+    // The actual figures, so a change that makes both sides wrong the SAME way still fails this.
+    expect(r!.state.cacheCreation1hTokens).toBe(325_000)
+    expect(r!.state.cacheCreation5mTokens).toBe(100_000)
+    expect(r!.state.cacheCreationTokens).toBe(425_000)
   })
 
   test('an empty file is a real read and a real cursor, not a failure', async () => {
