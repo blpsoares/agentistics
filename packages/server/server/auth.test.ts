@@ -198,4 +198,14 @@ describe('handleSession', () => {
     const body = await res.json() as Record<string, unknown>
     expect(typeof body['editorEnabled']).toBe('boolean')
   })
+
+  it('reports shellOverride as its own boolean, apart from the combined shellEnabled', async () => {
+    // Settings needs to tell "ligado" (the ordinary preference) from "ligado até reiniciar o
+    // servidor" (the temporary override) — two different sentences over what would otherwise be
+    // one boolean. `shell-override-store.ts` resets to `false` on every fresh process, so this is
+    // the one value this route CAN pin without depending on this machine's own preferences file.
+    const body = (await (await handleSession(new Request('http://localhost/api/team/session'))).json()) as
+      Record<string, unknown>
+    expect(body['shellOverride']).toBe(false)
+  })
 })

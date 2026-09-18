@@ -293,6 +293,15 @@ export default function SessionsPage() {
   const dedicatedTerminal = useLocation().pathname.endsWith('/terminal')
   const dedicatedPane = readTerminalPane(useSearchParams()[0].get('pane'))
   const shellEnabled = ctx.shellEnabled === true
+  // `CAPS.localShell` alone, never narrowed by the preference — the disabled-shell empty state's
+  // own two sub-states (buttons vs. a plain sentence) need this apart from the combined value
+  // above. Undefined (older server, or the context has not loaded yet) reads as capable, the same
+  // reading `capabilities?.localShell` gets everywhere else in this file.
+  const shellCapable = ctx.capabilities?.localShell !== false
+  // The disabled-shell empty state's two buttons need to make `ctx.shellEnabled` (and
+  // `ctx.shellOverride`) catch up the instant either succeeds — this is the one way to do that
+  // without a reload, the same call `SessionsSettings`'s own toggle already makes.
+  const onShellEnabledChange = ctx.refreshTeamSession
   /**
    * The repository explorer's two switches, both already resolved upstream.
    *
@@ -1012,6 +1021,8 @@ export default function SessionsPage() {
       onArtifacts={onArtifacts}
       // The capability AND the user's switch, as the server reports them. Absent reads as OFF.
       shellEnabled={shellEnabled}
+      shellCapable={shellCapable}
+      {...(onShellEnabledChange ? { onShellEnabledChange } : {})}
       // Gates whether the BOTTOM band may ever show the Studio, and hands it the DOM box
       // `StudioHost` (mounted once, here in `SessionsPage`) moves its persistent carrier into.
       editorEnabled={editorEnabled}

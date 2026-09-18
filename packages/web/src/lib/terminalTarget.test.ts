@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  TERMINAL_TARGETS, readTarget, targetLabel, targetScope, targetStreamId, usableTarget,
+  TERMINAL_TARGETS, readTarget, resolveDockedTarget, shellTargetUnavailable, targetLabel,
+  targetScope, targetStreamId, usableTarget,
 } from './terminalTarget'
 
 describe('the two things a terminal band can show', () => {
@@ -86,5 +87,65 @@ describe('usableTarget — a "shell" reading is unusable once the switch is off'
       expect(usableTarget(readTarget(raw), false), String(raw)).toBe('cli')
       expect(usableTarget(readTarget(raw), true), String(raw)).toBe('shell')
     }
+  })
+})
+
+// `shellTargetUnavailable` — the RENDER-time predicate the disabled-shell empty state is drawn on.
+// It is deliberately the same shape as `usableTarget`'s own clamp condition: not a coincidence, it
+// is that very condition, named so a caller can ask "would this have been clamped" instead of only
+// ever being handed the clamped answer.
+describe('shellTargetUnavailable — when the CURRENT target is shell but cannot be shown', () => {
+  test('shell, disabled: unavailable', () => {
+    expect(shellTargetUnavailable('shell', false)).toBe(true)
+  })
+  test('shell, enabled: available', () => {
+    expect(shellTargetUnavailable('shell', true)).toBe(false)
+  })
+  test('cli is never "unavailable" — it is never gated by the switch', () => {
+    expect(shellTargetUnavailable('cli', false)).toBe(false)
+    expect(shellTargetUnavailable('cli', true)).toBe(false)
+  })
+})
+
+// `resolveDockedTarget` — the docked band's fresh-mount seed, and the one place the old silent
+// `usableTarget` clamp is REPLACED rather than dropped: a GENUINE record of "shell" survives being
+// unusable (so the empty state can explain it), while `readTarget`'s own default never does (so a
+// brand-new session never opens on that empty state).
+describe('resolveDockedTarget — only a GENUINE record of shell survives being unusable', () => {
+  test('enabled: behaves exactly like the old usableTarget(bottomOccupant ?? readTarget(stored))', () => {
+    expect(resolveDockedTarget(null, undefined, true)).toBe('shell') // readTarget's own default
+    expect(resolveDockedTarget(null, 'cli', true)).toBe('cli')
+    expect(resolveDockedTarget('shell', 'cli', true)).toBe('shell') // bottomOccupant wins
+    expect(resolveDockedTarget('cli', 'shell', true)).toBe('cli')
+  })
+
+  test('disabled + an explicit bottomOccupant of "shell": kept, so the empty state can explain it', () => {
+    expect(resolveDockedTarget('shell', undefined, false)).toBe('shell')
+    expect(resolveDockedTarget('shell', 'cli', false)).toBe('shell')
+  })
+
+  test('disabled + a LITERALLY stored "shell" preference (no bottomOccupant): kept', () => {
+    expect(resolveDockedTarget(null, 'shell', false)).toBe('shell')
+  })
+
+  test('disabled + NO bottomOccupant + an absent/unreadable stored preference: clamped to cli — ' +
+    'this is the case item 2 forbids showing the empty state for', () => {
+    for (const raw of [undefined, null, '', 'nope', 7]) {
+      expect(resolveDockedTarget(null, raw, false), String(raw)).toBe('cli')
+    }
+  })
+
+  test('disabled + a stored "cli" preference: cli, same as always', () => {
+    expect(resolveDockedTarget(null, 'cli', false)).toBe('cli')
+  })
+
+  // Plant: reverting to the OLD clamp (`usableTarget(bottomOccupant ?? readTarget(stored),
+  // shellEnabled)`, with no "was it genuine" check) must fail the "kept" cases above — proving they
+  // actually exercise the new behaviour rather than a coincidence of the two functions agreeing.
+  test('plant: the OLD clamp disagrees on the genuine-record cases', () => {
+    const oldClamp = (bottomOccupant: 'cli' | 'shell' | null, stored: unknown, enabled: boolean) =>
+      usableTarget(bottomOccupant ?? readTarget(stored), enabled)
+    expect(resolveDockedTarget('shell', undefined, false)).not.toBe(oldClamp('shell', undefined, false))
+    expect(resolveDockedTarget(null, 'shell', false)).not.toBe(oldClamp(null, 'shell', false))
   })
 })

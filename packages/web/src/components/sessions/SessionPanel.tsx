@@ -97,6 +97,11 @@ export interface SessionPanelProps {
    * is the profile's answer, and the switch may only ever narrow it further.
    */
   shellEnabled?: boolean
+  /** `CAPS.localShell` alone, never narrowed by the preference — see `ShellBand`'s own prop of the
+   *  same name for why the disabled-shell empty state needs both this AND `shellEnabled`. */
+  shellCapable?: boolean
+  /** Straight through to `ShellBand`'s own prop of the same name — see there. */
+  onShellEnabledChange?: () => void | Promise<void>
   /**
    * May this machine serve the repository explorer at all — the same already-resolved
    * `editorEnabled` `ArtifactsAside` used to read. Gates whether the BOTTOM band may ever show the
@@ -123,8 +128,8 @@ export interface SessionPanelProps {
 
 export function SessionPanel({
   session, row, lang, theme, act, authorName, onGone, onOpened, view: viewProp, onViewChange,
-  onArtifacts, shellEnabled, editorEnabled, onOpenTerminal, onOpenShellFullscreen, onStudioBandRef,
-  hardwareOffered, studioSeen = true, onTaskLinked,
+  onArtifacts, shellEnabled, shellCapable, onShellEnabledChange, editorEnabled, onOpenTerminal,
+  onOpenShellFullscreen, onStudioBandRef, hardwareOffered, studioSeen = true, onTaskLinked,
 }: SessionPanelProps) {
   /**
    * Is this a session of ANOTHER machine, reached through the relay?
@@ -450,7 +455,15 @@ export function SessionPanel({
           // The security narrowing: WHICH of the two panes ShellBand may ever show/open, never
           // whether it renders at all — see this prop's own doc comment on `ShellBand`.
           shellEnabled={panelBarGates.shellEnabled}
-          bottomOccupant={bottomOccupant === 'cli' || bottomOccupant === 'shell' ? bottomOccupant : null}
+          shellCapable={shellCapable !== false}
+          {...(onShellEnabledChange ? { onShellEnabledChange } : {})}
+          // RAW, ungated — deliberately NOT the `bottomOccupant` const above (which
+          // `gatedBottomOccupant` already turned 'shell' into 'cli' for the BAR's own lit-tab
+          // reading). `ShellBand` decides for ITSELF whether a genuine 'shell' record is usable —
+          // see `resolveDockedTarget`'s own header — and needs the un-clamped slot value to do it,
+          // or the very record that should draw the disabled-shell empty state would already read
+          // as 'cli' by the time it got here.
+          bottomOccupant={slotLayout.bottom === 'cli' || slotLayout.bottom === 'shell' ? slotLayout.bottom : null}
           taskControl={taskControl}
           extraOverflowEntries={moveDownEntries}
           /*

@@ -51,6 +51,43 @@ export function usableTarget(want: TerminalTarget, shellEnabled: boolean): Termi
   return want === 'shell' && !shellEnabled ? 'cli' : want
 }
 
+/**
+ * Is the CURRENT target `'shell'` while the shell is unusable — the exact condition the
+ * disabled-shell empty state (`ShellBand`'s own header) renders on.
+ *
+ * This is `usableTarget`'s own clamp condition, kept as a NAMED predicate rather than inlined,
+ * because `ShellBand` no longer calls `usableTarget` to silently fall back to `'cli'` the moment
+ * the switch is off — see that component's header for why a silent fallback there is the bug this
+ * pass replaces. The docked band keeps `target === 'shell'` even while disabled (so the person's
+ * own choice survives a switch flip and a re-enable needs no re-pick), and this is what tells the
+ * render which of the two panes — the real shell, or the sentence explaining why not — belongs in
+ * that box right now.
+ */
+export function shellTargetUnavailable(target: TerminalTarget, shellEnabled: boolean): boolean {
+  return target === 'shell' && !shellEnabled
+}
+
+/**
+ * WHAT THE DOCKED BAND OPENS ON, at a fresh mount — the one place `usableTarget`'s old silent
+ * clamp is replaced rather than simply dropped.
+ *
+ * `bottomOccupant` (an explicit slot placement) and a LITERALLY stored `'shell'` preference are
+ * both genuine records that a person put the shell there; `readTarget`'s own absent-reads-as-shell
+ * DEFAULT (see that function's header) is not — it is what a brand-new session gets when nobody
+ * has ever chosen anything. Treating that default as "the shell was desired" would draw the
+ * disabled-shell empty state on EVERY fresh session on a machine with the switch off, not only on
+ * the ones design item 2 describes ("the person had the shell open, then turned it off") — so the
+ * default is clamped to `'cli'` exactly as `usableTarget` always clamped it, and only a genuine
+ * record survives being unusable, to be rendered as the empty state instead of silently swapped.
+ */
+export function resolveDockedTarget(
+  bottomOccupant: TerminalTarget | null, storedTarget: unknown, shellEnabled: boolean,
+): TerminalTarget {
+  const wanted = bottomOccupant ?? readTarget(storedTarget)
+  const chosen = bottomOccupant === 'shell' || storedTarget === 'shell'
+  return wanted === 'shell' && !shellEnabled && !chosen ? 'cli' : wanted
+}
+
 /** Which of the two channels this target speaks. Never inferred from an id — an id is opaque. */
 export function targetScope(target: TerminalTarget): TerminalScope {
   return target === 'cli' ? 'fleet' : 'shell'

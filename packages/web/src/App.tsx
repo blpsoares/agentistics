@@ -152,8 +152,12 @@ interface TeamSessionState {
    *  Undefined on an older server, which had no switch — treated as "the capability decides",
    *  so upgrading the web ahead of the server never hides a chat that still works. */
   chatEnabled?: boolean
-  /** The same, for `/api/shell/*`. Undefined reads as OFF — see `AppContext.shellEnabled`. */
+  /** The same, for `/api/shell/*`. Undefined reads as OFF — see `AppContext.shellEnabled`. Already
+   *  folds in the in-memory "Enable now" override — see `shellOverride` below for its raw value. */
   shellEnabled?: boolean
+  /** The override's own raw value, apart from the combined `shellEnabled` above — see
+   *  `AppContext.shellOverride`. */
+  shellOverride?: boolean
   /** The same, for the repository explorer's `/api/fleet/tree*`. Already RESOLVED by the server
    *  (`sessions/editor-gate.ts`): the capability AND the switch. Undefined reads as OFF — see
    *  `AppContext.editorEnabled`. */
@@ -3286,6 +3290,7 @@ export default function AppLayout() {
     isCentral,
     capabilities: teamSession?.capabilities,
     shellEnabled: teamSession?.shellEnabled === true,
+    shellOverride: teamSession?.shellOverride === true,
     // Already resolved by the server (capability AND switch) — never re-derived here. Undefined on
     // an older server reads as OFF, so the Studio is simply absent there. `editorEnabledFor` also
     // subtracts a CENTRAL, and this is the only place that happens: `editor-gate.ts` carries no
