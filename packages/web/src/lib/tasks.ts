@@ -522,6 +522,11 @@ export const removeLink = (ref: string, remove: string) =>
 export type AttachRefusalReason =
   | 'no_such_task' | 'no_such_session' | 'no_such_subtask' | 'needs_subtask' | 'wrong_delivery'
   | 'blocked'
+  /**
+   * §F.1: the target is a group MEMBER (`Subtask.parentGroupId` set) — only the group itself may
+   * hold a session (`task-attach.ts`'s `planAttach`). File on the group's own id instead.
+   */
+  | 'subtask_in_group'
   // This function's own addition — the server can never say a request never reached it.
   | 'network'
 
