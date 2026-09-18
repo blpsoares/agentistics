@@ -261,10 +261,15 @@ export interface BandOverflowEntry {
  * Absent entirely when `entries` is empty, rather than a "⋯" that opens onto nothing: a control
  * whose one outcome is an empty menu teaches nothing, same rule as everywhere else in this file.
  */
-export function BandOverflowMenu({ label, entries, isMobile = false }: {
+export function BandOverflowMenu({ label, entries, isMobile = false, icon }: {
   label: string
   entries: readonly BandOverflowEntry[]
   isMobile?: boolean
+  /** The trigger's own icon — `MoreHorizontal` ("⋯", the band's generic overflow) unless the caller
+   *  names a more specific one, e.g. `Studio.tsx`'s own gear (`Settings`) for its layout menu, which
+   *  is a DIFFERENT menu from the band's own "⋯" and reads as one at a glance only if its trigger
+   *  does not share that glyph. */
+  icon?: ReactNode
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -313,7 +318,7 @@ export function BandOverflowMenu({ label, entries, isMobile = false }: {
           ...pillBase,
           width: BAND_CONTROL_H, height: BAND_CONTROL_H, padding: 0,
         }}
-      ><MoreHorizontal size={14} /></button>
+      >{icon ?? <MoreHorizontal size={14} />}</button>
       {open && (
         <div
           ref={menuRef}

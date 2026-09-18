@@ -293,16 +293,75 @@ describe('StudioHost is mounted once, through mountStudioHostPanel (I4)', () => 
 
     // LAST field, appended right before the closing `})}` — the shape the re-review found that the
     // occurrence-count test cannot see at all, because it never touches the fixed prefix string.
-    // `onMention:` is the literal's current last field (§6 wiring added `harness`/`composerMounted`/
-    // `onMention` after `target`) — this must move whenever a field is added after it, or the plant
-    // silently stops matching anything and the test passes for the wrong reason (see the failure
-    // this exact drift caused when `target: studioTarget,` was still assumed to be last).
+    // `onToggleFullscreen:` is the literal's current last field (the full-screen wiring added
+    // `fullscreen`/`onToggleFullscreen` after `onMention`) — this must move whenever a field is
+    // added after it, or the plant silently stops matching anything and the test passes for the
+    // wrong reason (see the failure this exact drift caused when `target: studioTarget,`, then
+    // `onMention: onStudioMention,`, were each in turn assumed to be last).
+    const LAST_FIELD = 'onToggleFullscreen: bottomIsStudio ? () => setStudioFullscreen(f => !f) : undefined,'
     const last = SRC.replace(
-      'onMention: onStudioMention,' + CALL_CLOSE,
-      "onMention: onStudioMention,\n        key: rightIsStudio ? 'right' : 'bottom'," + CALL_CLOSE,
+      LAST_FIELD + CALL_CLOSE,
+      `${LAST_FIELD}\n        key: rightIsStudio ? 'right' : 'bottom',` + CALL_CLOSE,
     )
     const lastStart = last.indexOf(CALL_GUARD)
     const lastClose = last.indexOf(CALL_CLOSE, lastStart)
     expect(last.slice(lastStart, lastClose)).toMatch(/(^|[,{])\s*key\s*:/)
+  })
+})
+
+/**
+ * THE DEDICATED-TERMINAL BRANCH MAY NEVER SKIP A HOOK — "Rendered fewer hooks than expected."
+ *
+ * `if (dedicatedTerminal && selected) { …; return (…) }` is a conditional early `return` inside this
+ * component's body, and for one release two hooks lived textually AFTER it: `const rightAsideRef =
+ * useRef(...)` and the `useEffect` that measures it. React calls hooks in call ORDER and COUNT, not
+ * by name, so the ordinary render (41 hooks) and the dedicated-terminal render (38 — the branch
+ * returns before the last three) disagreed on the count the moment a reader pressed a band's own
+ * "full screen" control, whichever pane it named. Reported as the Claude Code panel AND the Shell
+ * both crashing to `RootErrorBoundary` on the way IN, and again on the way OUT (`Voltar para a
+ * sessão`) — the SAME defect from the other side, since leaving `/terminal` is exactly the reverse
+ * transition between the same two hook counts.
+ *
+ * THE FIX moved the whole "ONE PANE, POSITIONED BY THE LAYOUT" section — `artShell`, `artOuter`,
+ * `artInner`, `rightAsideRef` and its two effects — to BEFORE the branch, so every hook this
+ * component ever calls is called on EVERY render, dedicated-terminal or not; only the JSX each
+ * branch RETURNS differs, never the hooks that ran to get there.
+ *
+ * Not reachable by rendering: the page needs a fleet host, a selected session and a route change,
+ * and `packages/web` has no jsdom. The SHAPE is what went wrong (a hook after a conditional
+ * `return`), so the shape is what is asserted, over comment-free source, with the defect planted
+ * below to prove the scan still sees it.
+ */
+describe('the dedicated-terminal branch may not skip a hook (hook-order crash)', () => {
+  const DEDICATED_IF = 'if (dedicatedTerminal && selected) {'
+  // Matches a hook call by NAME rather than by import, so it catches `useRef`, `useEffect(...)`,
+  // and a generic call like `useRef<HTMLDivElement | null>(null)` alike — the exact shape that
+  // slipped past a narrower `const \w+ = use\w+\(` pattern before (no `<...>` generic allowed).
+  const HOOK_CALL = /\buse[A-Z]\w*\s*(<[^>]*>)?\s*\(/g
+
+  test('the guarded branch is still where this test expects it', () => {
+    expect(has(DEDICATED_IF)).toBe(true)
+  })
+
+  test('no hook call appears anywhere after the dedicated-terminal branch', () => {
+    const at = SRC.indexOf(DEDICATED_IF)
+    expect(at).toBeGreaterThan(-1)
+    const after = SRC.slice(at)
+    expect([...after.matchAll(HOOK_CALL)]).toHaveLength(0)
+  })
+
+  test('the scan still sees a hook planted after the branch, in either shape that actually broke this', () => {
+    const plantedRef = `${SRC}\n  const rightAsideRef = useRef<HTMLDivElement | null>(null)\n`
+    const afterRef = plantedRef.slice(plantedRef.indexOf(DEDICATED_IF))
+    expect([...afterRef.matchAll(HOOK_CALL)].length).toBeGreaterThan(0)
+
+    const plantedEffect = `${SRC}\n  useEffect(() => {}, [])\n`
+    const afterEffect = plantedEffect.slice(plantedEffect.indexOf(DEDICATED_IF))
+    expect([...afterEffect.matchAll(HOOK_CALL)].length).toBeGreaterThan(0)
+
+    // A commented-out plant must never count — the same trap `GATE`'s own scan guards above.
+    const plantedComment = `${SRC}\n  // const rightAsideRef = useRef(null)\n`
+    const afterComment = stripComments(plantedComment).slice(stripComments(plantedComment).indexOf(DEDICATED_IF))
+    expect([...afterComment.matchAll(HOOK_CALL)]).toHaveLength(0)
   })
 })

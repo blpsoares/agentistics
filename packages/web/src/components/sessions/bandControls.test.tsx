@@ -254,4 +254,18 @@ describe('BandOverflowMenu', () => {
     expect(html).not.toContain('role="menu"')
     expect(html).not.toContain('Move to the right')
   })
+
+  test('the trigger icon can be overridden — Studio.tsx\'s own gear reads as a DIFFERENT menu from the band\'s "⋯"', () => {
+    const withDefault = renderToStaticMarkup(
+      <BandOverflowMenu label="More actions" entries={[{ id: 'x', label: 'X', icon: <span />, onSelect: () => {} }]} />,
+    )
+    const withGear = renderToStaticMarkup(
+      <BandOverflowMenu
+        label="Studio settings" icon={<svg data-gear-marker="1" />}
+        entries={[{ id: 'x', label: 'X', icon: <span />, onSelect: () => {} }]}
+      />,
+    )
+    expect(withGear).toContain('data-gear-marker="1"')
+    expect(withDefault).not.toContain('data-gear-marker="1"')
+  })
 })
