@@ -7,7 +7,7 @@
  * "not measured" rather than a `0` — is asserted directly against these functions, not through DOM.
  */
 
-import type { AttemptRollup, Subtask, SubtaskView } from '../../lib/tasks'
+import type { AttemptRollup, Subtask, SubtaskView, TaskStats } from '../../lib/tasks'
 
 /**
  * The EFFECTIVE bucket key of a subtask — the same one the server bucketed by.
@@ -34,6 +34,26 @@ export function subtaskRollupOf(
 ): AttemptRollup | undefined {
   const key = rollupKeyOf(subtask)
   return views.find(v => v.id === key)?.rollup
+}
+
+/**
+ * The delivery-evidence numbers for one subtask (or the direct branch), or `undefined` when the
+ * server has no bucket for it at all — the same "no bucket" vs "an honest empty one" distinction
+ * `subtaskRollupOf` already makes for the cost/session rollup, applied here to
+ * `SubtaskView.stats`. A `null` result (bucket exists, `stats` is `null`) means nothing is filed
+ * under this piece yet; a real `TaskStats` object means at least one session is, even if none of
+ * them reported anything measurable. See
+ * docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md §C.5.
+ *
+ * Same effective-key resolution as `subtaskRollupOf` — a grouped subtask's evidence numbers live
+ * under the GROUP's bucket, never a per-member one.
+ */
+export function subtaskStatsOf(
+  views: readonly SubtaskView[],
+  subtask: Pick<Subtask, 'id' | 'groupId'>,
+): TaskStats | null | undefined {
+  const key = rollupKeyOf(subtask)
+  return views.find(v => v.id === key)?.stats
 }
 
 export type CostCell =
