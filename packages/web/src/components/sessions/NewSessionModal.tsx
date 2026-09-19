@@ -109,9 +109,37 @@ export interface NewSessionModalProps {
    * the other end is actually filed, not just labeled. See spec 2026-09-11 §C.2.
    */
   initialTaskId?: string
+  /**
+   * Pre-fill from a session PRESET that has no `cwd` of its own (see `@agentistics/core`'s
+   * `sessionPresets.ts` and `SessionsPage.tsx`'s `onSelectPreset`) — a preset that already names a
+   * folder never opens this wizard at all, it launches directly through `PresetLaunchConfirm`. This
+   * is only the fallback for the one field a preset cannot supply.
+   *
+   * Pre-fills the answers; it does not skip a step or auto-start anything — the person still walks
+   * the ordinary wizard and its review step, which is the same consent gate a preset with a `cwd`
+   * gets from `PresetLaunchConfirm` instead.
+   */
+  initialPreset?: {
+    harness?: string
+    prompt?: string
+    model?: string
+    effort?: string
+    label?: string
+  }
+  /**
+   * The exact SUBTASK (or group) this session is being started for, alongside `initialTaskId` — the
+   * staged-session compose flow's fallback path (t-918cc82233), reached when a draft is missing
+   * something `/api/fleet/new` requires (a harness, a folder). Seeds `subtaskTarget` with the pair,
+   * so the automatic attach below files the result under the exact subtask the draft lived on rather
+   * than a bare task-level attach. Ignored without `initialTaskId` — a subtask cannot be named
+   * without the delivery it belongs to.
+   */
+  initialSubtaskId?: string
 }
 
-export function NewSessionModal({ lang, onClose, onStarted, initialTask, initialTaskId }: NewSessionModalProps) {
+export function NewSessionModal({
+  lang, onClose, onStarted, initialTask, initialTaskId, initialSubtaskId, initialPreset,
+}: NewSessionModalProps) {
   const pt = lang === 'pt'
   const [harnesses, setHarnesses] = useState<HarnessOption[] | null>(null)
   const [projects, setProjects] = useState<ProjectOption[]>([])
@@ -153,7 +181,7 @@ export function NewSessionModal({ lang, onClose, onStarted, initialTask, initial
    * created. See spec 2026-09-11 §C.2.
    */
   const [subtaskTarget, setSubtaskTarget] = useState<{ taskId: string; subtaskId?: string } | null>(
-    initialTaskId ? { taskId: initialTaskId } : null,
+    initialTaskId ? { taskId: initialTaskId, ...(initialSubtaskId ? { subtaskId: initialSubtaskId } : {}) } : null,
   )
   /** Set when that automatic attach comes back refused because the subtask is still blocked. */
   const [subtaskBlocked, setSubtaskBlocked] = useState<
@@ -163,10 +191,10 @@ export function NewSessionModal({ lang, onClose, onStarted, initialTask, initial
   const [blockedDetail, setBlockedDetail] = useState<TaskDetail | null>(null)
   /** Open when the delivery picker is up. */
   const [pickingTask, setPickingTask] = useState(false)
-  const [model, setModel] = useState('')
-  const [effort, setEffort] = useState('')
-  const [prompt, setPrompt] = useState('')
-  const [label, setLabel] = useState('')
+  const [model, setModel] = useState(initialPreset?.model ?? '')
+  const [effort, setEffort] = useState(initialPreset?.effort ?? '')
+  const [prompt, setPrompt] = useState(initialPreset?.prompt ?? '')
+  const [label, setLabel] = useState(initialPreset?.label ?? '')
 
   /**
    * The delivery this session probably belongs to, from the folder that is selected RIGHT NOW.
@@ -258,8 +286,11 @@ export function NewSessionModal({ lang, onClose, onStarted, initialTask, initial
         setHarnesses(json.harnesses)
         setProjects(json.projects)
         setProjectTotals(json.projectTotals)
-        // Pre-select the only assistant there is. A one-item picker is a question with one answer.
-        setHarness(h => h ?? (json.harnesses.length === 1 ? json.harnesses[0]! : null))
+        // Prefer a PRESET's own harness when this machine can actually start it; otherwise
+        // pre-select the only assistant there is — a one-item picker is a question with one answer.
+        setHarness(h => h
+          ?? (initialPreset?.harness ? json.harnesses.find(x => x.id === initialPreset.harness) ?? null : null)
+          ?? (json.harnesses.length === 1 ? json.harnesses[0]! : null))
       } catch {
         /* transient — the picker keeps what it had, which is better than an empty list */
       } finally {

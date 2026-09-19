@@ -30,9 +30,10 @@ import { useElementWidth } from '../../hooks/useElementWidth'
 import { resolveForViewport, rightSlotShowing, usePanelSlots } from '../../lib/panelSlots'
 import { closeArtifacts, openArtifacts, useArtifacts } from '../../lib/artifactsStore'
 import {
-  bandBarCompact, panelBarEntries, type PanelBarEntry, type PanelBarGates, type PanelBarId,
+  bandBarCompact, bottomBandFor, gatedBottomOccupant, panelBarEntries,
+  type PanelBarEntry, type PanelBarGates, type PanelBarId,
 } from '../../lib/panelBar'
-import { targetLabel } from '../../lib/terminalTarget'
+import { targetLabel, type TerminalTarget } from '../../lib/terminalTarget'
 import { RelayedScreen } from './RelayedScreen'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import type { FleetActionId, FleetRow } from '../../lib/fleet'
@@ -41,10 +42,25 @@ import { SessionChat, type SessionChatProps } from './SessionChat'
 import { SessionActions } from './SessionActions'
 import { SessionTitleFlag } from './SessionTitleFlag'
 import { ShellBand } from './ShellBand'
-import { BAND_MIN_PX, readBandPrefs, resolveBandHeight, writeBandPrefs } from '../../lib/shellBand'
+import {
+  BAND_MIN_PX, readBandPrefs, resolveBandHeight, resolveStudioBandDrag, writeBandPrefs,
+} from '../../lib/shellBand'
 import { BAND_CONTROL_H, BandOverflowMenu, PanelBar, type BandOverflowEntry } from './bandControls'
 
 export type SessionView = 'chat' | 'terminal'
+
+/**
+ * `StudioBand`'s TRUE full-screen overlay — below every modal (`ConfirmModal` is 2000,
+ * `primitives.tsx`), ABOVE the sticky header it is deliberately covering.
+ *
+ * MEASURED, not guessed: `TopBar.tsx`'s own header is `position: fixed` at `zIndex: 300` — a plain
+ * `90` sat visually BEHIND it despite `getBoundingClientRect()` confirming the full-screen box
+ * really did cover `{0, 0, 1440, 900}`; `document.elementFromPoint()` on the header's own row
+ * answered with the header, not the band, which is what "full screen" covering everything except
+ * the one bar it most needed to cover looks like. `320` clears the header with room to spare while
+ * staying under the first ordinary dialog tier (`SessionDrilldownModal` and friends start at 350).
+ */
+const STUDIO_FULLSCREEN_Z = 320
 
 export interface SessionPanelProps {
   session: ControlSession
@@ -81,18 +97,31 @@ export interface SessionPanelProps {
    * then the enlarge control is ABSENT too rather than inert.
    */
   onOpenTerminal?: () => void
-  /** Take the SHELL to its own screen. Absent where there is no route to take it to. */
-  onOpenShellFullscreen?: () => void
+  /**
+   * Take WHICHEVER PANE the docked band is showing — `cli` or `shell` — to its own screen. Absent
+   * where there is no route to take it to. The band tells this callback which one it is on
+   * (`ShellBand`'s own `onOpenFullscreen`), so a reader pressing "full screen" while reading the
+   * Claude Code pane lands on the Claude Code pane, not the shell's.
+   */
+  onOpenShellFullscreen?: (target: TerminalTarget) => void
   /**
    * May this machine serve a per-session utility SHELL right now — `CAPS.localShell` AND the
    * user's own switch, as `/api/team/session` reports it.
    *
-   * Absent reads as OFF, and the band is then ABSENT rather than present-and-refusing: a control
-   * that is there and says no teaches nothing, while Settings → Sessions is where the switch lives
-   * and says so. It is never inferred from `capabilities.localShell` alone — that is the profile's
-   * answer, and the switch may only ever narrow it further.
+   * Absent reads as OFF. It no longer decides whether the bottom band exists at all — see
+   * `lib/panelBar.ts`'s own `bottomBandFor` for why that was the bug — only whether `ShellBand`
+   * offers the SHELL half of what it can show: with it off, the segment drops the Shell tab
+   * (`panelBarEntries`' own `shell` gate) and `ShellBand` itself never shows or opens a shell pane
+   * (its own `shellEnabled` prop), while the CLI pane — the session's own harness terminal, not the
+   * shell — stays fully reachable. It is never inferred from `capabilities.localShell` alone — that
+   * is the profile's answer, and the switch may only ever narrow it further.
    */
   shellEnabled?: boolean
+  /** `CAPS.localShell` alone, never narrowed by the preference — see `ShellBand`'s own prop of the
+   *  same name for why the disabled-shell empty state needs both this AND `shellEnabled`. */
+  shellCapable?: boolean
+  /** Straight through to `ShellBand`'s own prop of the same name — see there. */
+  onShellEnabledChange?: () => void | Promise<void>
   /**
    * May this machine serve the repository explorer at all — the same already-resolved
    * `editorEnabled` `ArtifactsAside` used to read. Gates whether the BOTTOM band may ever show the
@@ -115,12 +144,22 @@ export interface SessionPanelProps {
   /** A task was just created and linked from the bottom bar's own task control — see
    *  `SessionTitleFlag`'s own `onLinked`. */
   onTaskLinked?: () => void
+  /**
+   * IS THE STUDIO'S BOTTOM BAND IN TRUE FULL SCREEN — the whole viewport, not merely "fills the
+   * centre column". Owned by `SessionsPage` (the caller), because it has to hand the SAME flag to
+   * `Studio.tsx` itself, a sibling mount reached through `StudioHost`'s portal that this component
+   * cannot see — a flag `StudioBand` invented locally could never agree with the gear menu's own
+   * exit control on which state is current. Absent reads as `false`; see `StudioBand`'s own header.
+   */
+  studioFullscreen?: boolean
+  onStudioFullscreenChange?: (next: boolean) => void
 }
 
 export function SessionPanel({
   session, row, lang, theme, act, authorName, onGone, onOpened, view: viewProp, onViewChange,
-  onArtifacts, shellEnabled, editorEnabled, onOpenTerminal, onOpenShellFullscreen, onStudioBandRef,
-  hardwareOffered, studioSeen = true, onTaskLinked,
+  onArtifacts, shellEnabled, shellCapable, onShellEnabledChange, editorEnabled, onOpenTerminal,
+  onOpenShellFullscreen, onStudioBandRef, hardwareOffered, studioSeen = true, onTaskLinked,
+  studioFullscreen, onStudioFullscreenChange,
 }: SessionPanelProps) {
   /**
    * Is this a session of ANOTHER machine, reached through the relay?
@@ -171,6 +210,11 @@ export function SessionPanel({
   const slotLayout = resolveForViewport(rawSlotLayout, isMobile)
   const bottomIsStudio = !isMobile && editorEnabled === true && slotLayout.bottom === 'studio'
 
+  /** WHICH BAND RENDERS AT THE FOOT OF THE PANEL — `lib/panelBar.ts`'s own `bottomBandFor`. Kept
+   *  here as one small pure call rather than as a JSX ternary so the decision can be planted and
+   *  tested without mounting anything; see that function's own doc comment for the rule itself. */
+  const bottomBand = bottomBandFor({ bottomIsStudio, relayed, isMobile })
+
   /**
    * THE ONE PANEL BAR (design item 1) — computed here, where `slotLayout`/`artifactsStore`/`relayed`
    * are all already in scope, and handed down as data + one callback to whichever bottom band
@@ -189,13 +233,16 @@ export function SessionPanel({
    */
   const art = useArtifacts()
   const rightOccupant = rightSlotShowing(slotLayout, art.open)
-  const bottomOccupant = slotLayout.bottom
   const panelBarGates: PanelBarGates = {
     editorEnabled: editorEnabled === true,
     shellEnabled: shellEnabled === true,
     relayed,
     hardwareOffered: hardwareOffered === true,
   }
+  // GATED — a stale `bottom: 'shell'` left over from before the switch turned off reads as `'cli'`
+  // here too, or the bar would light no tab at all over a pane `ShellBand` draws anyway (its own
+  // `target` is clamped the same way independently). See `gatedBottomOccupant`'s own doc comment.
+  const bottomOccupant = gatedBottomOccupant(slotLayout.bottom, panelBarGates.shellEnabled)
   const barEntries = panelBarEntries(rightOccupant, bottomOccupant, panelBarGates)
   const onPanelBarPick = useCallback((id: PanelBarId) => {
     if (id === 'contents') {
@@ -392,9 +439,12 @@ export function SessionPanel({
           screen. It is keyed by session, so switching rows unmounts it — which is also what drops
           its stream, the client half of the unwatch discipline.
 
-          Absent on a RELAYED session for the same reason the live stream is: those routes are the
-          machine's own and a central refuses them outright, so a band there could only ever draw a
-          refusal. Absent when the machine does not serve shells at all — see `shellEnabled`.
+          WHICH BAND renders is `bottomBand` (`lib/panelBar.ts`'s `bottomBandFor`, computed above).
+          `shellEnabled` no longer decides PRESENCE — only `ShellBand`'s own shell half, through its
+          own `shellEnabled` prop below. Absent on a RELAYED session for the same reason the live
+          stream is: those routes are the machine's own and a central refuses them outright, so a
+          band there could only ever draw a refusal (`bar-only`, or `none` on a phone — untouched by
+          this fix, see `bottomBandFor`'s own doc comment).
 
           THE STUDIO CAN OCCUPY THIS SAME BAND (`lib/panelSlots.ts`'s `bottom` slot), and when it
           does this renders a SEPARATE small band rather than teaching `ShellBand` a third target:
@@ -403,7 +453,7 @@ export function SessionPanel({
           neither, and its own persistent host (`StudioHost`, mounted once by `SessionsPage`) is what
           must never be torn down by an ordinary collapse. `key={session.id}` still resets the band's
           own open/collapsed feel per session; the Studio's own mount lives one level up. */}
-      {bottomIsStudio ? (
+      {bottomBand === 'studio' ? (
         <StudioBand
           key={session.id}
           lang={lang}
@@ -417,9 +467,11 @@ export function SessionPanel({
           studioSeen={studioSeen}
           taskControl={taskControl}
           extraOverflowEntries={moveDownEntries}
+          fullscreen={studioFullscreen === true}
+          onFullscreenChange={onStudioFullscreenChange ?? (() => {})}
           {...(onStudioBandRef ? { contentRef: onStudioBandRef } : {})}
         />
-      ) : shellEnabled && !relayed ? (
+      ) : bottomBand === 'shell' ? (
         <ShellBand
           key={session.id}
           sessionId={session.id}
@@ -432,7 +484,18 @@ export function SessionPanel({
           barEntries={barEntries}
           onBarPick={onPanelBarPick}
           studioSeen={studioSeen}
-          bottomOccupant={bottomOccupant === 'cli' || bottomOccupant === 'shell' ? bottomOccupant : null}
+          // The security narrowing: WHICH of the two panes ShellBand may ever show/open, never
+          // whether it renders at all — see this prop's own doc comment on `ShellBand`.
+          shellEnabled={panelBarGates.shellEnabled}
+          shellCapable={shellCapable !== false}
+          {...(onShellEnabledChange ? { onShellEnabledChange } : {})}
+          // RAW, ungated — deliberately NOT the `bottomOccupant` const above (which
+          // `gatedBottomOccupant` already turned 'shell' into 'cli' for the BAR's own lit-tab
+          // reading). `ShellBand` decides for ITSELF whether a genuine 'shell' record is usable —
+          // see `resolveDockedTarget`'s own header — and needs the un-clamped slot value to do it,
+          // or the very record that should draw the disabled-shell empty state would already read
+          // as 'cli' by the time it got here.
+          bottomOccupant={slotLayout.bottom === 'cli' || slotLayout.bottom === 'shell' ? slotLayout.bottom : null}
           taskControl={taskControl}
           extraOverflowEntries={moveDownEntries}
           /*
@@ -447,13 +510,14 @@ export function SessionPanel({
            */
           onMoveToRight={id => openSlotPanel(id, 'right')}
         />
-      ) : !isMobile && (
-        /* NEITHER BAND EXISTS (design item 1: "It must also be present when no terminal is shown at
-           the bottom") — the session is relayed, or the shell is off, or nothing has ever been
-           placed at the bottom. Contents/Studio/Hardware must stay reachable regardless, or removing
-           the header's own copy of this bar (item 2) would make them unreachable on desktop
-           entirely. `PanelBarBand` is the same bar in the same slim shape `ShellBand`'s own
-           collapsed bar takes, minus a stream it has nothing to show. */
+      ) : bottomBand === 'bar-only' && (
+        /* THE ONLY CASE LEFT (design item 1: "It must also be present when no terminal is shown at
+           the bottom") — a RELAYED session on desktop: no `cli`/`shell` stream of its own to dock,
+           the one gap this fix leaves exactly as it found it (`bottomBandFor`'s own doc comment).
+           Contents/Studio/Hardware must stay reachable regardless, or removing the header's own copy
+           of this bar (item 2) would make them unreachable entirely. `PanelBarBand` is the same bar
+           in the same slim shape `ShellBand`'s own collapsed bar takes, minus a stream it has
+           nothing to show. */
         <PanelBarBand
           key={session.id}
           lang={lang}
@@ -464,7 +528,7 @@ export function SessionPanel({
           studioSeen={studioSeen}
           taskControl={taskControl}
           extraOverflowEntries={moveDownEntries}
-          reason={relayed ? 'relayed' : 'shell-off'}
+          reason="relayed"
         />
       )}
     </div>
@@ -489,7 +553,7 @@ export function SessionPanel({
  */
 function StudioBand({
   lang, open, columnHeight, onToggleOpen, onMoveToRight, onClose, barEntries, onBarPick, studioSeen,
-  taskControl, extraOverflowEntries, contentRef,
+  taskControl, extraOverflowEntries, contentRef, fullscreen, onFullscreenChange,
 }: {
   lang: 'pt' | 'en'
   open: boolean
@@ -499,6 +563,16 @@ function StudioBand({
   onToggleOpen: () => void
   onMoveToRight: () => void
   onClose: () => void
+  /**
+   * TRUE FULL SCREEN — the whole viewport, not merely "fills the centre column" (`heightPrefs.full`,
+   * unaffected by this). Owned by `SessionsPage` (it also has to hand the SAME flag to `Studio.tsx`,
+   * a sibling mount reached through `StudioHost`'s portal, which this component cannot see), so this
+   * is a controlled pair of props rather than local state — see `resolveStudioBandDrag` in
+   * `shellBand.ts` for the threshold a drag crosses to request it, and `Studio.tsx`'s own gear menu
+   * for the deliberate (non-drag) way to ask for the same thing.
+   */
+  fullscreen: boolean
+  onFullscreenChange: (next: boolean) => void
   /**
    * THE ONE PANEL BAR (design item 1) — the same `entries`/`onPick` `ShellBand`'s desktop bar
    * renders, computed once by `SessionPanel`. Picking Claude Code or Shell from it DISPLACES the
@@ -543,7 +617,21 @@ function StudioBand({
       if (!d) return
       // Grows UPWARD, exactly like `ShellBand`'s own handle: docked at the bottom, so dragging up
       // must make it taller.
-      applyHeight(resolveBandHeight(d.startH + (d.startY - clientY), columnHeight))
+      const resolved = resolveStudioBandDrag(d.startH + (d.startY - clientY), columnHeight)
+      // `height`/`full` are ALWAYS applied — never skipped in favour of only flipping `fullscreen`
+      // — because they stay exactly what the ORDINARY snap would have answered (see
+      // `resolveStudioBandDrag`'s own header): this is what leaves a SANE, column-filling record
+      // behind for `renderedHeight` to fall back to the moment full screen is left, rather than
+      // whatever the drag's own raw, unbounded number happened to be.
+      applyHeight(resolved)
+      if (resolved.fullscreen && !fullscreen) {
+        onFullscreenChange(true)
+        // The gesture is SPENT: once past the threshold there is nothing left a further pixel of
+        // mouse movement could mean, and continuing to track it would just keep calling
+        // `applyHeight`/`onFullscreenChange` on every subsequent move for no visible effect (the
+        // band's own box no longer reads either value once `fullscreen` takes over the layout).
+        dragRef.current = null
+      }
     }
     const onMouse = (e: MouseEvent) => move(e.clientY)
     const onTouch = (e: TouchEvent) => { const p = e.touches[0]; if (p) move(p.clientY) }
@@ -558,15 +646,28 @@ function StudioBand({
       window.removeEventListener('touchmove', onTouch)
       window.removeEventListener('touchend', end)
     }
-  }, [applyHeight, columnHeight])
+  }, [applyHeight, columnHeight, fullscreen, onFullscreenChange])
+
+  // COLLAPSING EXITS FULL SCREEN TOO — a band collapsed while fullscreen would otherwise leave the
+  // flag standing with nothing on screen it still describes, so the NEXT expand would silently
+  // reopen full screen from a plain "Expandir" press nobody asked to mean that.
+  useEffect(() => {
+    if (!open && fullscreen) onFullscreenChange(false)
+  }, [open, fullscreen, onFullscreenChange])
   return (
     <div style={{
-      // FULL (design item 7) makes THIS ROOT flex-stretch within `SessionPanel`'s own column,
-      // competing with the chat area's own `flex: 1, minHeight: 0` for the same space — which is
-      // what lets the band reach the column's actual height without ever measuring a pixel figure
-      // that has to subtract the chat area's chrome by hand. Not full: sized by its own content
-      // (the bar plus whatever explicit height the content box below asks for), same as always.
-      ...(heightPrefs.full ? { flex: '1 1 auto', minHeight: 0 } : { flexShrink: 0 }),
+      // TRUE FULL SCREEN covers the WHOLE VIEWPORT — the sticky header, the fleet aside, everything
+      // — not merely the centre column `heightPrefs.full` already fills; `STUDIO_FULLSCREEN_Z` sits
+      // comfortably below every modal (`ConfirmModal` is 2000) so a "close without saving" dialog
+      // still draws over it. FULL (design item 7, unaffected by this) makes the root flex-stretch
+      // within `SessionPanel`'s own column instead, competing with the chat area's own `flex: 1,
+      // minHeight: 0` for the same space — which is what lets the band reach the column's actual
+      // height without ever measuring a pixel figure that has to subtract the chat area's chrome by
+      // hand. Neither: sized by its own content (the bar plus whatever explicit height the content
+      // box below asks for), same as always.
+      ...(fullscreen
+        ? { position: 'fixed', inset: 0, zIndex: STUDIO_FULLSCREEN_Z }
+        : heightPrefs.full ? { flex: '1 1 auto', minHeight: 0 } : { flexShrink: 0 }),
       display: 'flex', flexDirection: 'column',
       borderTop: '1px solid var(--border)', background: 'var(--bg-surface)',
     }}>
@@ -623,38 +724,59 @@ function StudioBand({
         >{open ? <ChevronDown size={14} /> : <ChevronUp size={14} />}</button>
       </div>
       {open && (
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
+        // A FRAGMENT, NOT A DIV — this is the freeze's root cause and the whole fix.
+        //
+        // The handle and the content box below used to sit inside an extra `<div style={{display:
+        // 'flex', flexDirection: 'column'}}>` wrapper, with no `flex`/`minHeight` of its own — so it
+        // took only the height its CONTENT asked for (default `flex: 0 1 auto`) instead of growing
+        // to fill whatever the ROOT above it (which DOES flex-stretch when `full`) actually had to
+        // give it. The content box's own `flex: '1 1 auto'` then had nothing to grow INTO — a
+        // flex-grow child cannot exceed a non-growing parent — so both handle and content collapsed
+        // to their minimum size and the root's remaining ~400px sat empty below them: the drag
+        // reached the top, the band's OWN box did grow (confirmed by measuring it directly), and
+        // everything inside it rendered into a sliver at the top, which is what read as "the band
+        // went empty… and never became full screen." `ShellBand` never had this bug — its own
+        // handle and content box are direct children of ITS root, with no such wrapper — and this
+        // fragment makes `StudioBand` match that shape exactly rather than inventing a second one.
+        <>
           {/* THE DRAG HANDLE (design item 7) — free-resizing, no low ceiling, and it SNAPS to fill
               the centre column within `BAND_SNAP_THRESHOLD_PX` of its top; see `resolveBandHeight`
               and this component's own header for why the height/full record is SHARED with
-              `ShellBand`. Same geometry as that band's own handle: on the TOP edge, grows upward. */}
-          <div
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label={pt ? 'Redimensionar o Studio' : 'Resize the Studio'}
-            tabIndex={0}
-            className="ag-resize-handle"
-            onMouseDown={e => { e.preventDefault(); onDragStart(e.clientY) }}
-            onTouchStart={e => { const p = e.touches[0]; if (p) onDragStart(p.clientY) }}
-            onKeyDown={e => {
-              if (e.key === 'ArrowUp') { e.preventDefault(); applyHeight(resolveBandHeight(renderedHeight + 24, columnHeight)) }
-              if (e.key === 'ArrowDown') { e.preventDefault(); applyHeight(resolveBandHeight(renderedHeight - 24, columnHeight)) }
-            }}
-            style={{ height: 6, cursor: 'ns-resize', background: 'transparent' }}
-          ><ResizeGrip orientation="horizontal" /></div>
+              `ShellBand`. Same geometry as that band's own handle: on the TOP edge, grows upward.
+              ABSENT in true full screen — there is nothing left to negotiate a HEIGHT for once the
+              band covers the whole viewport, and a handle that visually does nothing is worse than
+              none: the way back is the chevron above, the gear menu, or Esc, never this drag. */}
+          {!fullscreen && (
+            <div
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label={pt ? 'Redimensionar o Studio' : 'Resize the Studio'}
+              tabIndex={0}
+              className="ag-resize-handle"
+              onMouseDown={e => { e.preventDefault(); onDragStart(e.clientY) }}
+              onTouchStart={e => { const p = e.touches[0]; if (p) onDragStart(p.clientY) }}
+              onKeyDown={e => {
+                if (e.key === 'ArrowUp') { e.preventDefault(); applyHeight(resolveBandHeight(renderedHeight + 24, columnHeight)) }
+                if (e.key === 'ArrowDown') { e.preventDefault(); applyHeight(resolveBandHeight(renderedHeight - 24, columnHeight)) }
+              }}
+              style={{ height: 6, cursor: 'ns-resize', background: 'transparent' }}
+            ><ResizeGrip orientation="horizontal" /></div>
+          )}
           <div style={{
-            // NOT full: an explicit pixel height, because the ROOT above is auto-sized (content
-            // decides it) and has no box of its own to hand this one a share of. FULL: the ROOT is
-            // itself flex-stretched (see its own style, above), so this box in turn just takes
-            // `flex: 1` of THAT — the same two-step every other flexed box in this file uses.
-            ...(heightPrefs.full
+            // NOT full/fullscreen: an explicit pixel height, because the ROOT above is auto-sized
+            // (content decides it) and has no box of its own to hand this one a share of. FULL OR
+            // FULLSCREEN: the ROOT is itself stretched (`flex: 1 1 auto` or `position: fixed;
+            // inset: 0` — see its own style, above), so this box in turn just takes `flex: 1` of
+            // THAT — the same two-step every other flexed box in this file uses. This only works
+            // because it is now a DIRECT child of the root — see the fragment above.
+            ...(heightPrefs.full || fullscreen
               ? { flex: '1 1 auto', minHeight: 0 }
               : { height: Math.max(BAND_MIN_PX, renderedHeight), flexShrink: 0 }),
             display: 'flex', flexDirection: 'column', padding: '0 12px 10px',
           }}>
             <div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} />
           </div>
-        </div>
+        </>
       )}
     </div>
   )
@@ -662,10 +784,16 @@ function StudioBand({
 
 /**
  * PanelBarBand — the panel bar with nothing docked behind it (design item 1: "It must also be
- * present when no terminal is shown at the bottom"). Renders when the session is relayed (no
- * `cli`/`shell` stream of its own to show) or the shell is off — the two cases that used to leave
- * the bottom of the panel with NOTHING at all, which made Contents/Studio/Hardware unreachable on
- * desktop the moment the header's own copy of this bar (design item 2) was removed.
+ * present when no terminal is shown at the bottom"). Renders on a RELAYED session — no `cli`/`shell`
+ * stream of its own to show — the one case left with genuinely nothing to dock, so
+ * Contents/Studio/Hardware stay reachable rather than vanishing along with the terminal streams.
+ *
+ * `reason` used to also carry `'shell-off'`: before `bottomBandFor` (`lib/panelBar.ts`) existed, a
+ * LOCAL session with the shell switched off fell through to this same band, because `ShellBand` was
+ * gated on `shellEnabled` at the call site instead of on its own `shellEnabled` prop. That was the
+ * bug this pass fixes — a local session always gets `ShellBand` now (its own CLI pane is the
+ * session's harness terminal, never gated by the shell switch), so this band is relayed-only and the
+ * reason is no longer a choice.
  *
  * A SLIM BAR ONLY — the same header row `ShellBand`'s own collapsed bar takes (same height, same
  * toggle), minus a stream it has nothing to show. Expanding it reveals one sentence naming WHY there
@@ -685,17 +813,13 @@ function PanelBarBand({
   /** "Bring [Studio/cli] to the bottom" (owner feedback, 2026-09-17) — see `SessionPanel`'s own
    *  `moveDownEntries`. `BandOverflowMenu` itself renders nothing when this is empty. */
   extraOverflowEntries?: readonly BandOverflowEntry[]
-  reason: 'relayed' | 'shell-off'
+  reason: 'relayed'
 }) {
   const pt = lang === 'pt'
-  const REASON_TEXT: Record<'relayed' | 'shell-off', { en: string; pt: string }> = {
+  const REASON_TEXT: Record<'relayed', { en: string; pt: string }> = {
     relayed: {
       en: 'This session belongs to another machine — no terminal to show here.',
       pt: 'Esta sessão pertence a outra máquina — não há terminal para mostrar aqui.',
-    },
-    'shell-off': {
-      en: 'This machine’s shell is off — turn it on in Settings → Sessions to dock a terminal here.',
-      pt: 'O shell desta máquina está desligado — ative em Configurações → Sessões para encaixar um terminal aqui.',
     },
   }
   const [barWidthRef, barWidth] = useElementWidth()

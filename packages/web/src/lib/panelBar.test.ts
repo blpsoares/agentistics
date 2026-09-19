@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { bandBarCompact, panelBarEntries, studioLocationLabel, type PanelBarGates } from './panelBar'
+import {
+  bandBarCompact, bottomBandFor, gatedBottomOccupant, panelBarEntries, studioLocationLabel,
+  type PanelBarGates,
+} from './panelBar'
 
 const OPEN: PanelBarGates = {
   editorEnabled: true, shellEnabled: true, relayed: false, hardwareOffered: true,
@@ -164,4 +167,111 @@ describe('studioLocationLabel — the tag\'s own words', () => {
     expect(studioLocationLabel('bottom', false)).toBe('bottom')
     expect(studioLocationLabel('bottom', true)).toBe('embaixo')
   })
+})
+
+// The bug: a LOCAL session with the shell switch off used to draw NEITHER `StudioBand` nor
+// `ShellBand` at all (`SessionPanel.tsx`'s old JSX read `shellEnabled && !relayed`) — no way to
+// reach Contents/Studio/Hardware, no task control, no panel switcher whatsoever. `bottomBandFor`
+// is the pure decision the fix hangs on: PRESENCE no longer reads `shellEnabled` at all, only
+// `ShellBand`'s own CONTENT does (`panelBarEntries`' `shell` gate, `ShellBand`'s own `shellEnabled`
+// prop).
+describe('gatedBottomOccupant — a stale/requested "shell" reads as "cli" once the switch is off', () => {
+  const OCCUPANTS = ['contents', 'studio', 'cli', 'shell', 'hardware', null] as const
+
+  test('shellEnabled on: every occupant passes through unchanged', () => {
+    for (const occ of OCCUPANTS) expect(gatedBottomOccupant(occ, true)).toBe(occ)
+  })
+
+  test('shellEnabled off: "shell" reads as "cli"', () => {
+    expect(gatedBottomOccupant('shell', false)).toBe('cli')
+  })
+
+  test('shellEnabled off: every OTHER occupant, including null, passes through unchanged', () => {
+    for (const occ of OCCUPANTS.filter(o => o !== 'shell')) {
+      expect(gatedBottomOccupant(occ, false)).toBe(occ)
+    }
+  })
+})
+
+describe('bottomBandFor — which band renders at the foot of the panel', () => {
+  test('the Studio wins first, whatever relayed/isMobile say', () => {
+    for (const relayed of [true, false]) {
+      for (const isMobile of [true, false]) {
+        expect(bottomBandFor({ bottomIsStudio: true, relayed, isMobile })).toBe('studio')
+      }
+    }
+  })
+
+  test('a LOCAL session always gets the shell band — desktop and mobile alike, the fix itself', () => {
+    expect(bottomBandFor({ bottomIsStudio: false, relayed: false, isMobile: false })).toBe('shell')
+    expect(bottomBandFor({ bottomIsStudio: false, relayed: false, isMobile: true })).toBe('shell')
+  })
+
+  test('a RELAYED session on desktop falls back to the bar-only band', () => {
+    expect(bottomBandFor({ bottomIsStudio: false, relayed: true, isMobile: false })).toBe('bar-only')
+  })
+
+  // Deliberately UNTOUCHED by this fix — see the function's own doc comment on why.
+  test('a RELAYED session on a phone renders nothing, exactly as before this fix', () => {
+    expect(bottomBandFor({ bottomIsStudio: false, relayed: true, isMobile: true })).toBe('none')
+  })
+})
+
+/**
+ * EXHAUSTIVE: every `shellEnabled × editorEnabled × relayed × bottom-occupant` combination
+ * (× `isMobile`, since the relayed fallback is desktop-only) — both the PRESENCE decision
+ * (`bottomBandFor`) and the ENTRIES a caller builds from the same gated occupant
+ * (`gatedBottomOccupant` + `panelBarEntries`), the two halves `SessionPanel.tsx` computes once and
+ * hands to whichever band actually renders.
+ *
+ * `bottomIsStudio` is computed here exactly the way `SessionPanel.tsx` computes it
+ * (`!isMobile && editorEnabled && bottom === 'studio'`) rather than passed in directly, so this
+ * grid also exercises the interaction between `editorEnabled`/`isMobile` and the Studio winning
+ * first — not only `bottomBandFor`'s own narrower contract.
+ */
+describe('the fix, exhaustively: shellEnabled × editorEnabled × relayed × bottom occupant × isMobile', () => {
+  const OCCUPANTS = [null, 'studio', 'cli', 'shell'] as const
+
+  for (const shellEnabled of [true, false]) {
+    for (const editorEnabled of [true, false]) {
+      for (const relayed of [true, false]) {
+        for (const rawBottom of OCCUPANTS) {
+          for (const isMobile of [true, false]) {
+            test(`shellEnabled=${shellEnabled} editorEnabled=${editorEnabled} relayed=${relayed} `
+              + `bottom=${String(rawBottom)} isMobile=${isMobile}`, () => {
+              const bottomIsStudio = !isMobile && editorEnabled && rawBottom === 'studio'
+              const band = bottomBandFor({ bottomIsStudio, relayed, isMobile })
+
+              // PRESENCE — the ONE gap this fix leaves in place: a relayed session on a phone,
+              // showing no Studio, renders nothing. Every other combination gets a band.
+              if (relayed && isMobile && !bottomIsStudio) expect(band).toBe('none')
+              else expect(band).not.toBe('none')
+
+              // shellEnabled decides NOTHING about presence — a local, non-Studio session always
+              // gets the shell band, whatever the switch says. This is the fix itself.
+              if (!relayed && !bottomIsStudio) expect(band).toBe('shell')
+
+              // ENTRIES — built from the SAME gated occupant `ShellBand` is handed, so the bar's
+              // lit tab and the pane actually on screen can never disagree.
+              const gated = gatedBottomOccupant(rawBottom, shellEnabled)
+              const gates: PanelBarGates = { editorEnabled, shellEnabled, relayed, hardwareOffered: true }
+              const ids = panelBarEntries(null, gated, gates).map(e => e.id)
+
+              // No Shell tab, ever, once the switch is off.
+              if (!shellEnabled) expect(ids).not.toContain('shell')
+              // Claude Code is gated by being relayed alone — never by the shell switch.
+              expect(ids.includes('cli')).toBe(!relayed)
+
+              // The consistency fix: a stale/requested "shell" occupant with the switch off lights
+              // "Claude Code" instead, matching the pane `ShellBand`'s own clamp actually draws.
+              if (rawBottom === 'shell' && !shellEnabled && !relayed) {
+                const cli = panelBarEntries(null, gated, gates).find(e => e.id === 'cli')
+                expect(cli?.on).toBe(true)
+              }
+            })
+          }
+        }
+      }
+    }
+  }
 })

@@ -24,7 +24,7 @@ import { PROJECTS_DIR, AGENTISTICS_DATA_DIR } from './config'
 import { safeReadDir } from './utils'
 import { decodeProjectDir } from './git'
 import { getEnabledAdapters } from './adapters/types'
-import { handleLogout, handleSession, getPrincipal, getPrincipalSession, makePrincipalSessionCookieHeader, SESSION_REFRESH_MS } from './auth'
+import { handleLogout, handleSession, getPrincipal, getPrincipalSession, makePrincipalSessionCookieHeader, SESSION_REFRESH_MS, isAuthed } from './auth'
 import { routeCapability, capabilityDenied } from './capability-guard'
 
 /**
@@ -61,7 +61,8 @@ async function readLocalLiveSnapshot(sessions: SessionMeta[]): Promise<{
 import { AUTH_PUBLIC, isAdminPath, MFA_EXEMPT } from './index-routes'
 import { CAPS, PROFILE } from './exposure'
 import { chatAllowed } from './chat-gate'
-import { shellAllowed } from './sessions/shell-gate'
+import { shellAllowedNow } from './sessions/shell-gate'
+import { getShellOverride, setShellOverride } from './sessions/shell-override-store'
 import { editorAllowed } from './sessions/editor-gate'
 import { limiter, RULES, rateRuleFor, tooManyRequests } from './rate-limit'
 import { resolveClientIp } from './client-ip'
@@ -1712,12 +1713,14 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             ? { subtaskId: body.subtaskId }
             : {})
         if (result.ok) return json({ ok: true })
-        // `blocked` is a 422, the same status `markTask`'s own `blocked_needs_reason` answers with
-        // — both name a piece of work this request cannot do YET, not a resource that is missing.
-        // Everything else stays 404: the ref, the session or the subtask named nothing.
+        // `blocked` and `subtask_in_group` are both 422, the same status `markTask`'s own
+        // `blocked_needs_reason` answers with — each names a piece of work this request cannot do,
+        // not a resource that is missing (the target subtask is a real, existing MEMBER of a group,
+        // §F.1 — it is simply never allowed to hold a session). Everything else stays 404: the ref,
+        // the session or the subtask named nothing.
         return json(
           { ok: false, reason: result.reason, ...(result.blockedBy ? { blockedBy: result.blockedBy } : {}) },
-          result.reason === 'blocked' ? 422 : 404,
+          result.reason === 'blocked' || result.reason === 'subtask_in_group' ? 422 : 404,
         )
       }
       if (verb === 'links') {
@@ -1736,12 +1739,25 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           if (body.remove === true) return json({ ok: await mod.removeSubtask(body.id) })
           // A bare `{id, done}` is the tick; anything else is a column edit. Both land on
           // `patchSubtask`, which derives `done` from `status` so the two cannot disagree.
-          // `done_needs_session` is a 422, the same shape `sessions`'s `blocked` answers with above
-          // — both name a piece of work this request cannot do YET, not a resource that is missing.
-          // `no_such_subtask` stays 404: the id named nothing.
+          // `done_needs_session`/`invalid_group`/`subtask_has_sessions`/`group_field_conflict` are
+          // 422, the same shape `sessions`'s `blocked` answers with above — each names a piece of
+          // work this request cannot do, not a resource that is missing. `no_such_subtask` stays
+          // 404: the id named nothing.
           if (typeof body.done === 'boolean' && Object.keys(body).length === 2) {
             const result = await mod.setSubtaskDone(body.id, body.done)
             return json(result, result.ok ? 200 : (result.message === 'done_needs_session' ? 422 : 404))
+          }
+          // A staged session draft (t-918cc82233): `null` clears, an object is validated HERE before
+          // the write — a malformed one (no prompt, a relative cwd) is refused outright (400) rather
+          // than silently dropped, which would look on screen like the save had succeeded.
+          let stagedSessionPatch: import('./sessions/task-model').Subtask['stagedSession'] | null | undefined
+          if (body.stagedSession === null) {
+            stagedSessionPatch = null
+          } else if (body.stagedSession !== undefined) {
+            const { normalizeStagedSession } = await import('@agentistics/core')
+            const normalized = normalizeStagedSession(body.stagedSession)
+            if (!normalized) return json({ error: 'bad_staged_session' }, 400)
+            stagedSessionPatch = normalized
           }
           const result = await mod.patchSubtask(body.id, {
             ...(typeof body.title === 'string' ? { title: body.title } : {}),
@@ -1757,17 +1773,39 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             ...(Array.isArray(body.blockedBy)
               ? { blockedBy: body.blockedBy.filter((x): x is string => typeof x === 'string') }
               : {}),
-            // The rollup group (spec §B.5). `null` is the CLEAR and is therefore matched
-            // explicitly: it is a value the caller sent, not an absent field, and the two must not
-            // collapse — an omitted `groupId` leaves the column alone, a null removes it.
+            // SUPERSEDED (§F) — kept only so the §B-era UI keeps working. `null` is the CLEAR and
+            // is matched explicitly: an omitted `groupId` leaves the column alone, a null removes it.
             ...(typeof body.groupId === 'string'
               ? { groupId: body.groupId }
               : body.groupId === null ? { groupId: null } : {}),
+            // Join/leave a group (§F.1). `patchSubtask` validates the reference server-side
+            // (`invalid_group`, 422) — this is pass-through, not a second copy of that rule.
+            ...(typeof body.parentGroupId === 'string'
+              ? { parentGroupId: body.parentGroupId }
+              : body.parentGroupId === null ? { parentGroupId: null } : {}),
+            ...(stagedSessionPatch !== undefined ? { stagedSession: stagedSessionPatch } : {}),
           })
-          return json(result, result.ok ? 200 : (result.message === 'done_needs_session' ? 422 : 404))
+          return json(
+            result,
+            result.ok
+              ? 200
+              : (result.message === 'done_needs_session' || result.message === 'invalid_group'
+                  || result.message === 'subtask_has_sessions'
+                  || result.message === 'group_field_conflict'
+                  || result.message === 'subtask_in_group'
+                ? 422
+                : 404),
+          )
         }
-        const ok = await mod.addSubtask(ref, String(body.title ?? ''))
-        return json({ ok }, ok ? 200 : 400)
+        // `isGroup: true` creates a GROUP (§F.1) instead of an ordinary subtask — decided only at
+        // creation, `addSubtask` never offers a way to change it afterwards. The new id travels
+        // back so a caller minting a group (rather than an ordinary subtask) can join members to
+        // it in the same flow — a bare `{ ok }` gave the "create a group with…" gesture nothing to
+        // join against.
+        const newId = await mod.addSubtask(ref, String(body.title ?? ''), {
+          ...(body.isGroup === true ? { isGroup: true } : {}),
+        })
+        return json({ ok: newId !== null, id: newId }, newId !== null ? 200 : 400)
       }
       if (verb === 'claim') {
         // `release: true` gives it back; anything else takes it. One verb, because a caller holding
@@ -2612,7 +2650,33 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
-      if (!shellAllowed(CAPS.localShell, (await readPreferences()).shellEnabled)) {
+      // "ENABLE NOW" — the disabled-shell empty state's temporary button. It sets the in-memory
+      // override (`shell-override-store.ts`) and nothing else: never `preferences.json`, which is
+      // "Enable permanently"'s own door (`PUT /api/preferences`, unchanged). Checked BEFORE the
+      // `shellAllowedNow` gate below on purpose — that gate is what this very route exists to get
+      // past, so gating IT with itself would refuse the one request that is supposed to work while
+      // the preference is off. `CAPS.localShell` still applies first: an override can only ever
+      // restore what the PREFERENCE narrowed, never what the exposure profile denied outright.
+      if (url.pathname === '/api/shell/enable-now' && req.method === 'POST') {
+        if (!CAPS.localShell) {
+          return new Response(JSON.stringify({ error: 'shell_disabled' }), {
+            status: 403,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        if (!isAuthed(req)) {
+          return new Response(JSON.stringify({ error: 'auth_required' }), {
+            status: 401,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        setShellOverride(true)
+        void writeAudit({ action: 'shell.override.enabled', ip: clientIp })
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      if (!shellAllowedNow(CAPS.localShell, (await readPreferences()).shellEnabled, getShellOverride())) {
         return new Response(JSON.stringify({ error: 'shell_disabled' }), {
           status: 403,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },

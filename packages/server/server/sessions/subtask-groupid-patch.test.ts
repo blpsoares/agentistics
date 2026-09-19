@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -127,4 +127,78 @@ test('a patch that does not mention groupId leaves it alone', async () => {
     console.log(JSON.stringify({ result, groupId: row.groupId ?? null, assignee: row.assignee }))
   `)
   expect(out).toEqual({ result: { ok: true }, groupId: 'g-abc', assignee: 'alguem' })
+})
+
+/**
+ * The legacy `groupId` (§B) and the current `isGroup`/`parentGroupId` pair (§F) may never both name
+ * a group on one record — two independent, unreconciled "which group" answers on one subtask.
+ * `patchSubtask` refuses (`group_field_conflict`, 422) rather than letting one silently win.
+ */
+describe('groupId vs isGroup/parentGroupId — never both on one record (§F, third review round)', () => {
+  test('setting groupId on a subtask that is itself a GROUP is refused', async () => {
+    const out = await run(`
+      ${task('t1')}
+      ${subtask('g1', 't1', 'isGroup: true,')}
+      const result = await web.patchSubtask('g1', { groupId: 'g-abc' })
+      const after = await store.read()
+      const row = after.subtasks.find(s => s.id === 'g1')
+      console.log(JSON.stringify({ result, groupId: row.groupId ?? null }))
+    `)
+    expect(out).toEqual({ result: { ok: false, message: 'group_field_conflict' }, groupId: null })
+  })
+
+  test('setting groupId on a subtask that is already a group MEMBER is refused', async () => {
+    const out = await run(`
+      ${task('t1')}
+      ${subtask('g1', 't1', 'isGroup: true,')}
+      ${subtask('m1', 't1', "parentGroupId: 'g1',")}
+      const result = await web.patchSubtask('m1', { groupId: 'g-abc' })
+      const after = await store.read()
+      const row = after.subtasks.find(s => s.id === 'm1')
+      console.log(JSON.stringify({ result, groupId: row.groupId ?? null, parentGroupId: row.parentGroupId ?? null }))
+    `)
+    expect(out).toEqual({
+      result: { ok: false, message: 'group_field_conflict' }, groupId: null, parentGroupId: 'g1',
+    })
+  })
+
+  test('setting parentGroupId on a subtask that already carries a legacy groupId is refused — even though the target group is otherwise valid', async () => {
+    const out = await run(`
+      ${task('t1')}
+      ${subtask('g1', 't1', 'isGroup: true,')}
+      ${subtask('s1', 't1', "groupId: 'g-abc',")}
+      const result = await web.patchSubtask('s1', { parentGroupId: 'g1' })
+      const after = await store.read()
+      const row = after.subtasks.find(s => s.id === 's1')
+      console.log(JSON.stringify({ result, groupId: row.groupId ?? null, parentGroupId: row.parentGroupId ?? null }))
+    `)
+    expect(out).toEqual({
+      result: { ok: false, message: 'group_field_conflict' }, groupId: 'g-abc', parentGroupId: null,
+    })
+  })
+
+  test('control: an old row that already carries a stale groupId is left alone by a patch that never touches either field', async () => {
+    const out = await run(`
+      ${task('t1')}
+      ${subtask('g1', 't1', 'isGroup: true,')}
+      const result = await web.patchSubtask('g1', { assignee: 'alguem' })
+      const after = await store.read()
+      const row = after.subtasks.find(s => s.id === 'g1')
+      console.log(JSON.stringify({ result, assignee: row.assignee }))
+    `)
+    expect(out).toEqual({ result: { ok: true }, assignee: 'alguem' })
+  })
+
+  test('control: clearing groupId to null on a group member does not conflict with itself', async () => {
+    const out = await run(`
+      ${task('t1')}
+      ${subtask('g1', 't1', 'isGroup: true,')}
+      ${subtask('m1', 't1', "parentGroupId: 'g1', groupId: undefined,")}
+      const result = await web.patchSubtask('m1', { groupId: null })
+      const after = await store.read()
+      const row = after.subtasks.find(s => s.id === 'm1')
+      console.log(JSON.stringify({ result, groupId: row.groupId ?? null, parentGroupId: row.parentGroupId ?? null }))
+    `)
+    expect(out).toEqual({ result: { ok: true }, groupId: null, parentGroupId: 'g1' })
+  })
 })

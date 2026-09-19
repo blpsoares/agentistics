@@ -1,4 +1,4 @@
-import type { BillingReadiness, BillingSettings, CostBasis, MonthlyCommitment, SavedComparison, Filters, Lang, Theme, SessionMeta, AppData, StatsCache, HarnessId, Project } from '@agentistics/core'
+import type { BillingReadiness, BillingSettings, CostBasis, MonthlyCommitment, SavedComparison, SessionPreset, Filters, Lang, Theme, SessionMeta, AppData, StatsCache, HarnessId, Project } from '@agentistics/core'
 import type { useDerivedStats } from '../hooks/useData'
 import type { PlanBasisView } from '../hooks/usePlanBasis'
 import type { A11yState } from '../hooks/useAccessibility'
@@ -82,6 +82,10 @@ export interface AppContext {
   /** Persists the COMPLETE settings object. `writePreferencesTo` merges shallowly, so a partial
    *  save would replace the whole timeline with the fragment. */
   saveBilling: (next: BillingSettings) => Promise<void>
+  /** Saved "quick launch" session templates — see `@agentistics/core`'s `sessionPresets.ts`.
+   *  Per-machine, local only, same as `comparisons`. */
+  sessionPresets: SessionPreset[]
+  saveSessionPresets: (next: SessionPreset[]) => Promise<void>
 
   /** Which basis every cost figure is expressed in. Plumbed exactly like `currency`.
    *  Always `'api'` on a central, which cannot price a fleet from one operator's timeline. */
@@ -191,6 +195,13 @@ export interface AppContext {
    *  no such field at all — and reads as OFF here for the ordinary reason any not-yet-known value
    *  does: `SessionsPage`/`SessionPanel` gate on `=== true`, never on "not `=== false`". */
   shellEnabled?: boolean
+
+  /** The in-memory "Enable now" override's own raw value (`shell-override-store.ts`), reported
+   *  apart from the combined `shellEnabled` above so a reader can say WHICH of the two put it on:
+   *  "ligado" (the ordinary preference) and "ligado até reiniciar o servidor" (this override) are
+   *  different sentences, and collapsing them into one boolean makes the second unreachable.
+   *  `undefined` is the same not-loaded-yet reading every other flag on this object carries. */
+  shellOverride?: boolean
 
   /** What `/api/fleet/tree*` will ACTUALLY answer: `CAPS.localShell` AND the user's own switch,
    *  resolved by the server (`sessions/editor-gate.ts`) and reported by `GET /api/team/session`.

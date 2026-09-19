@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { shellAllowed } from './shell-gate'
+import { shellAllowed, shellAllowedNow } from './shell-gate'
 
 /**
  * A raw shell is strictly more powerful than the chat, which `chat-gate.ts` already calls the most
@@ -38,4 +38,31 @@ test('the preference may only ever NARROW the profile, never re-open it', () => 
 test('plant: the old strict reading no longer matches this module\'s behaviour', () => {
   const oldStrictReading = (capable: boolean, preference: boolean | undefined) => capable && preference === true
   expect(shellAllowed(true, undefined)).not.toBe(oldStrictReading(true, undefined))
+})
+
+/**
+ * shellAllowedNow — the "Enable now" override, checked in `shell-gate.test.ts` beside its own gate
+ * because the whole point of the override is that it can NEVER let a disabled profile through.
+ */
+
+test('override lights the shell back up when only the PREFERENCE turned it off', () => {
+  expect(shellAllowedNow(true, false, true)).toBe(true)
+})
+
+test('override true + capable false stays off — the profile is the one thing it may never bypass', () => {
+  expect(shellAllowedNow(false, true, true)).toBe(false)
+  expect(shellAllowedNow(false, undefined, true)).toBe(false)
+  expect(shellAllowedNow(false, false, true)).toBe(false)
+})
+
+test('override absent (false) changes nothing — same answer as the plain gate', () => {
+  expect(shellAllowedNow(true, undefined, false)).toBe(shellAllowed(true, undefined))
+  expect(shellAllowedNow(true, false, false)).toBe(shellAllowed(true, false))
+  expect(shellAllowedNow(true, true, false)).toBe(shellAllowed(true, true))
+  expect(shellAllowedNow(false, true, false)).toBe(shellAllowed(false, true))
+})
+
+test('override never matters once the preference already says yes', () => {
+  expect(shellAllowedNow(true, true, false)).toBe(true)
+  expect(shellAllowedNow(true, undefined, false)).toBe(true)
 })

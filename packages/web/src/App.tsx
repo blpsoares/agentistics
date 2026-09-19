@@ -27,9 +27,9 @@ import { useIsMobile } from './hooks/useIsMobile'
 import { useAccessibility } from './hooks/useAccessibility'
 import type { TagDef } from './lib/tagMatch'
 import { canCreateTagFromFilters, filtersToTagDraft } from './lib/filtersToTag'
-import type { BillingSettings, CostBasis, Filters, HarnessId, HealthIssue, SavedComparison, TeamConfig } from '@agentistics/core'
+import type { BillingSettings, CostBasis, Filters, HarnessId, HealthIssue, SavedComparison, SessionPreset, TeamConfig } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
-import { billingReadiness, monthlyCommitment, normalizeBillingSettings, normalizeComparisons, planAllocation, formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections, fmt, totalTokens, totalTokensExplained } from '@agentistics/core'
+import { billingReadiness, monthlyCommitment, normalizeBillingSettings, normalizeComparisons, normalizeSessionPresets, planAllocation, formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections, fmt, totalTokens, totalTokensExplained } from '@agentistics/core'
 import { buildDeniedRepoLabels } from './lib/shareRepos'
 import { StatCard } from './components/StatCard'
 import { StreakBreakdownButton } from './components/StreakBreakdownButton'
@@ -152,8 +152,12 @@ interface TeamSessionState {
    *  Undefined on an older server, which had no switch — treated as "the capability decides",
    *  so upgrading the web ahead of the server never hides a chat that still works. */
   chatEnabled?: boolean
-  /** The same, for `/api/shell/*`. Undefined reads as OFF — see `AppContext.shellEnabled`. */
+  /** The same, for `/api/shell/*`. Undefined reads as OFF — see `AppContext.shellEnabled`. Already
+   *  folds in the in-memory "Enable now" override — see `shellOverride` below for its raw value. */
   shellEnabled?: boolean
+  /** The override's own raw value, apart from the combined `shellEnabled` above — see
+   *  `AppContext.shellOverride`. */
+  shellOverride?: boolean
   /** The same, for the repository explorer's `/api/fleet/tree*`. Already RESOLVED by the server
    *  (`sessions/editor-gate.ts`): the capability AND the switch. Undefined reads as OFF — see
    *  `AppContext.editorEnabled`. */
@@ -1566,6 +1570,15 @@ export default function AppLayout() {
       body: JSON.stringify({ comparisons: next }),
     })
   }, [])
+  const [sessionPresets, setSessionPresets] = useState<SessionPreset[]>([])
+  const saveSessionPresets = useCallback(async (next: SessionPreset[]) => {
+    setSessionPresets(next)
+    await fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionPresets: next }),
+    })
+  }, [])
   const [costBasisState, setCostBasisState] = useState<CostBasis>('api')
   const [billingSetupOpen, setBillingSetupOpen] = useState(false)
   // `writePreferencesTo` is a SHALLOW merge, so a partial PUT would replace the whole billing
@@ -2369,6 +2382,7 @@ export default function AppLayout() {
       setBilling(nextBilling)
       setCostBasisState(nextBilling.costBasis ?? 'api')
       setComparisons(normalizeComparisons((prefs as Record<string, unknown>).comparisons))
+      setSessionPresets(normalizeSessionPresets((prefs as Record<string, unknown>).sessionPresets))
       if (prefs.lang) setLangState(prefs.lang)
       if (prefs.theme) {
         setThemeState(prefs.theme)
@@ -3257,6 +3271,7 @@ export default function AppLayout() {
     lang, theme, currency, setCurrency, brlRate,
     billing, saveBilling, costBasis, setCostBasis, planBasis, billingReady, openBillingSetup,
     comparisons, saveComparisons,
+    sessionPresets, saveSessionPresets,
     tags: tagsList, monthCommitment,
     chatModel, setChatModel, chatSoundEnabled, setChatSoundEnabled, chatSoundId, setChatSoundId,
     savePreferences,
@@ -3275,6 +3290,7 @@ export default function AppLayout() {
     isCentral,
     capabilities: teamSession?.capabilities,
     shellEnabled: teamSession?.shellEnabled === true,
+    shellOverride: teamSession?.shellOverride === true,
     // Already resolved by the server (capability AND switch) — never re-derived here. Undefined on
     // an older server reads as OFF, so the Studio is simply absent there. `editorEnabledFor` also
     // subtracts a CENTRAL, and this is the only place that happens: `editor-gate.ts` carries no

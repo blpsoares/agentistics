@@ -97,6 +97,70 @@ export function studioLocationLabel(at: StudioLocation, pt: boolean): string {
 }
 
 /**
+ * THE BOTTOM SLOT'S OWN OCCUPANT, AS THE SHELL GATE ACTUALLY ALLOWS IT.
+ *
+ * `SessionPanel.tsx` reads `slotLayout.bottom` straight off `panelSlots.ts` without ever running it
+ * through that module's own `resolveForGates` (only `SessionsPage.tsx`'s RIGHT-slot reading does) —
+ * so a stored `bottom: 'shell'` from before the switch was turned off in Settings survives read after
+ * read. Left alone, that stale value would light no tab at all in the bar (`shell` is absent from
+ * `panelBarEntries` the moment the gate is closed, so nothing there names it, and `cli`'s own `on`
+ * reads `bottomOccupant === 'cli'`, which a stale `'shell'` never satisfies either) while `ShellBand`
+ * — which clamps its OWN `target` the same way, see that component's own header — draws the session's
+ * CLI pane underneath it regardless. The bar would show no lit tab over a pane that is plainly there.
+ *
+ * So this is applied BEFORE `bottomOccupant` is used for anything — the bar's own `panelBarEntries`
+ * call and the prop handed to `ShellBand` both read the SAME already-gated value, and can never
+ * disagree about which of the two panes is showing.
+ */
+export function gatedBottomOccupant(
+  bottom: PanelBarId | null, shellEnabled: boolean,
+): PanelBarId | null {
+  return bottom === 'shell' && !shellEnabled ? 'cli' : bottom
+}
+
+/** Which band component renders at the foot of the session panel. */
+export type BottomBandKind = 'studio' | 'shell' | 'bar-only' | 'none'
+
+export interface BottomBandInput {
+  /** `SessionPanel`'s own already-resolved fact: the editor gate is open, this is not a phone (the
+   *  Studio never docks on one — `resolveForViewport` sends it to the right sheet instead) and the
+   *  bottom slot's occupant is `'studio'`. */
+  bottomIsStudio: boolean
+  /** This session belongs to another machine, reached through a central's relay — no `cli`/`shell`
+   *  stream of its own exists to dock. */
+  relayed: boolean
+  /** Phone viewport — the relayed fallback (`bar-only`) is desktop-only; see this function's own
+   *  doc comment on why a relayed session on a phone is left exactly as it was before this fix. */
+  isMobile: boolean
+}
+
+/**
+ * WHICH BAND RENDERS AT THE FOOT OF THE PANEL — the fix this pass makes.
+ *
+ * `shellEnabled` decides NOTHING here any more. Before this fix the caller's own JSX read
+ * `shellEnabled && !relayed` to choose between `ShellBand` and nothing at all, so a LOCAL session
+ * with the shell switched off drew NEITHER band: no way to reach Contents/Studio/Hardware, no task
+ * control, no panel switcher of any kind — reported as the shell switch silently taking the whole
+ * bottom bar down with it. Turning the shell off is a security narrowing on the shell's own CONTENT
+ * (`panelBarEntries`' own `shell` gate drops the tab; `ShellBand`'s own `shellEnabled` prop keeps it
+ * from ever showing or opening a shell pane), never on whether the bar itself may exist — the CLI
+ * pane is the session's own harness terminal, not the shell, and stays reachable.
+ *
+ * `bottomIsStudio` still wins first (the Studio's own small bar, `StudioBand`). A session that is
+ * local otherwise always gets `'shell'` — `ShellBand` is now the ONE band for every local session,
+ * whatever the shell switch says, exactly as it already was the one band for both `cli` and `shell`
+ * before this pass ever touched it. A RELAYED session keeps its old, narrower fallback exactly:
+ * `'bar-only'` (`PanelBarBand`) on desktop, `'none'` on a phone — that gap is deliberately UNTOUCHED
+ * by this fix (see `SessionPanel.tsx`'s own module header on why: mobile has never drawn a fallback
+ * for a relayed session, and widening that is a separate change from the one this pass makes).
+ */
+export function bottomBandFor(input: BottomBandInput): BottomBandKind {
+  if (input.bottomIsStudio) return 'studio'
+  if (!input.relayed) return 'shell'
+  return input.isMobile ? 'none' : 'bar-only'
+}
+
+/**
  * THE COMPACT BREAKPOINT (design item 7: "below ~1100px wide collapse tab labels to icons with
  * tooltips, the lit tab keeps its label and the Studio location tag") — the bar's own measured
  * width, from `useElementWidth`, never the window's (see that hook's own header on why).

@@ -50,8 +50,10 @@ import { ResizeGrip } from '../ResizeGrip'
 import { keyStripShown } from '../../lib/terminalSurface'
 import { dockedShowsTarget, usePanelSlots } from '../../lib/panelSlots'
 import {
-  readTarget, targetLabel, targetScope, targetStreamId, type TerminalTarget,
+  resolveDockedTarget, shellTargetUnavailable, targetLabel, targetScope, targetStreamId,
+  type TerminalTarget,
 } from '../../lib/terminalTarget'
+import { Watermark } from './Studio'
 import {
   atCap, ceilingRows, ceilingTitle, type CeilingRow, type CeilingShell,
 } from '../../lib/shellCeiling'
@@ -93,7 +95,6 @@ interface T {
   pasteDenied: string
   resize: string
   retry: string
-  fullscreen: string
   endThis: string
   whichTerminal: string
   openOnRight: string
@@ -103,6 +104,19 @@ interface T {
   closeLabel: string
   collapseLabel: string
   expandLabel: string
+  /** The disabled-shell empty state (design follow-up, owner report 2026-09-18) — it appears only
+   *  when the SAVED arrangement still names the shell (see `resolveDockedTarget`'s own header), so
+   *  its own sentence has to cover all three: the shell is off, WHERE that was decided, and what
+   *  turning it on does. */
+  shellOffTitle: string
+  shellOffBody: string
+  /** The CAPABILITY-off reading (the exposure profile itself, never the preference) — a plain
+   *  sentence and no buttons, because neither button could ever succeed here. */
+  shellOffCapability: string
+  enableNow: string
+  enableNowBusy: string
+  enablePermanently: string
+  enablePermanentlyBusy: string
 }
 
 const TXT: Record<'pt' | 'en', T> = {
@@ -120,7 +134,6 @@ const TXT: Record<'pt' | 'en', T> = {
     pasteDenied: 'Could not read the clipboard — check the browser permission.',
     resize: 'Drag to resize the shell',
     retry: 'Try again',
-    fullscreen: 'Open the shell full screen',
     endThis: 'End this terminal',
     whichTerminal: 'Which terminal',
     openOnRight: 'This is open in the panel on the right. Pick it again to bring it back here.',
@@ -128,6 +141,16 @@ const TXT: Record<'pt' | 'en', T> = {
     closeLabel: 'End shell',
     collapseLabel: 'Collapse',
     expandLabel: 'Expand',
+    shellOffTitle: 'The shell is off',
+    shellOffBody: 'The utility shell for this session’s own folder is off — turned off in this '
+      + 'machine’s Settings → Sessions. Turning it on opens a real shell here, in the folder this '
+      + 'session runs in.',
+    shellOffCapability: 'This machine’s exposure profile does not allow a shell here — no switch '
+      + 'on this screen can change that.',
+    enableNow: 'Enable now',
+    enableNowBusy: 'Enabling…',
+    enablePermanently: 'Enable permanently',
+    enablePermanentlyBusy: 'Saving…',
   },
   pt: {
     title: 'Shell',
@@ -143,7 +166,6 @@ const TXT: Record<'pt' | 'en', T> = {
     pasteDenied: 'Não foi possível ler a área de transferência — verifique a permissão do navegador.',
     resize: 'Arraste para redimensionar o shell',
     retry: 'Tentar de novo',
-    fullscreen: 'Abrir o shell em tela cheia',
     endThis: 'Encerrar este terminal',
     whichTerminal: 'Qual terminal',
     openOnRight: 'Isto está aberto no painel à direita. Selecione de novo para trazer de volta aqui.',
@@ -151,6 +173,16 @@ const TXT: Record<'pt' | 'en', T> = {
     closeLabel: 'Encerrar shell',
     collapseLabel: 'Recolher',
     expandLabel: 'Expandir',
+    shellOffTitle: 'O shell está desligado',
+    shellOffBody: 'O shell utilitário para a pasta desta sessão está desligado — foi desligado em '
+      + 'Configurações → Sessões desta máquina. Ligar abre um shell de verdade aqui, na pasta onde '
+      + 'esta sessão roda.',
+    shellOffCapability: 'O perfil de exposição desta máquina não permite um shell aqui — nenhum '
+      + 'interruptor nesta tela pode mudar isso.',
+    enableNow: 'Habilitar agora',
+    enableNowBusy: 'Habilitando…',
+    enablePermanently: 'Habilitar permanentemente',
+    enablePermanentlyBusy: 'Salvando…',
   },
 }
 
@@ -179,8 +211,15 @@ export interface ShellBandProps {
    * unwatch discipline — which is the entire reason this is a prop and not a second component.
    */
   placement?: 'docked' | 'dedicated' | 'aside'
-  /** Offered only when there is somewhere to go: the band's "take the whole screen" control. */
-  onOpenFullscreen?: () => void
+  /**
+   * Offered only when there is somewhere to go: the band's "take the whole screen" control.
+   *
+   * Takes the TARGET this band is showing right now (`cli`/`shell`) — never a bare callback. It
+   * used to be one, wired unconditionally to the shell's own dedicated screen, so pressing "full
+   * screen" while reading the Claude Code pane opened the shell instead: the caller has no way to
+   * know which of the two panes this band's own local `target` is on without being told.
+   */
+  onOpenFullscreen?: (target: TerminalTarget) => void
   /**
    * THE ONE PANEL BAR (design item 1) — `Conteúdo · Studio · Claude Code · Shell · Hardware`,
    * computed by the caller (`SessionPanel`, which has `panelSlots`/`artifactsStore` in scope) through
@@ -221,6 +260,49 @@ export interface ShellBandProps {
    */
   bottomOccupant?: 'cli' | 'shell' | null
   /**
+   * MAY THIS BAND EVER SHOW OR OPEN A SHELL — `CAPS.localShell` AND the user's own switch,
+   * threaded straight from `SessionPanel`'s own `shellEnabled` prop. It narrows this band's SHELL
+   * half only; the CLI pane is the session's own harness terminal and is never gated by it, so this
+   * component always renders once mounted — see `lib/panelBar.ts`'s `bottomBandFor` for why the
+   * caller no longer decides PRESENCE on this prop.
+   *
+   * Off, `target` can still read `'shell'` — this is CHANGED from the first pass of this prop.
+   * `resolveDockedTarget` (`lib/terminalTarget.ts`) only clamps a FRESH mount's own DEFAULT (no
+   * `bottomOccupant`, no genuinely stored `'shell'` preference) down to `'cli'`; a GENUINE record —
+   * `bottomOccupant` naming it, or a literally stored `'shell'` preference — survives, and is what
+   * the disabled-shell EMPTY STATE (below) is drawn on instead of the silent CLI fallback the first
+   * pass used. Reported (owner, 2026-09-18): with the switch off, the docked band went blank with a
+   * RED refusal line and a retry button that could only ever repeat the same 403 — the empty state
+   * this prop now drives replaces that with a neutral sentence plus a working way out. None of this
+   * touches the STORED preference (`chooseTarget` is never called for it): re-enabling the switch
+   * later must restore exactly what the person had chosen.
+   *
+   * Defaults to `true` — the `aside`/`dedicated` placements (`SessionsPage.tsx`) mount this
+   * component only once the shell is already known to be available (`resolveForGates` never
+   * resolves the right slot to `'shell'` while the switch is off, and the dedicated `?pane=shell`
+   * route is itself gated on `shellEnabled` at that call site), so the default there is exactly
+   * what those two call sites did before this prop existed. Those two placements never reach the
+   * disabled-shell empty state by construction — see that state's own header.
+   */
+  shellEnabled?: boolean
+  /**
+   * MAY THIS MACHINE EVER SERVE A SHELL AT ALL — `CAPS.localShell` alone, the profile's answer,
+   * never narrowed by the preference. Distinct from `shellEnabled` above (the COMBINED capable AND
+   * preference reading) because the disabled-shell empty state has two different things to say:
+   * "your own switch is off, here is how to turn it on" (buttons) when this is `true`, or "this
+   * machine's profile denies it outright" (a sentence, no buttons — neither could ever succeed) when
+   * it is `false`. Defaults to `true`, matching `shellEnabled`'s own default for the two placements
+   * that never reach this branch.
+   */
+  shellCapable?: boolean
+  /**
+   * Called after "Enable now" or "Enable permanently" succeed, so the caller can re-read whatever
+   * answers `shellEnabled` (`AppContext.refreshTeamSession`, which re-fetches `/api/team/session`) —
+   * this band has no way to update that itself, and the Shell tab / the pane's own content must
+   * catch up WITHOUT a reload the instant either button lands.
+   */
+  onShellEnabledChange?: () => void | Promise<void>
+  /**
    * THE TASK CONTROL (design item 3) — `SessionTitleFlag`, rendered at the bar's LEFT end, the same
    * element `StudioBand` and the no-terminal fallback band render. Built once by `SessionPanel` (it
    * owns the session's id/title/harness/task) and handed down as a node rather than reimplemented
@@ -250,8 +332,9 @@ export interface ShellBandProps {
 
 export function ShellBand({
   sessionId, cwd, lang, theme, harness, placement = 'docked', onOpenFullscreen,
-  barEntries, onBarPick, studioSeen = true, bottomOccupant = null, taskControl, extraOverflowEntries,
-  onMoveToRight, columnHeight = 0,
+  barEntries, onBarPick, studioSeen = true, bottomOccupant = null, shellEnabled = true,
+  shellCapable = true, onShellEnabledChange, taskControl,
+  extraOverflowEntries, onMoveToRight, columnHeight = 0,
 }: ShellBandProps) {
   const t = TXT[lang]
   const isMobile = useIsMobile()
@@ -270,9 +353,13 @@ export function ShellBand({
    * SEEDED FROM `bottomOccupant` WHEN IT NAMES ONE, the stored preference otherwise — see that
    * prop's own doc comment for why: a fresh mount (this component swapping in for `StudioBand`)
    * must show what was just requested, not whatever this band happened to show last time it was up.
+   * `resolveDockedTarget` (`lib/terminalTarget.ts`) applies on the way IN, never written back to
+   * storage — a GENUINE record of `'shell'` survives even while disabled (so the disabled-shell
+   * empty state below can explain it), and only a fresh mount's own invented DEFAULT is clamped to
+   * `'cli'` — see that function's own header.
    */
   const [target, setTarget] = useState<TerminalTarget>(
-    () => bottomOccupant ?? readTarget(readBandPrefs().target),
+    () => resolveDockedTarget(bottomOccupant, readBandPrefs().target, shellEnabled),
   )
   const scope = targetScope(target)
   /**
@@ -295,6 +382,21 @@ export function ShellBand({
   const [band, dispatch] = useReducer(shellBandReducer, INITIAL_SHELL_BAND, init =>
     dedicated || readBandPrefs().open ? shellBandReducer(init, { type: 'openBand' }) : init)
   const shell = band.shell
+  /**
+   * RELEASE A LIVE SHELL'S LOCAL STATE the moment the switch narrows underneath a band that is
+   * already showing one — `target` itself is deliberately left at `'shell'` (see its own doc
+   * comment above), so this is not the narrowing `usableTarget` used to do; it is housekeeping.
+   * Without it `band.shell` stays set, `streamId` keeps naming it, and `watching` keeps the stream
+   * subscription open for a pane the render below no longer draws — a resource nobody can see kept
+   * alive, the same class of leak `shellWatching`'s own unwatch discipline exists to close. `'ended'`
+   * is the same local-only transition `close()` dispatches below; it does NOT call
+   * `/api/shell/close` — a shell disabled here keeps running exactly as one does when the band is
+   * merely collapsed (`closeBand`'s own rule), and reappears the moment the switch (or the "Enable
+   * now" override) comes back.
+   */
+  useEffect(() => {
+    if (!shellEnabled && target === 'shell' && shell) dispatch({ type: 'ended' })
+  }, [shellEnabled, target, shell])
   const [ctrlArmed, setCtrlArmed] = useState(false)
   /** The open shells, fetched ONLY when the ceiling refuses — see `shellCeiling.ts`. */
   const [ceiling, setCeiling] = useState<{ rows: CeilingRow[]; cap: number } | null>(null)
@@ -316,9 +418,15 @@ export function ShellBand({
    * while the panel bar's own tab read correctly lit. Guarded so a `bottomOccupant` of `null` (the
    * panel moved AWAY from the bottom, or nothing has ever named an occupant) never overwrites a
    * choice the person made by clicking inside this band itself.
+   *
+   * TAKEN RAW, never through `usableTarget`/`resolveDockedTarget` — unlike a fresh mount's own
+   * DEFAULT, `bottomOccupant` is never a guess: it is an explicit slot placement, so `'shell'` here
+   * is always a GENUINE record and is exactly what the disabled-shell empty state is drawn on when
+   * the switch is off. See `resolveDockedTarget`'s own header for the distinction.
    */
   useEffect(() => {
-    if (bottomOccupant && bottomOccupant !== target) chooseTarget(bottomOccupant)
+    if (!bottomOccupant) return
+    if (bottomOccupant !== target) chooseTarget(bottomOccupant)
   }, [bottomOccupant, target, chooseTarget])
 
   const setBand = useCallback((next: Partial<{ open: boolean; height: number; full: boolean }>) => {
@@ -353,7 +461,10 @@ export function ShellBand({
   // EXCLUDED (C3): the right slot already resolves/streams this exact target, so the docked band
   // must not also open or reuse it — that is the second live reader `dockedShowsTarget` exists to
   // prevent.
-  const wanted = shellResolveWanted(band) && target === 'shell' && !excludedFromDocked
+  // `&& shellEnabled`: belt and suspenders alongside the two effects above that already keep
+  // `target` off `'shell'` while the switch is off — a shell must never be opened or reused for a
+  // request this band should not have been able to make in the first place.
+  const wanted = shellResolveWanted(band) && target === 'shell' && shellEnabled && !excludedFromDocked
   const wantedRef = useRef(wanted)
   wantedRef.current = wanted
   useEffect(() => {
@@ -521,6 +632,53 @@ export function ShellBand({
     }).catch(() => {})
   }, [shell, setBand, lang])
 
+  /**
+   * THE DISABLED-SHELL EMPTY STATE'S TWO BUTTONS.
+   *
+   * `enabling` is which one is in flight (`null` = neither) — a plain string rather than two
+   * booleans, since only one request can be in flight at a time and a string says which button's
+   * own label to swap for its busy word.
+   *
+   * Neither button changes `target` or calls `chooseTarget`: the STORED preference the person made
+   * by picking "Shell" is already `'shell'` (that is what got them here), and `onShellEnabledChange`
+   * is what makes `shellEnabled` catch up. That alone is NOT enough to open the shell, though — the
+   * resolve effect below deliberately depends on `band.attempt` and NOT on `shellEnabled`, so a prop
+   * flipping true while `band.phase` is already `'wanted'` (as it always is here: the empty state
+   * only renders while `bandOpen`, and opening is what put the reducer in `'wanted'` in the first
+   * place) changes nothing the effect is watching — MEASURED live: the tab relit, the empty state
+   * unmounted, and the pane sat on "Abra um shell para ver a tela dele" forever, because `wanted`
+   * had flipped true in `wantedRef` with no render left to notice it. So each button explicitly
+   * dispatches `retry` on success — the same transition a refused band's own retry button uses,
+   * `attempt + 1` and all — which is what actually asks again. That is what makes the shell open in
+   * this same slot "without a page reload".
+   */
+  const [enabling, setEnabling] = useState<'now' | 'always' | null>(null)
+  const enableNow = useCallback(async () => {
+    if (enabling) return
+    setEnabling('now')
+    try {
+      const res = await fetch(shellApiUrl('/api/shell/enable-now', lang), { method: 'POST' })
+      if (res.ok) { await onShellEnabledChange?.(); dispatch({ type: 'retry' }) }
+    } catch { /* the button stays put; nothing changed */ }
+    finally { setEnabling(null) }
+  }, [enabling, lang, onShellEnabledChange])
+  const enablePermanently = useCallback(async () => {
+    if (enabling) return
+    setEnabling('always')
+    try {
+      // THE SAME DOOR Settings → Sessions uses (`PUT /api/preferences`) — never a second write path
+      // for one preference, and never the "Enable now" override route, which deliberately does NOT
+      // touch `preferences.json`.
+      const res = await fetch('/api/preferences', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shellEnabled: true }),
+      })
+      if (res.ok) { await onShellEnabledChange?.(); dispatch({ type: 'retry' }) }
+    } catch { /* the button stays put; nothing changed */ }
+    finally { setEnabling(null) }
+  }, [enabling, onShellEnabledChange])
+
   // ---- the drag handle (design item 7: free-resizing, snapping to full) -----------------------
   /** What is ACTUALLY on screen right now — `columnHeight` while `full`, `prefs.height` otherwise.
    *  A drag's start point has to be THIS, never the stored `prefs.height` alone: while full, that
@@ -556,10 +714,14 @@ export function ShellBand({
    * THE ONE CONTROL THAT PICKS A TERMINAL. It replaced the header's `Conversa | Terminal` toggle —
    * a session opens on its conversation, and this band is the door to both panes. The CLI segment
    * is named after the HARNESS, so it names what is on the screen instead of a concept.
+   *
+   * `shell: shellEnabled` — the mobile segment's own gate, mirroring `panelBarEntries`' `shell`
+   * entry on the docked bar: with the switch off, the Shell tab is simply absent here too, never
+   * present and refusing.
    */
   const targetSwitch = (
     <BandSegment label={t.whichTerminal} isMobile={isMobile}>
-      {bandSegmentEntries(target, { cli: true, shell: true, studio: false }).map(({ id, on }) => (
+      {bandSegmentEntries(target, { cli: true, shell: shellEnabled, studio: false }).map(({ id, on }) => (
         <BandSegmentTab
           key={id}
           on={on}
@@ -624,8 +786,15 @@ export function ShellBand({
     // like the entries above: it names what sits on the RIGHT, not what this band is doing, and a
     // collapsed band is still a valid place to bring something into.
     ...(extraOverflowEntries ?? []),
+    // The LABEL names whichever pane THIS band is actually showing (`target`) — never a fixed
+    // "shell" sentence, which is what sent a reader pressing this while reading the Claude Code
+    // pane to the shell's own screen instead. See `paneForTarget`'s own header.
     ...(prefs.open && streamId && onOpenFullscreen ? [{
-      id: 'fullscreen', label: t.fullscreen, icon: <Maximize2 size={14} />, onSelect: onOpenFullscreen,
+      id: 'fullscreen',
+      label: lang === 'pt'
+        ? `Abrir ${targetLabel(target, harness, lang)} em tela cheia`
+        : `Open ${targetLabel(target, harness, lang)} full screen`,
+      icon: <Maximize2 size={14} />, onSelect: () => onOpenFullscreen(target),
     }] : []),
     ...(prefs.open && shell && target === 'shell' ? [{
       id: 'end', label: t.close, icon: <Trash2 size={14} />, onSelect: () => { void close() },
@@ -633,6 +802,81 @@ export function ShellBand({
   ]
 
   const where = shellWhere(cwd)
+
+  /**
+   * THE DISABLED-SHELL EMPTY STATE (design follow-up, owner report 2026-09-18) — drawn INSTEAD of
+   * `screen` whenever `target === 'shell'` genuinely, but `shellEnabled` says it cannot be shown.
+   * `resolveDockedTarget` is what keeps this UNREACHABLE on a fresh session that never asked for
+   * the shell (see that function's own header) — this branch fires only for the case design item 2
+   * describes: "the person had the shell open, then turned it off."
+   *
+   * NEUTRAL, never the refusal red `notice` uses for a real 403 — this is not an error, it is a
+   * standing fact about this machine's settings, and it is offering a way out rather than reporting
+   * a failure. `shellCapable` picks between the two sub-states: the ordinary preference-off reading
+   * (a sentence plus both buttons) and the profile-denies-it-outright reading (a sentence alone,
+   * because neither button could ever succeed against `CAPS.localShell`).
+   */
+  const shellUnavailable = shellTargetUnavailable(target, shellEnabled)
+  // EXCLUDED (C3) still wins: a pane genuinely showing on the right is a different fact from one
+  // that cannot be shown at all, and `t.openOnRight`'s own sentence already covers it.
+  const showShellDisabled = shellUnavailable && !excludedFromDocked
+  const shellDisabledPane = (
+    <div style={{
+      position: 'relative', flex: 1, minHeight: 0, borderRadius: 8, overflow: 'hidden',
+      border: '1px solid var(--border-subtle)',
+      background: theme === 'light' ? '#ffffff' : '#0e1116',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+    }}>
+      {/* THE BRAND MARK, behind the sentence — reused verbatim from `Studio.tsx`'s own empty tree:
+          one asset, painted through a mask in `currentColor` so it never needs a light/dark twin,
+          `aria-hidden` and low opacity so it never competes with the text sitting on it. */}
+      <Watermark />
+      <div style={{
+        position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column',
+        alignItems: 'center', textAlign: 'center', gap: 12, maxWidth: 380,
+      }}>
+        <div style={{ fontSize: 13, fontWeight: 650, color: 'var(--text-primary)' }}>
+          {t.shellOffTitle}
+        </div>
+        <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+          {shellCapable ? t.shellOffBody : t.shellOffCapability}
+        </div>
+        {/* NO BUTTONS when the CAPABILITY itself is off — neither could ever succeed, and a button
+            whose one outcome is a refusal is worse than none. */}
+        {shellCapable && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+            <button
+              type="button"
+              onClick={() => { void enableNow() }}
+              disabled={enabling !== null}
+              style={{
+                minHeight: 32, padding: '0 14px', borderRadius: 7, cursor: enabling ? 'default' : 'pointer',
+                fontFamily: 'inherit', fontSize: 12, fontWeight: 650, border: '1px solid var(--anthropic-orange)',
+                background: 'var(--anthropic-orange)', color: '#fff',
+                opacity: enabling && enabling !== 'now' ? 0.6 : 1,
+              }}
+            >
+              {enabling === 'now' ? t.enableNowBusy : t.enableNow}
+            </button>
+            <button
+              type="button"
+              onClick={() => { void enablePermanently() }}
+              disabled={enabling !== null}
+              style={{
+                minHeight: 32, padding: '0 14px', borderRadius: 7, cursor: enabling ? 'default' : 'pointer',
+                fontFamily: 'inherit', fontSize: 12, fontWeight: 650,
+                border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+                color: 'var(--text-secondary)',
+                opacity: enabling && enabling !== 'always' ? 0.6 : 1,
+              }}
+            >
+              {enabling === 'always' ? t.enablePermanentlyBusy : t.enablePermanently}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
 
   const screen = (
     <div style={{
@@ -787,10 +1031,14 @@ export function ShellBand({
       <div style={{
         flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 8,
       }}>
-        {streamId ? screen : <div style={{ flex: 1 }} />}
-        {notice}
-        {ceilingList}
-        {keyStripShown('dedicated', isMobile) && strip}
+        {showShellDisabled ? shellDisabledPane : (
+          <>
+            {streamId ? screen : <div style={{ flex: 1 }} />}
+            {notice}
+            {ceilingList}
+          </>
+        )}
+        {!showShellDisabled && keyStripShown('dedicated', isMobile) && strip}
       </div>
     )
   }
@@ -869,12 +1117,16 @@ export function ShellBand({
         }}>
           {/* RIGHT, like every other placement's. */}
           <div style={{ display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>{targetSwitch}</div>
-          {/* EXCLUDED (C3): never render the screen for a target the right slot already shows —
-              see `excludedFromDocked` above. */}
-          {streamId && !excludedFromDocked ? screen : <div style={{ flex: 1 }} />}
-          {notice}
-          {ceilingList}
-          {strip}
+          {showShellDisabled ? shellDisabledPane : (
+            <>
+              {/* EXCLUDED (C3): never render the screen for a target the right slot already shows —
+                  see `excludedFromDocked` above. */}
+              {streamId && !excludedFromDocked ? screen : <div style={{ flex: 1 }} />}
+              {notice}
+              {ceilingList}
+              {strip}
+            </>
+          )}
         </div>
       </div>
     )
@@ -970,11 +1222,15 @@ export function ShellBand({
             : { height: Math.max(BAND_MIN_PX, renderedHeight), flexShrink: 0 }),
           display: 'flex', flexDirection: 'column', gap: 6, padding: '0 12px 10px',
         }}>
-          {/* EXCLUDED (C3): the right slot already shows this exact target — see
-              `excludedFromDocked` above. Never render the screen for it here too. */}
-          {streamId && !excludedFromDocked ? screen : <div style={{ flex: 1 }} />}
-          {notice}
-          {ceilingList}
+          {showShellDisabled ? shellDisabledPane : (
+            <>
+              {/* EXCLUDED (C3): the right slot already shows this exact target — see
+                  `excludedFromDocked` above. Never render the screen for it here too. */}
+              {streamId && !excludedFromDocked ? screen : <div style={{ flex: 1 }} />}
+              {notice}
+              {ceilingList}
+            </>
+          )}
         </div>
       )}
     </div>
