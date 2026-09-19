@@ -2327,9 +2327,24 @@ packages/web/src/components/tasks/   board.ts (vocabulary) · TaskTable · TaskB
 ```
 
 - **A TASK is measured through its SESSIONS, never on its own.** Cost, rounds, tokens and harness
-  all come from the sessions filed under it; a subtask carries status/owner/dates/session and
-  deliberately NO rollup, because a second smaller one would double-count the same sessions or
-  invent a split nobody recorded.
+  all come from the sessions filed under it. **A session files one of three ways — DIRECTLY on the
+  task, under a SUBTASK, or a mix of both ("hybrid")** — `task-attach.ts`'s `planAttach` allows
+  either or both on the same task, and there is NO stored "mode" field: the shape is entirely
+  emergent from where sessions happen to land (see docs/superpowers/specs/
+  2026-09-10-task-session-hierarchy-design.md). `rowsOfTask` sums every row by `taskId` regardless
+  of `subtaskId`, so the task-wide total is never ambiguous; `task-report.ts`'s `subtaskViews()` is
+  the BREAKDOWN on top of it — one rollup per subtask, plus an `id: null` bucket for the sessions
+  filed directly (omitted when there are none) — a READ over the same rows, never a second source
+  of truth, so nothing is ever double-counted or dropped between the total and its breakdown.
+- **A subtask can itself be a GROUP, or a MEMBER of one** (`Subtask.isGroup`/`parentGroupId`, §F —
+  docs/superpowers/specs/2026-09-11-alm-session-linking-ux.md §F — superseding an earlier
+  `groupId` shared-bucket idea that never shipped past a handful of comments). Only a GROUP or an
+  ordinary loose subtask may hold a session; a MEMBER never can — `planAttach` refuses it outright
+  (`subtask_in_group`) — so a member gets NO `subtaskViews` bucket of its own, never an
+  always-empty one. `done_needs_session` (below) is therefore SKIPPED for a member, since it could
+  never satisfy "a session filed under this specific subtask" to begin with; a group and a loose
+  subtask still need one. A group's own progress (`groupProgress`, `@agentistics/core`) is computed
+  from its members' `status`, the same rounding-down rule `taskProgress` applies one level up.
 - **`null` is not zero, anywhere.** A task nobody could price sorts LAST in both directions — an
   ascending "cost" sort that puts unpriced work at the top is the confident zero this repo refuses
   for harness capabilities, applied to a board.
@@ -2359,6 +2374,13 @@ packages/web/src/components/tasks/   board.ts (vocabulary) · TaskTable · TaskB
   that names a problem somebody has to go and solve, and the queue reports it as withheld — without
   a why that report is "you cannot have this" with no way forward. The reason is CLEARED when the
   task leaves `blocked` and kept in the activity log.
+- **`done` is REFUSED without a session filed under it** (422, `done_needs_session` — same shape as
+  `blocked_needs_reason`, checked in `markTask`/`patchSubtask`/`setSubtaskDone` so it binds every
+  surface). For a TASK, `rowsOfTask` counts a session anywhere under it — direct or under any
+  subtask — so a task whose sessions all live under subtasks still closes correctly. For a SUBTASK,
+  the check is narrower: a session filed on THAT specific subtask's own id, judged on the
+  post-patch state so a single request cannot leave a group in one call and reach `done` on the old
+  membership. A group MEMBER is exempt (see above); a group and a loose subtask are not.
 - **`taskProgress` (core) is the only place a percentage is computed**, and it rounds DOWN: a bar
   that reads 100% while a subtask is open is the one error this figure cannot afford. A task with no
   subtasks draws NO bar rather than an empty one — "nobody broke this up" is not "nothing is done".
