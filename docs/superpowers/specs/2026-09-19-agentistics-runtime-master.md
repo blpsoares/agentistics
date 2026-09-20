@@ -219,9 +219,22 @@ fleet surface is separate and cheap (`/api/fleet`, ~5 s, kilobytes), guarded by 
 `parentGroupId`), `Attempt` (`{harness, model?, effort?, method?}` + `running|delivered|abandoned`),
 `TaskClaim` (a 30-minute lease decided inside the store's lock), `TaskEvent`, `TaskFile`,
 `TaskComment`. `task-rollup.ts` produces `null`, never `0`, and already carries a `costMeasured`
-field **that nothing sets to true**. Confirmed absent: Epic/Phase above Task, acceptance criteria,
-prepared/draft sessions, dispatch lifecycle statuses, and model-selection/approval metadata — which
-is precisely the surface `execucao.md` asks for.
+field **that nothing sets to true**.
+
+**Corrected 2026-09-20, and the correction matters for §26.** An earlier draft of this section said
+prepared sessions were absent. They are not: `Subtask.stagedSession` shipped on 2026-09-18
+(`38e62538`, "stage a dormant session draft on a subtask or group"). A subtask — or a group, never a
+group MEMBER, by the same `subtask_in_group` rule that refuses to file a real session there — holds
+a `StagedSessionDraft`: a prompt (the only required field) plus optional harness, model, effort,
+cwd and `TaskFile` attachments. Firing it spawns a real session through the very `/api/fleet/new`
+path the wizard uses and **files the result under that subtask automatically**. Validation lives in
+`@agentistics/core`'s `stagedSession.ts` and drops a half-read draft rather than repairing it.
+
+So what `execucao.md` asks for is now **partly built**. Still genuinely absent: Epic/Phase above
+Task, acceptance criteria as a first-class field, an explicit dispatch lifecycle separate from the
+Kanban status, and the model-selection/approval metadata (`modelSelectionReason`, `approvedBy`).
+`agentistics_task_subtask` also does not expose `stagedSession`, so a draft can be written over HTTP
+or from the board but not through MCP — an asymmetry worth closing.
 
 ## 10. Current state — chat
 
@@ -1216,10 +1229,14 @@ Task ─ acceptance criteria
 - **`AcceptanceCriterion`** — id, text, state (`open|met|failed`), evidence refs. A task may not
   reach `done` with an open criterion (the same 422 shape as `blocked_needs_reason` /
   `done_needs_session`, which already bind the browser, the CLI and the MCP alike).
-- **`PreparedSession`** — everything needed to dispatch, stored *before* dispatch: harness, model,
-  effort, prompt, context/spec references, attachment refs, allowed tools, constraints, expected
-  result. Dispatch **must not silently alter** any of them; a change after preparation mints a new
-  version of the prepared session.
+- **`PreparedSession` — mostly SHIPPED (2026-09-18), and this entry is now about the gap.**
+  `Subtask.stagedSession` already stores prompt, harness, model, effort, cwd and attachments ahead
+  of time, and firing it spawns and files automatically (§9). What it does **not** yet carry, and
+  what this section still asks for: the **spec reference** the session implements, the **files it
+  may and may not touch**, the **acceptance criteria copied from the task**, the **allowed tools**,
+  and the **expected result**. Until those are fields, they live in the prompt — which works, and
+  makes them invisible to any check. Dispatch **must not silently alter** anything prepared; a
+  change after preparation mints a new version of the draft.
 - **Model selection is recorded, and Opus requires an explicit approval**: `model`,
   `modelSelectionReason`, `approvalRequired`, `approvedBy`, `approvalAt`. This is a *record*, not an
   enforcement of who may spend — the gate is the person's.
