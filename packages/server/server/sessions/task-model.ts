@@ -11,43 +11,63 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
-import { PRIORITY_ORDER, type TaskPriorityId } from '@agentistics/core'
+import { PRIORITY_ORDER, type TaskPriorityId, type TaskStatusDef } from '@agentistics/core'
 import type { HarnessId, StagedSessionDraft } from '@agentistics/core'
 
 /**
- * Where the work stands. A board needs more than open/closed, and each of these answers a question
- * the others cannot:
+ * Where the work stands.
  *
- *  `backlog`     — recorded, not yet queued.
- *  `todo`        — queued, nothing started.
- *  `in_progress` — something is running or a session has touched it.
+ * This USED TO BE a closed seven-value union (`backlog | todo | in_progress | blocked | in_review |
+ * done | abandoned`). A product owner asked for the status list itself to be editable — new
+ * statuses, renamed labels, chosen colours, deletion of the ones nobody uses — so it is now a plain
+ * `string`, validated at WRITE time (`markTask` / `patchSubtask`, below and in `task-web.ts`)
+ * against the board's own `TaskBook.statuses` list rather than against a type the compiler can
+ * check. See `@agentistics/core`'s `taskStatus.ts` for the list itself, its migration, and the four
+ * ids (`PROTECTED_STATUS_IDS`) several rules in THIS file still compare against by exact string:
+ *
+ *  `todo`        — queued, nothing started. PROTECTED.
+ *  `in_progress` — something is running or a session has touched it. PROTECTED.
  *  `blocked`     — it CANNOT proceed. Distinct from `todo` on purpose: "nobody picked it up" and
  *                  "somebody tried and cannot" are different facts, and only the second is a
- *                  problem to go and solve.
- *  `in_review`   — the work exists and is being judged. The rounds are not finished.
+ *                  problem to go and solve. PROTECTED.
  *  `done`        — DELIVERED. This is the state that closes rounds-to-delivery and stamps
- *                  `deliveredAt`; there is exactly one, so the metric cannot be ambiguous.
- *  `abandoned`   — given up on. First-class, because an abandoned attempt is the most informative
- *                  row in a comparison and treating it as still-open inflates every average.
+ *                  `deliveredAt`; there is exactly one, so the metric cannot be ambiguous. PROTECTED.
+ *
+ * `backlog`, `in_review` and `abandoned` are the three words this board also shipped with — kept
+ * working as ordinary, ordinary NON-protected statuses (a machine already using one of them keeps
+ * using it; see `planStatusMigration`), and everything past those seven is whatever a person has
+ * since typed into the status editor.
  */
-export type TaskStatus =
-  | 'backlog' | 'todo' | 'in_progress' | 'blocked' | 'in_review' | 'done' | 'abandoned'
+export type TaskStatus = string
 
+/**
+ * The seven words this board shipped with before the list became editable — used ONLY by
+ * `migrateStatus` and by tests asserting the pure rules below still hold for every one of them.
+ * Never treat this as "the current valid statuses": read `TaskBook.statuses` for that.
+ */
 export const TASK_STATUSES: readonly TaskStatus[] =
   ['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'abandoned'] as const
 
 /**
- * The two words this board used before it had seven.
+ * The two words this board used before it had seven, then before the list became editable.
  *
  * Read-migration only, and deliberately not a rename in the file: an `open` written by an older
  * build must keep meaning what it meant, and `delivered` IS `done` — the metric that closes on it
  * may not shift because the vocabulary grew.
+ *
+ * It no longer validates against a closed set — the status vocabulary is a dynamic list now
+ * (`TaskBook.statuses`), and deciding "is this a real status" needs that whole list in scope, which
+ * a per-record disk-read sanitizer (`task-store.ts`'s `sanitizeTask` / `sanitizeSubtask`) does not
+ * have; that check moved to the point of decision, at WRITE time (`markTask` / `patchSubtask`). This
+ * function's job shrank to "repair the two legacy WORDS, and refuse anything that is not a usable
+ * string" — an id it lets through and that turns out not to name a real status is a fact the record
+ * carries (a task pointing at a status since deleted), not something this function can fix.
  */
 export function migrateStatus(raw: unknown): TaskStatus | null {
-  if (typeof raw !== 'string') return null
+  if (typeof raw !== 'string' || !raw.trim()) return null
   if (raw === 'open') return 'todo'
   if (raw === 'delivered') return 'done'
-  return (TASK_STATUSES as readonly string[]).includes(raw) ? raw as TaskStatus : null
+  return raw
 }
 
 /** The statuses that mean the work is finished, either way. */
@@ -478,6 +498,15 @@ export interface TaskBook {
   comments: TaskComment[]
   subtasks: Subtask[]
   files: TaskFile[]
+  /**
+   * The status VOCABULARY — see `@agentistics/core`'s `taskStatus.ts`. Absent or empty means "never
+   * seeded yet"; `task-source.ts`'s `ensureStatusesSeeded` fills it in, once, the first time the
+   * book is opened (`planStatusMigration`). Never read this as "every status a task might carry" —
+   * a record can outlive the deletion of its own status (deletion is refused while any record still
+   * uses it, so in practice this cannot happen through the product's own routes, but a hand-edited
+   * file is not bound by that).
+   */
+  statuses: TaskStatusDef[]
   /**
    * The activity log, newest LAST, for every task at once.
    *

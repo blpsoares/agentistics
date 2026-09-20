@@ -19,7 +19,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import {
   ArrowLeft, BarChart3, ClipboardList, ExternalLink, FileText, Link2,
-  Filter, LayoutGrid, MessageSquare, Pencil, Plus, Rows3, Search, Trash2, X, XCircle,
+  Filter, LayoutGrid, MessageSquare, Pencil, Plus, Rows3, Search, Settings2, Trash2, X, XCircle,
 } from 'lucide-react'
 import { PRIORITY_ORDER, type SortSpec, type TaskPriorityId } from '@agentistics/core'
 import { ChevronDown } from 'lucide-react'
@@ -53,6 +53,7 @@ import { TaskSharing } from '../components/tasks/TaskSharing'
 import { BoardOverviewView } from '../components/tasks/BoardOverviewView'
 import { CentralTaskBoard } from '../components/tasks/CentralTaskBoard'
 import { NewTaskWizard } from '../components/tasks/NewTaskWizard'
+import { ManageStatusesModal } from '../components/tasks/ManageStatusesModal'
 import { NewSessionModal } from '../components/sessions/NewSessionModal'
 import {
   COLUMN_ORDER, NA, PRIORITY, SESSION_STATE, STATUS, button, claimLeft, field, fmtInt, fmtTokens,
@@ -174,6 +175,10 @@ function TaskList() {
   const { fleet } = useFleet('en')
   const [q, setQ] = useState('')
   const [open, setOpen] = useState(false)
+  /** The status vocabulary editor — a NEW, self-contained screen (see its own docblock); it never
+   *  touches the board's own rendering, which still draws through `board.ts`'s fixed seven-status
+   *  map until a follow-up piece of work wires the dynamic list into it. */
+  const [managingStatuses, setManagingStatuses] = useState(false)
   /** The task whose session wizard is up — see `onCreateSession`. */
   const [starting, setStarting] = useState<{ taskId: string; title: string } | null>(null)
   /** Details fetched for the rows the table has expanded — subtasks live there. */
@@ -238,10 +243,21 @@ function TaskList() {
             <Rows3 size={14} /> Table
           </button>
         </div>
+        <button
+          style={{ ...button(isMobile), padding: '0 9px' }}
+          onClick={() => setManagingStatuses(true)}
+          title="Manage statuses"
+        >
+          <Settings2 size={14} />
+        </button>
         <button style={button(isMobile, 'primary')} onClick={() => setOpen(v => !v)}>
           <Plus size={15} /> New task
         </button>
       </div>
+
+      {managingStatuses && (
+        <ManageStatusesModal lang={lang} onClose={() => setManagingStatuses(false)} />
+      )}
 
       {open && (
         <NewTaskWizard

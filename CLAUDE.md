@@ -2320,11 +2320,55 @@ packages/server/server/sessions/
   task-rank.ts      PURE: hand order as a fractional-index string
   task-report.ts / task-overview.ts / task-stats.ts / task-evidence.ts / task-filter.ts
   task-web.ts       the ONE door /api/tasks, the CLI and the MCP all come through
-packages/core/src/taskSort.ts   PURE: the ordering BOTH the table and the kanban use
+packages/core/src/taskSort.ts     PURE: the ordering BOTH the table and the kanban use
+packages/core/src/taskStatus.ts   PURE: the status VOCABULARY — see its own section below
 packages/web/src/components/tasks/   board.ts (vocabulary) · TaskTable · TaskBoard ·
                                      BoardArrange · SubtaskTable · TaskFiles · SessionPicker ·
-                                     TaskPicker · NewTaskWizard · boardPrefs (localStorage)
+                                     TaskPicker · NewTaskWizard · boardPrefs (localStorage) ·
+                                     ManageStatusesModal (the status editor, see below)
 ```
+
+### The status vocabulary — `Task.status`/`Subtask.status` are a plain string, not a closed enum
+
+A product owner asked for the status LIST itself to be editable: new statuses, renamed labels,
+chosen colours, deletion of the ones nobody uses. `TaskStatus` (`task-model.ts`) is therefore a
+plain `string` now, not the old seven-value union — validated at WRITE time (`markTask`/
+`patchSubtask`, `task-web.ts`) against the board's own `TaskBook.statuses: TaskStatusDef[]`, never
+by the compiler.
+
+- **Four ids are PROTECTED, forever**: `PROTECTED_STATUS_IDS = ['todo', 'in_progress', 'blocked',
+  'done']` (`@agentistics/core`'s `taskStatus.ts`) — the exact strings `done_needs_session` /
+  `blocked_needs_reason` (`markTask`/`patchSubtask`) and `statusAfterAttach` /
+  `statusAfterSubtaskProgress` (`task-model.ts`) still compare against. A protected status's LABEL
+  and COLOUR can be edited like any other's; its `id` never changes and it can never be deleted,
+  regardless of usage (`canDeleteStatus`).
+- **A fresh board seeds EXACTLY these four** (`DEFAULT_TASK_STATUSES`) — never the historical seven.
+  `backlog` / `in_review` / `abandoned` are a MIGRATION SOURCE (`LEGACY_STATUS_HINTS`): a machine
+  already using one of them keeps it, seeded as an ordinary NON-protected entry, the first time its
+  book is opened (`task-source.ts`'s `ensureStatusesSeeded`, calling the pure `planStatusMigration`)
+  — fires once, is a no-op forever after because it refuses to touch a list that already exists.
+  **Known consequence**: `agentop task abandon` / marking anything `abandoned` fails with
+  `unknown_status` on a board that never had an `abandoned` task before this migration — that status
+  is no longer created by default and has to be added back through the editor (or the API) first.
+- **A non-protected status is deletable the moment nothing references it** — checked against BOTH
+  tasks and subtasks, board-wide, never the current filter's scope. `TaskStatusRow.usageCount`
+  (`listStatuses`) travels with the list precisely so the UI can grey out a delete control and say
+  "in use by N" before a click, not after a refused one.
+- **`ManageStatusesModal.tsx`** (`packages/web/src/components/tasks/`) is a NEW, self-contained
+  screen, reached from a small gear button beside "New task" on `/tasks` — it talks to
+  `/api/tasks/statuses` only and never touches a task, a subtask, or the row/kanban rendering.
+  **`board.ts`'s `STATUS`/`COLUMN_ORDER` map, `StatusChip`, `SubtaskTable.tsx` and `TaskTable.tsx`
+  still draw the board through the OLD fixed seven-status map** — wiring the dynamic list into that
+  rendering is a deliberately separate follow-up piece of work, not done here, to avoid a two-way
+  merge conflict with the same surfaces' in-flight visual redesign.
+- **`/api/tasks/statuses`** — `GET` lists (ordered, with `usageCount`); `POST` creates (`{label,
+  color}`, id derived server-side via `nextStatusId`, never chosen by the caller); `POST
+  /api/tasks/statuses/:id` edits `label`/`color` (works on a protected one too); `DELETE
+  /api/tasks/statuses/:id` refuses 422 `protected` or 422 `in_use` (`usageCount` included), 404
+  `no_such_status` otherwise. Matched BEFORE the generic `/api/tasks/<ref>` routes, same reason
+  `next`/`activity` are. The MCP mirrors this as `agentistics_task_statuses` (list) and
+  `agentistics_task_status_edit` (create/edit/delete); `agentistics_task_status`'s `status` field is
+  now a free string, not a closed enum, since the vocabulary it names is no longer fixed.
 
 - **A TASK is measured through its SESSIONS, never on its own.** Cost, rounds, tokens and harness
   all come from the sessions filed under it. **A session files one of three ways — DIRECTLY on the

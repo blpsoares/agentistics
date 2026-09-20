@@ -6,7 +6,10 @@
  * delivery cost", and the two would drift.
  */
 
-import type { StagedSessionDraft } from '@agentistics/core'
+import type { StagedSessionDraft, TaskStatusDef } from '@agentistics/core'
+import {
+  canDeleteStatus, isKnownStatusId, isValidStatusColor, nextStatusId, sortTaskStatuses,
+} from '@agentistics/core'
 import { loadTaskWorld } from './task-source'
 import { buildTaskDetail, buildTaskList, findTask, rowsOfTask } from './task-report'
 import { planDeliveryEvidence, type DeliveryEvidence } from './task-evidence'
@@ -63,6 +66,7 @@ export async function listTasks(filter?: TaskFilter): Promise<TaskListReply> {
     }),
     overview: buildBoardOverview({
       tasks: w.book.tasks, rows: w.rows, metas: scoped.metas, costOf: w.costOf,
+      statusIds: w.book.statuses.map(s => s.id),
     }),
     excludedByFilter: scoped.excluded,
   }
@@ -476,12 +480,18 @@ export async function patchSubtask(subtaskId: string, patch: {
     ok: false
     message:
       | 'no_such_subtask' | 'done_needs_session' | 'invalid_group' | 'subtask_has_sessions'
-      | 'group_field_conflict' | 'subtask_in_group'
+      | 'group_field_conflict' | 'subtask_in_group' | 'unknown_status'
   }
 > {
   const w = await loadTaskWorld()
   const found = w.book.subtasks.find(t => t.id === subtaskId)
   if (!found) return { ok: false, message: 'no_such_subtask' }
+
+  // Same write-time gate `markTask` applies to a task's own status — see its own note. Checked
+  // before any of the group/done checks below, which all read `patch.status` themselves.
+  if (patch.status !== undefined && !isKnownStatusId(patch.status, w.book.statuses)) {
+    return { ok: false, message: 'unknown_status' }
+  }
 
   // Computed once, before any of the checks below: whether THIS subtask id already has a session
   // filed on it right now, regardless of what it is currently filed under. Read by `checkParentGroup`
@@ -612,7 +622,7 @@ export async function setSubtaskDone(subtaskId: string, done: boolean): Promise<
     ok: false
     message:
       | 'no_such_subtask' | 'done_needs_session' | 'invalid_group' | 'subtask_has_sessions'
-      | 'group_field_conflict' | 'subtask_in_group'
+      | 'group_field_conflict' | 'subtask_in_group' | 'unknown_status'
   }
 > {
   // Only ever passes `status`, so `group_field_conflict`/`subtask_in_group` cannot actually fire
@@ -862,6 +872,13 @@ export async function markTask(
   const task = findTask(ref, w.book.tasks)
   if (!task) return { ok: false, message: 'no_such_task' }
 
+  // A status is no longer a closed type the compiler can check — it is whatever `TaskBook.statuses`
+  // currently lists (see `task-model.ts`'s `TaskStatus`) — so the one WRITE-time gate every caller
+  // (browser, CLI, MCP) goes through lives here, binding all three the same way `blocked_needs_reason`
+  // already does. Checked BEFORE any of the status-specific gates below: a `to` that names nothing
+  // is not "this move is missing a reason", it is not a move at all.
+  if (!isKnownStatusId(to, w.book.statuses)) return { ok: false, message: 'unknown_status' }
+
   const now = new Date().toISOString()
   const reason = o.reason?.trim() ?? ''
 
@@ -962,4 +979,94 @@ export async function markTask(
       commits: [...bySha.values()],
     }),
   }
+}
+
+/**
+ * The status VOCABULARY — list, create, edit, delete. See `@agentistics/core`'s `taskStatus.ts` for
+ * the rules (`PROTECTED_STATUS_IDS`, `canDeleteStatus`) and `task-source.ts`'s `ensureStatusesSeeded`
+ * for how the list comes to exist in the first place. These are the ONLY functions that touch
+ * `TaskBook.statuses` — `/api/tasks/statuses` (index.ts), the MCP's status-listing tool, and the new
+ * management UI all come through here, the same door every other task mutation does.
+ */
+
+export interface TaskStatusRow extends TaskStatusDef {
+  /**
+   * How many tasks or subtasks currently carry this status — computed here, once, so the
+   * management UI can grey out a delete control and say "in use by N" WITHOUT a failed round-trip
+   * to `deleteStatus` first. The same count `deleteStatus`'s own `canDeleteStatus` gate re-checks
+   * at delete time, against a fresher read — this one is a courtesy for the UI, not the guard.
+   */
+  usageCount: number
+}
+
+/** Ordered left to right — the same order the board would draw its columns in. */
+export async function listStatuses(): Promise<TaskStatusRow[]> {
+  const w = await loadTaskWorld()
+  return sortTaskStatuses(w.book.statuses).map(s => ({
+    ...s,
+    usageCount: w.book.tasks.filter(t => t.status === s.id).length
+      + w.book.subtasks.filter(sub => sub.status === s.id).length,
+  }))
+}
+
+/**
+ * A new, non-protected status. The id is DERIVED from the label (`nextStatusId`) and returned to
+ * the caller — it is never chosen by the caller, so two people typing the same label on two devices
+ * cannot collide on an id neither of them typed.
+ */
+export async function createStatus(o: { label: string; color: string }): Promise<
+  { ok: true; status: TaskStatusDef } | { ok: false; message: 'label_required' | 'bad_color' }
+> {
+  const label = o.label.trim()
+  if (!label) return { ok: false, message: 'label_required' }
+  if (!isValidStatusColor(o.color)) return { ok: false, message: 'bad_color' }
+  const w = await loadTaskWorld()
+  const id = nextStatusId(label, w.book.statuses.map(s => s.id))
+  const order = w.book.statuses.reduce((max, s) => Math.max(max, s.order), -1) + 1
+  const def: TaskStatusDef = { id, label, color: o.color, protected: false, order }
+  await w.store.upsertStatus(def)
+  return { ok: true, status: def }
+}
+
+/**
+ * Edit a status's label and/or color. Works on a PROTECTED status exactly like any other — only its
+ * `id` can never change, and this never offers a way to change it (there is no `id` in the patch).
+ */
+export async function editStatus(id: string, patch: { label?: string; color?: string }): Promise<
+  { ok: true } | { ok: false; message: 'no_such_status' | 'bad_color' }
+> {
+  const w = await loadTaskWorld()
+  const found = w.book.statuses.find(s => s.id === id)
+  if (!found) return { ok: false, message: 'no_such_status' }
+  if (patch.color !== undefined && !isValidStatusColor(patch.color)) {
+    return { ok: false, message: 'bad_color' }
+  }
+  const label = patch.label?.trim()
+  await w.store.upsertStatus({
+    ...found,
+    ...(label ? { label } : {}),
+    ...(patch.color !== undefined ? { color: patch.color } : {}),
+  })
+  return { ok: true }
+}
+
+/**
+ * Delete a NON-protected, UNUSED status. Refused (422, via the route) for either reason — never a
+ * silent no-op — and NAMES which reason: a caller cannot fix "in use" the same way it fixes
+ * "protected". Usage is counted against BOTH tasks and subtasks, the whole book, not the current
+ * filter's scope: a status "unused" only because a filter is hiding its one task would delete a
+ * column out from under a task the caller simply cannot see right now.
+ */
+export async function deleteStatus(id: string): Promise<
+  { ok: true } | { ok: false; message: 'no_such_status' | 'protected' | 'in_use'; usageCount?: number }
+> {
+  const w = await loadTaskWorld()
+  const found = w.book.statuses.find(s => s.id === id)
+  if (!found) return { ok: false, message: 'no_such_status' }
+  const usageCount = w.book.tasks.filter(t => t.status === id).length
+    + w.book.subtasks.filter(s => s.status === id).length
+  const check = canDeleteStatus({ status: found, usageCount })
+  if (!check.ok) return { ok: false, message: check.reason, ...(check.reason === 'in_use' ? { usageCount } : {}) }
+  await w.store.removeStatus(id)
+  return { ok: true }
 }
