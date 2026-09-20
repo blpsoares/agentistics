@@ -12,8 +12,15 @@ import type { Filters, StagedSessionDraft, TaskPriorityId, TaskProgress } from '
 import { getDateRangeFilter } from '../hooks/useData'
 
 export type LinkProvenance = 'assigned' | 'observed' | 'none'
-export type TaskStatus =
-  | 'backlog' | 'todo' | 'in_progress' | 'blocked' | 'in_review' | 'done' | 'abandoned'
+/**
+ * The status VOCABULARY is an editable list now (`@agentistics/core`'s `TaskStatusDef`), not a
+ * closed union — see `task-model.ts`'s `TaskStatus` on the server for the full rationale. Kept as
+ * its own named type here (rather than inlining `string` at every call site) so a future PR wiring
+ * the dynamic list into the row/kanban rendering has one place to widen call sites that still expect
+ * the old semantics, and so `TaskStatus` keeps meaning "a status id" rather than "any string" to a
+ * reader of this file.
+ */
+export type TaskStatus = string
 export type AttemptStatus = 'running' | 'delivered' | 'abandoned'
 
 export interface AttemptRollup {
@@ -830,4 +837,92 @@ export function useNextTasks(actor?: string, intervalMs = 15000) {
     return () => clearInterval(t)
   }, [reload, intervalMs])
   return { next, reload }
+}
+
+// ------------------------------------------------------------------- status vocabulary (§ Statuses)
+
+/**
+ * One entry of the board's status LIST — see `@agentistics/core`'s `TaskStatusDef` and
+ * `task-web.ts`'s `TaskStatusRow` on the server, which this mirrors. `usageCount` is what lets the
+ * management UI grey out a delete control and say "in use by N" without a failed round-trip first.
+ */
+export interface TaskStatusRow {
+  id: string
+  label: string
+  color: string
+  protected: boolean
+  order: number
+  usageCount: number
+}
+
+export type StatusDeleteRefusal = 'protected' | 'in_use' | 'no_such_status'
+
+async function readStatusesReply(res: Response): Promise<TaskStatusRow[]> {
+  const body = await res.json().catch(() => null) as { statuses?: TaskStatusRow[] } | null
+  return body?.statuses ?? []
+}
+
+/** Every status this board currently has, left to right. */
+export async function fetchTaskStatuses(): Promise<TaskStatusRow[]> {
+  try {
+    const res = await fetch('/api/tasks/statuses')
+    if (!res.ok) return []
+    return await readStatusesReply(res)
+  } catch {
+    return []
+  }
+}
+
+/** Create a new, non-protected status. The id is DERIVED server-side from the label — never chosen
+ *  by the caller, so two people typing the same label cannot collide on an id neither of them typed. */
+export async function createTaskStatus(label: string, color: string): Promise<
+  { ok: true; status: TaskStatusRow } | { ok: false; message?: string }
+> {
+  try {
+    const res = await fetch('/api/tasks/statuses', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label, color }),
+    })
+    const body = await res.json().catch(() => ({})) as { status?: TaskStatusRow; message?: string }
+    if (!res.ok || !body.status) return { ok: false, ...(body.message ? { message: body.message } : {}) }
+    return { ok: true, status: { ...body.status, usageCount: 0 } }
+  } catch {
+    return { ok: false }
+  }
+}
+
+/** Edit a status's label and/or color — works on a protected one too; only its `id` never changes. */
+export async function editTaskStatus(
+  id: string, patch: { label?: string; color?: string },
+): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/tasks/statuses/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Delete a status. Refused (422) with a NAMED reason — `protected` (todo/in_progress/blocked/done,
+ * regardless of usage) or `in_use` (any other status still referenced by at least one task or
+ * subtask) — which the caller renders as a sentence rather than a bare failure, the same shape
+ * `StatusRefusalReason` already uses for a status MOVE.
+ */
+export async function deleteTaskStatus(id: string): Promise<
+  { ok: true } | { ok: false; message?: StatusDeleteRefusal; usageCount?: number }
+> {
+  try {
+    const res = await fetch(`/api/tasks/statuses/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    if (res.ok) return { ok: true }
+    const body = await res.json().catch(() => ({})) as { message?: StatusDeleteRefusal; usageCount?: number }
+    return { ok: false, ...(body.message ? { message: body.message } : {}), ...(body.usageCount !== undefined ? { usageCount: body.usageCount } : {}) }
+  } catch {
+    return { ok: false }
+  }
 }

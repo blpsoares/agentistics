@@ -22,8 +22,8 @@ import {
   Layer, mountedEditors, nextGoTo, NewFileRow, paneHits, resolveTreeCollapsed, resolveTreeShown,
   resolveTreeSide, resolveTreeWidth, searchRequestNeedsExpand, sessionMovedOn, SPLIT_MIN,
   Studio, StudioBody, sameFile,
-  studioGearEntries, studioLayout, TabStrip, Toolbar, treeCollapsible, TREE_DEFAULT, TREE_MAX,
-  TREE_MIN, TreeDivider, Watermark, watermarkOpacity,
+  studioGearEntries, studioLayout, studioToolbarFit, TabStrip, Toolbar, treeCollapsible, TREE_DEFAULT,
+  TREE_MAX, TREE_MIN, TreeDivider, Watermark, watermarkOpacity,
 } from './Studio'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -517,8 +517,14 @@ describe('TabStrip', () => {
 // --- the toolbar and the new-file row ---------------------------------------------------------------
 
 describe('Toolbar', () => {
+  // `studioToolbarFit(0)` is the WIDEST state — "not measured yet" reads as wide, the same
+  // convention `useElementWidth`'s own header documents — so these chrome tests (which care about
+  // presence, not about the width-driven fit) render every optional item every time.
   const bar = (working: boolean) => renderToStaticMarkup(
-    <Toolbar working={working} isMobile={false} lang="en" onSearch={() => {}} onNew={() => {}} />,
+    <Toolbar
+      working={working} isMobile={false} lang="en" onSearch={() => {}} onNew={() => {}}
+      fit={studioToolbarFit(0)}
+    />,
   )
 
   test('search and new are both reachable', () => {
@@ -532,6 +538,178 @@ describe('Toolbar', () => {
 
   test('and it is absent when nothing is pending', () => {
     expect(bar(false)).not.toContain('The agent is working in this session')
+  })
+})
+
+/**
+ * studioToolbarFit — the pure arithmetic behind the live fix (owner, 2026-09-19, follow-up: "the
+ * three fixed controls are the whole point of this change... a placement where they are cut off by
+ * `overflow: hidden` and unreachable by mouse is this change's own bug"). Tested as WIDTHS, not
+ * screenshots — the same shape `fitColumns`/`fitKpis` are tested with in the TUI package.
+ */
+describe('studioToolbarFit — the trio is never negotiable, everything else degrades in order', () => {
+  test('unmeasured (<= 0) reads as the WIDEST state — everything shown, everything labelled', () => {
+    for (const w of [0, -1, -100]) {
+      expect(studioToolbarFit(w)).toEqual({
+        showSearch: true, showNewFile: true, showNewFolder: true, showWorking: true,
+        beta: 'full', treeLabels: true,
+      })
+    }
+  })
+
+  test('THE RULE: the fixed trio needs no explicit assertion — it is not part of this data at all, '
+    + 'and every width below still leaves room for it (94px) plus its own row padding', () => {
+    // `studioToolbarFit` never returns anything about the trio; it exists only so the OTHER items
+    // never claim more than what is left over. This test's own existence is the assertion: nothing
+    // in `StudioToolbarFit` can ever say "hide the trio".
+    expect(Object.keys(studioToolbarFit(50))).toEqual([
+      'showSearch', 'showNewFile', 'showNewFolder', 'showWorking', 'beta', 'treeLabels',
+    ])
+  })
+
+  test('a width narrower than the trio itself still returns a defined, safe (all-false) result', () => {
+    expect(studioToolbarFit(1)).toEqual({
+      showSearch: false, showNewFile: false, showNewFolder: false, showWorking: false,
+      beta: 'hidden', treeLabels: false,
+    })
+  })
+
+  test('TREE_MIN (150px) — the narrowest the tree column itself can ever be dragged to — still leaves room for the trio plus at least Search', () => {
+    // `studioToolbarFit` receives the CONTENT box, not the column's own border-box width — see the
+    // `studioToolbarFit — measured against the DOM` block below for why (`useElementWidth`'s
+    // `ResizeObserver` reading, 16px less than `TREE_MIN` itself for this row's own padding).
+    const fit = studioToolbarFit(TREE_MIN - 16)
+    expect(fit.showSearch).toBe(true)
+    // At the true minimum there is not room for all three AND the trio — the trio wins, as it must.
+    expect(fit.showNewFile).toBe(false)
+  })
+
+  test('the drop order, most important first: search survives narrower than new-file, which survives narrower than new-folder', () => {
+    // Walk widths downward and record the width at which each first disappears.
+    const disappearsAt = (pick: (fit: ReturnType<typeof studioToolbarFit>) => boolean): number => {
+      for (let w = 400; w >= 0; w -= 1) if (!pick(studioToolbarFit(w))) return w + 1
+      return 0
+    }
+    const search = disappearsAt(f => f.showSearch)
+    const newFile = disappearsAt(f => f.showNewFile)
+    const newFolder = disappearsAt(f => f.showNewFolder)
+    expect(newFolder).toBeGreaterThanOrEqual(newFile)
+    expect(newFile).toBeGreaterThanOrEqual(search)
+  })
+
+  test('labels are ALL-OR-NOTHING across the three tree actions, never half-labelled', () => {
+    // 0..600, not 0..400 — the real label threshold is 481px (measured against the DOM; see the
+    // block below), which a narrower loop would never reach, making the `if` branch below vacuous.
+    for (let w = 0; w <= 600; w += 4) {
+      const fit = studioToolbarFit(w)
+      if (fit.treeLabels) {
+        // Labels only ever apply to buttons that are actually shown; this asserts the flag itself
+        // never appears with zero buttons present to label.
+        expect(fit.showSearch || fit.showNewFile || fit.showNewFolder).toBe(true)
+      }
+    }
+  })
+
+  test('beta only ever reaches "full" by way of "compact" — never hidden straight to full', () => {
+    // Start at 1, not 0 — `studioToolbarFit(0)` is the special "unmeasured" widest reading (`beta:
+    // 'full'` immediately), never a real narrow-to-wide walk, exactly like the monotonic test above.
+    // Ends at 600, not 500 — the measured full-BETA threshold is 513px, which 500 would miss
+    // entirely, leaving the 'full' branch below unexercised.
+    let sawCompact = false
+    let sawFull = false
+    for (let w = 1; w <= 600; w += 1) {
+      const fit = studioToolbarFit(w)
+      if (fit.beta === 'compact') sawCompact = true
+      if (fit.beta === 'full') { expect(sawCompact).toBe(true); sawFull = true }
+    }
+    // Neither branch above is vacuously true — both states are genuinely reached in this range.
+    expect(sawCompact).toBe(true)
+    expect(sawFull).toBe(true)
+  })
+
+  test('monotonic: nothing that is shown at a narrower width is ever hidden at a wider one', () => {
+    let prev = studioToolbarFit(1)
+    for (let w = 2; w <= 600; w += 1) {
+      const fit = studioToolbarFit(w)
+      if (prev.showSearch) expect(fit.showSearch).toBe(true)
+      if (prev.showNewFile) expect(fit.showNewFile).toBe(true)
+      if (prev.showNewFolder) expect(fit.showNewFolder).toBe(true)
+      if (prev.showWorking) expect(fit.showWorking).toBe(true)
+      if (prev.treeLabels) expect(fit.treeLabels).toBe(true)
+      if (prev.beta === 'compact') expect(fit.beta !== 'hidden').toBe(true)
+      if (prev.beta === 'full') expect(fit.beta).toBe('full')
+      prev = fit
+    }
+  })
+
+  test('a very wide toolbar (1440px worth of room) reaches the widest state exactly like unmeasured', () => {
+    expect(studioToolbarFit(1200)).toEqual(studioToolbarFit(0))
+  })
+
+  /**
+   * MEASURED AGAINST THE REAL DOM (owner follow-up, live check 2026-09-20): a clone of the exact
+   * `BarButton`/`PanelFixedControls`/`BetaTag` markup, same font/padding/border, gave the widths
+   * `studioToolbarFit`'s own constants are now built from. This block pins the resulting thresholds
+   * so a future edit to those constants cannot drift back into a guess without a test noticing.
+   *
+   * EVERY WIDTH BELOW IS A CONTENT-BOX NUMBER, NOT A VIEWPORT/COLUMN ONE — a second thing the live
+   * check caught, at the true `TREE_MIN` (150px) itself: a debug probe echoing the exact number this
+   * function receives read `134`, sixteen less than the tree column's own `150`. `useElementWidth`
+   * measures the FIRST frame with `getBoundingClientRect()` (border box) but every frame after a
+   * resize with `ResizeObserver`'s `contentRect` (content box, this row's own 16px of padding already
+   * subtracted) — and every width this function is ever asked about in practice has been through a
+   * resize by the time a reader can act on it. So "the mobile viewport that surfaced this bug" is
+   * 390px of BORDER box and 374px of the CONTENT box `studioToolbarFit` actually receives — the
+   * numbers below are that 374, not 390, with the conversion stated at each one.
+   */
+  test('MEASURED: at the mobile viewport that surfaced this bug live (390px border box, 374px of '
+    + 'content box once `useElementWidth` has been through a resize), all three tree actions show as '
+    + 'ICONS — labels genuinely do not fit there (465px of content box needed; the first, guessed '
+    + 'version of this function claimed 390px was enough and pushed the fixed trio to x≈417, clipped '
+    + 'off a 390px-wide screen and unreachable by touch)', () => {
+    const fit = studioToolbarFit(390 - 16)
+    expect(fit.showSearch).toBe(true)
+    expect(fit.showNewFile).toBe(true)
+    expect(fit.showNewFolder).toBe(true)
+    expect(fit.treeLabels).toBe(false)
+  })
+
+  test('MEASURED: at the true TREE_MIN (150px border box, 134px of content box), the row has room for '
+    + 'Search alone — the bug a live check at exactly this width caught: the first attempt at this fix '
+    + 'reserved the 16px of row padding a SECOND time on top of the already-padding-exclusive content '
+    + 'box, requiring 138px of content box for Search when the row only ever needed 122, and hid '
+    + 'Search outright at the one width this whole feature exists to keep usable at', () => {
+    const fit = studioToolbarFit(150 - 16)
+    expect(fit.showSearch).toBe(true)
+    expect(fit.showNewFile).toBe(false)
+  })
+
+  test('MEASURED: the exact threshold width of every step — one pixel under never shows it, that '
+    + 'pixel and beyond always does (content-box widths throughout — see this block\'s own header)', () => {
+    // The floor: 94px fixed trio, nothing else shown below it.
+    expect(studioToolbarFit(93).showSearch).toBe(false)
+    // Search: +6px row gap +22px icon.
+    expect(studioToolbarFit(121).showSearch).toBe(false)
+    expect(studioToolbarFit(122)).toMatchObject({ showSearch: true, showNewFile: false })
+    // New file: another +6 +22.
+    expect(studioToolbarFit(149).showNewFile).toBe(false)
+    expect(studioToolbarFit(150)).toMatchObject({ showNewFile: true, showNewFolder: false })
+    // New folder: another +6 +22.
+    expect(studioToolbarFit(177).showNewFolder).toBe(false)
+    expect(studioToolbarFit(178)).toMatchObject({ showNewFolder: true, showWorking: false })
+    // The working dot: +8px INNER gap (not the row's 6px — it lives inside the trailing span) +7px.
+    expect(studioToolbarFit(192).showWorking).toBe(false)
+    expect(studioToolbarFit(193)).toMatchObject({ showWorking: true, beta: 'hidden' })
+    // The compact BETA dot: +8px inner gap +5px.
+    expect(studioToolbarFit(205).beta).toBe('hidden')
+    expect(studioToolbarFit(206)).toMatchObject({ beta: 'compact', treeLabels: false })
+    // Labels on all three tree actions at once: +65 (Search) +103 (New file) +91 (New folder) — no
+    // new gap, since these widen buttons already on the row rather than adding new ones.
+    expect(studioToolbarFit(464).treeLabels).toBe(false)
+    expect(studioToolbarFit(465)).toMatchObject({ treeLabels: true, beta: 'compact' })
+    // The full "BETA" word: +32px over the compact dot, again no new gap.
+    expect(studioToolbarFit(496).beta).toBe('compact')
+    expect(studioToolbarFit(497).beta).toBe('full')
   })
 })
 
@@ -641,15 +819,17 @@ describe('Studio', () => {
 
 /**
  * THE GEAR MENU (§2) — everything `StudioBar`'s own always-on row used to carry (the exit, the tree
- * toggle, the flip-side control) plus full screen, now as ROWS of one popover reached from a gear
- * icon on the Buscar/Novo arquivo/Nova pasta row. `studioGearEntries` decides WHAT is offered and
- * what each row SAYS — pure, so it is testable as DATA without a DOM (this package has none, and a
- * popover's own rows render only once OPENED, which `renderToStaticMarkup` cannot do at all).
+ * toggle, the flip-side control), now as ROWS of one popover reached from a gear icon on the
+ * Buscar/Novo arquivo/Nova pasta row. Full screen is NO LONGER one of these rows (2026-09-19) — it
+ * is `PanelFixedControls`' own fixed button now, tested separately in `bandControls.test.tsx`.
+ * `studioGearEntries` decides WHAT is offered and what each row SAYS — pure, so it is testable as
+ * DATA without a DOM (this package has none, and a popover's own rows render only once OPENED,
+ * which `renderToStaticMarkup` cannot do at all).
  */
 describe('studioGearEntries — the gear menu\'s own rows, as data', () => {
   const base = {
     lang: 'en' as const, treeCollapsible: false, treeCollapsed: false, treeSide: 'left' as const,
-    slot: 'right' as const, fullscreenAvailable: false, fullscreen: false,
+    slot: 'right' as const,
   }
 
   test('with nothing else offered, the Studio still always offers its OWN move and close — it can always reach the other slot', () => {
@@ -706,33 +886,17 @@ describe('studioGearEntries — the gear menu\'s own rows, as data', () => {
     expect(fromRight.find(e => e.id === 'tree-side')?.label).toBe('Mover árvore para a esquerda')
   })
 
-  test('full screen is ABSENT wherever it has nowhere to apply — the Studio is not bottom-docked', () => {
-    const ids = studioGearEntries({ ...base, fullscreenAvailable: false, fullscreen: false }).map(e => e.id)
+  test('full screen is NEVER one of these rows any more (2026-09-19) — it is a fixed button now', () => {
+    const ids = studioGearEntries(base).map(e => e.id)
     expect(ids).not.toContain('fullscreen')
+    expect(ids).not.toContain('exit-fullscreen')
   })
 
-  test('full screen states its CURRENT value, both directions, with its own dedicated icon pair', () => {
-    const off = studioGearEntries({ ...base, fullscreenAvailable: true, fullscreen: false })
-    expect(off.find(e => e.id === 'fullscreen')?.label).toBe('Full screen')
-    expect(off.find(e => e.id === 'fullscreen')?.iconId).toBe('maximize')
-    const on = studioGearEntries({ ...base, fullscreenAvailable: true, fullscreen: true })
-    expect(on.find(e => e.id === 'exit-fullscreen')?.label).toBe('Exit full screen')
-    expect(on.find(e => e.id === 'exit-fullscreen')?.iconId).toBe('minimize')
-  })
-
-  test('and in Portuguese', () => {
-    const off = studioGearEntries({ ...base, lang: 'pt', fullscreenAvailable: true, fullscreen: false })
-    expect(off.find(e => e.id === 'fullscreen')?.label).toBe('Tela cheia')
-    const on = studioGearEntries({ ...base, lang: 'pt', fullscreenAvailable: true, fullscreen: true })
-    expect(on.find(e => e.id === 'exit-fullscreen')?.label).toBe('Sair da tela cheia')
-  })
-
-  test('every row, in order — tree first (what StudioBar used to carry), move next, full screen after, close LAST', () => {
+  test('every row, in order — tree first (what StudioBar used to carry), move next, close LAST', () => {
     const everything = studioGearEntries({
-      lang: 'en', treeCollapsible: true, treeCollapsed: false, treeSide: 'left',
-      slot: 'bottom', fullscreenAvailable: true, fullscreen: false,
+      lang: 'en', treeCollapsible: true, treeCollapsed: false, treeSide: 'left', slot: 'bottom',
     })
-    expect(everything.map(e => e.id)).toEqual(['tree-toggle', 'tree-side', 'move-right', 'fullscreen', 'close'])
+    expect(everything.map(e => e.id)).toEqual(['tree-toggle', 'tree-side', 'move-right', 'close'])
   })
 
   test(

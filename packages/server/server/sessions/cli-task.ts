@@ -113,7 +113,16 @@ function attemptBlock(v: AttemptView): string[] {
 async function runMark(ref: string, to: TaskStatus, json: boolean): Promise<number> {
   const out = await markTask(ref, to)
   if (!out.ok) {
-    console.error(`No task matches "${ref}". \`agentop task ls\` lists them.`)
+    // `unknown_status` is new: the status vocabulary is an editable list now
+    // (`@agentistics/core`'s `taskStatus.ts`), and `abandoned` in particular is no longer seeded by
+    // default on a fresh board — only `todo`/`in_progress`/`blocked`/`done` are. Naming the reason
+    // here beats the old blanket "no task matches", which was wrong for every non-`no_such_task`
+    // failure and would have made this command's own new failure mode unreadable.
+    console.error(
+      out.message === 'unknown_status'
+        ? `"${to}" is not a status this board currently has. Create it first (Manage statuses in the web UI, or POST /api/tasks/statuses).`
+        : `No task matches "${ref}". \`agentop task ls\` lists them.`,
+    )
     return 1
   }
   if (json) {

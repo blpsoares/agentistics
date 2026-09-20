@@ -12,6 +12,7 @@
  * OFFERS, so the common case does not have to hit a refusal it could have avoided by construction.
  */
 
+import type { CSSProperties } from 'react'
 import type { Subtask } from '../../lib/tasks'
 
 /** Is this subtask a GROUP (§F.1)? Mirrors the server's `isGroupSubtask` (`task-model.ts`). */
@@ -63,3 +64,72 @@ export function createGroupCandidates(
 export function joinGroupCandidates(subtasks: readonly Subtask[]): Subtask[] {
   return subtasks.filter(isGroupSubtask)
 }
+
+/**
+ * One row of a subtask list laid out for CLUSTERED rendering — a group and its members read as one
+ * visually connected unit (product feedback, 2026-09-19: "quando existirem subtasks agrupadas, a
+ * visualizacao delas tambem deve ser agrupada e nao mostrar um icone de grupo"). A subtask's own
+ * array position is CREATION order, which is not display order once a group forms after its members
+ * already exist (the common case: you group two existing subtasks together) — so this walks the
+ * list once and pulls every member to sit directly under its group, wherever the group itself sits,
+ * rather than leaving the reader to reconstruct the relationship from a caption on each member row.
+ */
+export interface SubtaskClusterRow {
+  subtask: Subtask
+  /** 0 for a loose subtask or a group header; 1 for a row rendered as a member under its group. */
+  depth: 0 | 1
+  /** This row belongs to a REAL cluster (a group with at least one member) — the header and every
+   *  member both carry this, so the caller draws the connecting bar/tint on exactly this set. False
+   *  for a loose subtask, an EMPTY group (no bar to draw down to), and an ORPHANED member (its
+   *  `parentGroupId` names no subtask in this list — never dropped, just rendered as a loose row,
+   *  the same "unknown" fallback `groupOf` already gives it). */
+  clustered: boolean
+  /** The row that OPENS the cluster's bar — a non-empty group's own header row. */
+  clusterFirst: boolean
+  /** The row that CLOSES the cluster's bar — a group's last member. */
+  clusterLast: boolean
+}
+
+export function clusterSubtaskRows(subtasks: readonly Subtask[]): SubtaskClusterRow[] {
+  const rows: SubtaskClusterRow[] = []
+  for (const s of subtasks) {
+    if (isGroupMember(s)) {
+      // Placed under its group below, wherever that group falls in the loop — UNLESS the group it
+      // names is gone from this list, in which case there is no header to place it under and it
+      // renders here instead, exactly like a loose row (never silently dropped).
+      if (subtasks.some(g => g.id === s.parentGroupId)) continue
+      rows.push({ subtask: s, depth: 0, clustered: false, clusterFirst: false, clusterLast: false })
+      continue
+    }
+    if (isGroupSubtask(s)) {
+      const members = groupMembers(s.id, subtasks)
+      const hasMembers = members.length > 0
+      rows.push({ subtask: s, depth: 0, clustered: hasMembers, clusterFirst: hasMembers, clusterLast: false })
+      members.forEach((m, i) => {
+        rows.push({
+          subtask: m, depth: 1, clustered: true, clusterFirst: false, clusterLast: i === members.length - 1,
+        })
+      })
+      continue
+    }
+    rows.push({ subtask: s, depth: 0, clustered: false, clusterFirst: false, clusterLast: false })
+  }
+  return rows
+}
+
+/** The one accent colour every cluster's connecting bar and tint uses — a single, neutral token
+ *  (never the orange this board already spends on status/cost/"ready") so a group's rows read as a
+ *  STRUCTURAL unit, not as another status colour to learn. */
+export const CLUSTER_ACCENT = 'var(--text-tertiary)'
+export const CLUSTER_TINT = 'var(--bg-elevated)'
+
+/** The inset left bar — drawn INSIDE the cell so it never widens a column or fights
+ *  `border-collapse`, and lines up into one continuous stripe across adjacent clustered rows since
+ *  consecutive `<tr>`s sit with no gap between them. Applied to a cluster row's leading cell only. */
+export const clusterBarStyle = (clustered: boolean): CSSProperties =>
+  (clustered ? { boxShadow: `inset 3px 0 0 0 ${CLUSTER_ACCENT}` } : {})
+
+/** The shared tint for every cell of a clustered row (header + members alike) — what makes the
+ *  group read as one container instead of a caption repeated on each member. */
+export const clusterTintStyle = (clustered: boolean): CSSProperties =>
+  (clustered ? { background: CLUSTER_TINT } : {})

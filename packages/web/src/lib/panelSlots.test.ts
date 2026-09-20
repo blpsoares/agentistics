@@ -27,12 +27,18 @@ describe('allowed — the closed sets', () => {
     for (const p of PANEL_IDS) expect(allowed('right', p)).toBe(true)
   })
 
-  test('bottom hosts cli/shell/studio — contents and hardware do not fit a band', () => {
-    expect(allowed('bottom', 'contents')).toBe(false)
-    expect(allowed('bottom', 'studio')).toBe(true)
-    expect(allowed('bottom', 'cli')).toBe(true)
-    expect(allowed('bottom', 'shell')).toBe(true)
-    expect(allowed('bottom', 'hardware')).toBe(false)
+  // DECISION, 2026-09-19 (owner: "o hardware nao ta com a opcao de abrir no componente inferior e
+  // nem o Conteúdo, ambos também deveriam estar aparecendo"): `contents`/`hardware` used to be
+  // right-only ("a tabbed list does not fit a band" / "no useful shape under the composer, nobody
+  // asked for it there") — this test used to pin exactly that restriction and now pins its reversal.
+  test('bottom hosts all five panels — every panel reaches both slots', () => {
+    for (const p of PANEL_IDS) expect(allowed('bottom', p)).toBe(true)
+  })
+
+  test('EVERY panel × slot combination is allowed — the "all five behave alike" guarantee, pinned', () => {
+    for (const slot of SLOTS) {
+      for (const p of PANEL_IDS) expect(allowed(slot, p)).toBe(true)
+    }
   })
 })
 
@@ -51,9 +57,11 @@ describe('openPanel — exhaustive, every panel × slot × starting occupant', (
     }
   })
 
-  test('an illegal placement is REFUSED — same object, nothing coerced', () => {
+  // Was "an illegal placement is REFUSED" against `contents`/`bottom` — that placement is legal as
+  // of 2026-09-19 (see `allowed`'s own test above), so this now pins the OPPOSITE: it succeeds.
+  test('contents can now open at the bottom — no longer an illegal placement', () => {
     const next = openPanel(EMPTY_SLOT_LAYOUT, 'contents', 'bottom')
-    expect(next).toBe(EMPTY_SLOT_LAYOUT)
+    expect(next.bottom).toBe('contents')
   })
 
   test('with no slot given, it falls back to lastSlot, then to the panel’s default', () => {
@@ -66,8 +74,9 @@ describe('openPanel — exhaustive, every panel × slot × starting occupant', (
     expect(openPanel(remembered, 'cli').right).toBe('cli')
   })
 
-  test('hardware can never land at the bottom, even asked for explicitly — right only', () => {
-    expect(openPanel(EMPTY_SLOT_LAYOUT, 'hardware', 'bottom')).toBe(EMPTY_SLOT_LAYOUT)
+  // Was "hardware can never land at the bottom" — reversed by the same 2026-09-19 decision.
+  test('hardware can now land at the bottom when asked for explicitly', () => {
+    expect(openPanel(EMPTY_SLOT_LAYOUT, 'hardware', 'bottom').bottom).toBe('hardware')
   })
 
   test('opening a panel where another already sits DISPLACES it — the other stops being shown anywhere', () => {
@@ -152,9 +161,13 @@ describe('movePanel', () => {
     expect(movePanel(start, 'shell', 'bottom')).toBe(start)
   })
 
-  test('a move to an illegal slot is refused', () => {
+  // Was "a move to an illegal slot is refused" against `contents` → `bottom` — legal since
+  // 2026-09-19, so this now pins that the move actually lands.
+  test('contents can now move to the bottom', () => {
     const start = openPanel(EMPTY_SLOT_LAYOUT, 'contents', 'right')
-    expect(movePanel(start, 'contents', 'bottom')).toBe(start)
+    const next = movePanel(start, 'contents', 'bottom')
+    expect(next.bottom).toBe('contents')
+    expect(next.right).toBeNull()
   })
 
   test('every legal move, from every legal starting position, lands exactly where asked', () => {
@@ -321,9 +334,23 @@ describe('resolveForViewport — the phone reading', () => {
     expect(resolveForViewport(stored, false)).toBe(stored)
   })
 
-  test('mobile with nothing studio-shaped in the bottom is untouched', () => {
-    const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, bottom: 'shell', bottomOpen: true }
-    expect(resolveForViewport(stored, true)).toBe(stored)
+  test('cli/shell in the bottom are the one exception — untouched, SessionPanel draws its own mobile terminal', () => {
+    for (const panel of ['cli', 'shell'] as const) {
+      const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, bottom: panel, bottomOpen: true }
+      expect(resolveForViewport(stored, true)).toBe(stored)
+    }
+  })
+
+  // GENERALIZED, 2026-09-19 (alongside `contents`/`hardware` joining `BOTTOM_PANELS`): any
+  // desktop-only bottom occupant reads as the right sheet on a phone, not only `'studio'`.
+  test('a stored bottom contents/hardware ALSO becomes the fullscreen right sheet on a phone', () => {
+    for (const panel of ['contents', 'hardware'] as const) {
+      const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, bottom: panel, bottomOpen: true }
+      const seen = resolveForViewport(stored, true)
+      expect(seen.right).toBe(panel)
+      expect(seen.bottom).toBeNull()
+      expect(seen.rightOpen).toBe(true)
+    }
   })
 
   test('turning the phone back into a desktop restores the ORIGINAL stored layout — nothing was rewritten', () => {
@@ -465,10 +492,19 @@ describe('the storage guard — readLayout', () => {
     expect(readLayout(s)).toEqual(EMPTY_SLOT_LAYOUT)
   })
 
-  test('an illegal occupant recorded by hand (or by an older build) is dropped, not trusted', () => {
+  test('an occupant that is not even a PanelId, recorded by hand (or by an older build), is dropped, not trusted', () => {
+    const s = memory()
+    s.setItem('agentistics-panel-slots', JSON.stringify({ right: null, bottom: 'not-a-panel', bottomOpen: true }))
+    expect(readLayout(s).bottom).toBeNull()
+  })
+
+  // Was "an illegal occupant... 'contents' [at bottom]" — that placement is legal as of 2026-09-19
+  // (every panel reaches both slots), so this now pins that a stored `contents` at the bottom is
+  // TRUSTED and round-trips, rather than silently dropped the way it used to be.
+  test('contents recorded at the bottom round-trips — no longer an illegal occupant to distrust', () => {
     const s = memory()
     s.setItem('agentistics-panel-slots', JSON.stringify({ right: null, bottom: 'contents', bottomOpen: true }))
-    expect(readLayout(s).bottom).toBeNull()
+    expect(readLayout(s).bottom).toBe('contents')
   })
 
   test('bottomOpen with no bottom occupant reads as false — nothing to show', () => {
@@ -481,11 +517,12 @@ describe('the storage guard — readLayout', () => {
     const s = memory()
     s.setItem('agentistics-panel-slots', JSON.stringify({
       right: null, bottom: null, bottomOpen: false,
-      // `contents` cannot host at the bottom (so that entry is dropped), `cli`'s value is not even
-      // a slot name, and `studio` really can sit at the bottom — that one is kept.
+      // `contents` CAN now host at the bottom (2026-09-19, kept), `cli`'s value is not even a slot
+      // name (dropped, falls back to its own default), and `studio` really can sit at the bottom
+      // too — also kept.
       lastSlot: { contents: 'bottom', cli: 'nowhere', studio: 'bottom' },
     }))
-    expect(readLayout(s).lastSlot).toEqual({ ...DEFAULT_LAST_SLOT, studio: 'bottom' })
+    expect(readLayout(s).lastSlot).toEqual({ ...DEFAULT_LAST_SLOT, contents: 'bottom', studio: 'bottom' })
   })
 })
 

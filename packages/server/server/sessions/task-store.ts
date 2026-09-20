@@ -20,7 +20,7 @@
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { normalizeStagedSession } from '@agentistics/core'
+import { isValidStatusColor, normalizeStagedSession, type TaskStatusDef } from '@agentistics/core'
 import { withFileLock } from './file-lock'
 import { migratePriority, migrateStatus, subtaskDone } from './task-model'
 import { heldByOther } from './task-next'
@@ -63,8 +63,12 @@ export interface AttemptPatch {
   updatedAt?: string
 }
 
-const EMPTY_BOOK = (): TaskBook =>
-  ({ tasks: [], attempts: [], comments: [], subtasks: [], files: [], tombstones: [], events: [] })
+const EMPTY_BOOK = (): TaskBook => ({
+  tasks: [], attempts: [], comments: [], subtasks: [], files: [], tombstones: [], events: [],
+  // Absent/empty is exactly what `planStatusMigration` reads as "never seeded yet" — see
+  // `task-source.ts`'s `ensureStatusesSeeded`, which fills this in on the very next load.
+  statuses: [],
+})
 
 /**
  * How much history the log keeps, across the whole board.
@@ -128,6 +132,22 @@ export interface TaskStore {
   setRanks(ranks: ReadonlyArray<{ id: string; rank: string }>): Promise<void>
   /** Append to the activity log. Never throws on a task that has since gone. */
   logEvents(events: readonly TaskEvent[]): Promise<void>
+
+  /**
+   * Write the WHOLE status list at once — the seed-once migration's own write
+   * (`task-source.ts`'s `ensureStatusesSeeded`), and the only caller that should ever replace the
+   * list wholesale rather than editing one entry. Refuses when a list already exists and is
+   * non-empty, mirroring `planStatusMigration`'s own idempotency rule at the point where it is
+   * actually written — a second process racing to seed the same fresh book must not overwrite
+   * whichever one got there first with a list built from stale reads.
+   */
+  seedStatuses(list: readonly TaskStatusDef[]): Promise<void>
+  /** Add a new status, or edit an existing one's label/color. The `id` is never rewritten by this —
+   *  create mints a fresh entry, edit finds the existing one by `id` and replaces label/color only. */
+  upsertStatus(def: TaskStatusDef): Promise<void>
+  /** False when no status carries that id — never a silent success. The caller (`task-web.ts`) is
+   *  the one that checks `canDeleteStatus` BEFORE calling this; this method trusts that call. */
+  removeStatus(id: string): Promise<boolean>
 }
 
 /**
@@ -327,6 +347,21 @@ function sanitizeSubtask(raw: unknown): Subtask | null {
   }
 }
 
+/** A status entry with no `id`, no `label` or an invalid `color` is dropped outright — a half-read
+ *  status is worse than none, the same rule `sanitizeLink` applies to a task's outbound links. */
+function sanitizeStatusDef(raw: unknown): TaskStatusDef | null {
+  if (!raw || typeof raw !== 'object') return null
+  const s = raw as Record<string, unknown>
+  const id = str(s.id); const label = str(s.label)
+  if (!id || !label) return null
+  if (!isValidStatusColor(s.color)) return null
+  return {
+    id, label, color: s.color,
+    protected: s.protected === true,
+    order: typeof s.order === 'number' && Number.isFinite(s.order) ? s.order : 0,
+  }
+}
+
 function sanitizeFile(raw: unknown): TaskFile | null {
   if (!raw || typeof raw !== 'object') return null
   const f = raw as Record<string, unknown>
@@ -374,6 +409,9 @@ export function createTaskStore(file: string): TaskStore {
         files: arr(raw.files).map(sanitizeFile).filter((f): f is TaskFile => f !== null),
         tombstones: arr(raw.tombstones).filter((v): v is string => typeof v === 'string'),
         events: arr(raw.events).map(sanitizeEvent).filter((e): e is TaskEvent => e !== null),
+        // Absent on a book written before this feature existed — same reason every field above goes
+        // through `arr` rather than trusting it to be there.
+        statuses: arr(raw.statuses).map(sanitizeStatusDef).filter((s): s is TaskStatusDef => s !== null),
       }
     } catch {
       corrupt = true
@@ -514,6 +552,8 @@ export function createTaskStore(file: string): TaskStore {
           subtasks: book.subtasks.filter(t => t.taskId !== id),
           files: book.files.filter(f => f.taskId !== id),
           events: book.events.filter(e => e.taskId !== id),
+          // The status VOCABULARY is board-wide, not per-task — deleting a task never touches it.
+          statuses: book.statuses,
           // Remembered as DELETED, or the legacy migration mints it again on the next read.
           tombstones: [...new Set([...book.tombstones, id])],
         })
@@ -593,6 +633,34 @@ export function createTaskStore(file: string): TaskStore {
         // Oldest go first once the cap is reached — the question the log answers is about the
         // recent end, and the durable record lives on the tasks themselves.
         await write({ ...book, events: all.slice(Math.max(0, all.length - MAX_EVENTS)) })
+      })
+    },
+    seedStatuses(list) {
+      return enqueue(async () => {
+        const book = await read()
+        // Re-checked HERE, under the lock, against the freshest read — not the caller's own
+        // (possibly now-stale) read that decided a migration was needed. Two processes racing to
+        // open the same brand-new book must not both win: the second one through the lock sees the
+        // first one's write and refuses.
+        if (book.statuses.length > 0) return
+        await write({ ...book, statuses: [...list] })
+      })
+    },
+    upsertStatus(def) {
+      return enqueue(async () => {
+        const book = await read()
+        await write({
+          ...book,
+          statuses: [...book.statuses.filter(s => s.id !== def.id), def],
+        })
+      })
+    },
+    removeStatus(id) {
+      return enqueue(async () => {
+        const book = await read()
+        if (!book.statuses.some(s => s.id === id)) return false
+        await write({ ...book, statuses: book.statuses.filter(s => s.id !== id) })
+        return true
       })
     },
   }

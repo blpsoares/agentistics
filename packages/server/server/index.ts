@@ -1620,6 +1620,38 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         }),
       })
     }
+    // The status VOCABULARY (`@agentistics/core`'s `TaskStatusDef`) — matched before the generic
+    // `<ref>` routes below for the same reason `next`/`activity` are: otherwise `statuses` resolves
+    // as a task reference and answers 404 on a board that has one.
+    if (url.pathname === '/api/tasks/statuses' && req.method === 'GET') {
+      const { listStatuses } = await import('./sessions/task-web')
+      return json({ statuses: await listStatuses() })
+    }
+    if (url.pathname === '/api/tasks/statuses' && req.method === 'POST') {
+      const body = await req.json().catch(() => ({})) as { label?: string; color?: string }
+      const { createStatus } = await import('./sessions/task-web')
+      const out = await createStatus({ label: String(body.label ?? ''), color: String(body.color ?? '') })
+      return json(out, out.ok ? 200 : 400)
+    }
+    if (url.pathname.startsWith('/api/tasks/statuses/') && req.method === 'POST') {
+      const id = decodeURIComponent(url.pathname.slice('/api/tasks/statuses/'.length))
+      const body = await req.json().catch(() => ({})) as { label?: string; color?: string }
+      const { editStatus } = await import('./sessions/task-web')
+      const out = await editStatus(id, {
+        ...(typeof body.label === 'string' ? { label: body.label } : {}),
+        ...(typeof body.color === 'string' ? { color: body.color } : {}),
+      })
+      return json(out, out.ok ? 200 : (out.message === 'no_such_status' ? 404 : 400))
+    }
+    if (url.pathname.startsWith('/api/tasks/statuses/') && req.method === 'DELETE') {
+      const id = decodeURIComponent(url.pathname.slice('/api/tasks/statuses/'.length))
+      const { deleteStatus } = await import('./sessions/task-web')
+      const out = await deleteStatus(id)
+      // `protected`/`in_use` are 422, the same shape `blocked_needs_reason`/`done_needs_session`
+      // answer with — each names a piece of work this request cannot do, not a resource that is
+      // missing. `no_such_status` stays 404: the id named nothing.
+      return json(out, out.ok ? 200 : (out.message === 'no_such_status' ? 404 : 422))
+    }
     if (url.pathname.startsWith('/api/tasks/') && req.method === 'GET') {
       const ref = decodeURIComponent(url.pathname.slice('/api/tasks/'.length))
       const { showTask } = await import('./sessions/task-web')
@@ -1789,6 +1821,11 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             result,
             result.ok
               ? 200
+              // `unknown_status` is 400, the same class `bad_status` is at the task level above —
+              // the request never named a real status. Everything else here names a piece of work
+              // the request cannot do, not a resource that is missing, hence 422; `no_such_subtask`
+              // alone stays 404.
+              : result.message === 'unknown_status' ? 400
               : (result.message === 'done_needs_session' || result.message === 'invalid_group'
                   || result.message === 'subtask_has_sessions'
                   || result.message === 'group_field_conflict'
@@ -1860,11 +1897,10 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         const ok = await mod.setBlockedBy(ref, body.blockedBy.filter((v): v is string => typeof v === 'string'))
         return json({ ok }, ok ? 200 : 404)
       }
-      const { TASK_STATUSES } = await import('./sessions/task-model')
-      const to = typeof body.status === 'string'
-        && (TASK_STATUSES as readonly string[]).includes(body.status)
-        ? body.status as import('./sessions/task-model').TaskStatus
-        : null
+      // The status VOCABULARY is a dynamic list now (`TaskBook.statuses`), not a closed type the
+      // route can check against a constant — `markTask` itself validates `to` against the board's
+      // own list and answers `unknown_status` when it names nothing (see its own note).
+      const to = typeof body.status === 'string' && body.status.trim() ? body.status : null
       if (!to) return json({ error: 'bad_status' }, 400)
       const out = await mod.markTask(
         ref, to,
@@ -1876,11 +1912,14 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             : {}),
         },
       )
-      // 422, not 404: the task exists and the move is understood — it is missing the one thing
-      // `blocked`/`done` cannot be recorded without. A 4xx a caller can act on, with a code that
-      // says so. `done_needs_session` rides the exact same channel `blocked_needs_reason` does
-      // (spec 2026-09-11 §A.4).
+      // 400, not 404: `unknown_status` is the same class of error `bad_status` above already is —
+      // the request never named a real status, which is caught here rather than at the route only
+      // because the CLI and the MCP call `markTask` directly and must be bound by it too.
+      // `blocked_needs_reason`/`done_needs_session` are 422: the task exists and the move is
+      // understood — it is missing the one thing that status cannot be recorded without. A 4xx a
+      // caller can act on, with a code that says so.
       return json(out, out.ok ? 200
+        : out.message === 'unknown_status' ? 400
         : (out.message === 'blocked_needs_reason' || out.message === 'done_needs_session') ? 422 : 404)
     }
 

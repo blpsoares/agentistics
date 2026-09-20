@@ -34,7 +34,10 @@ async function store() {
 describe('createTaskStore', () => {
   it('reads an empty book when the file does not exist', async () => {
     const { s } = await store()
-    expect(await s.read()).toEqual({ tasks: [], attempts: [], comments: [], subtasks: [], files: [], tombstones: [], events: [] })
+    expect(await s.read()).toEqual({
+      tasks: [], attempts: [], comments: [], subtasks: [], files: [], tombstones: [], events: [],
+      statuses: [],
+    })
   })
 
   it('round-trips a task', async () => {
@@ -106,7 +109,10 @@ describe('createTaskStore', () => {
   it('reads an empty book from corrupt bytes instead of throwing', async () => {
     const { file, s } = await store()
     await writeFile(file, '{ this is not json', 'utf8')
-    expect(await s.read()).toEqual({ tasks: [], attempts: [], comments: [], subtasks: [], files: [], tombstones: [], events: [] })
+    expect(await s.read()).toEqual({
+      tasks: [], attempts: [], comments: [], subtasks: [], files: [], tombstones: [], events: [],
+      statuses: [],
+    })
   })
 
   it('moves corrupt bytes aside rather than overwriting them', async () => {

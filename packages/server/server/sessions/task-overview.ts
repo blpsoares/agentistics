@@ -15,7 +15,7 @@
 
 import type { SessionMeta } from '@agentistics/core'
 import { sessionTokens } from '@agentistics/core'
-import { TASK_STATUSES, isClosed, type Task, type TaskStatus } from './task-model'
+import { isClosed, type Task } from './task-model'
 import type { Bucket } from './task-stats'
 import type { ManagedSession } from './types'
 import { distinctConversations, rowsOfTask } from './task-report'
@@ -43,8 +43,15 @@ export interface BoardDailyPoint {
 }
 
 export interface BoardOverview {
-  /** Every status, always present — a column at zero is a fact, not an absence. */
-  statusCounts: Record<TaskStatus, number>
+  /**
+   * Every KNOWN status, always present — a column at zero is a fact, not an absence.
+   *
+   * "Known" is whatever `buildBoardOverview`'s caller passed as `statusIds` (the board's own
+   * `TaskBook.statuses`, in practice) — the status vocabulary is a dynamic list now, not the closed
+   * seven-value union this field's type used to be, so it is a plain `Record<string, number>` and a
+   * reader must not assume any particular set of keys is present beyond what it asked for.
+   */
+  statusCounts: Record<string, number>
   tasks: number
   inFlight: number
   delivered: number
@@ -109,10 +116,20 @@ export function buildBoardOverview(o: {
   rows: readonly ManagedSession[]
   metas: ReadonlyMap<string, SessionMeta>
   costOf: (m: SessionMeta) => number
+  /**
+   * Every status id this board currently knows (`TaskBook.statuses`, mapped to their ids) — seeded
+   * so a column nobody is currently in still reports zero rather than being absent. Optional, and
+   * falls back to whatever the tasks themselves carry, for callers (tests, mainly) that have no
+   * status list handy; a real caller always has one, since `loadTaskWorld` seeds it on first read.
+   */
+  statusIds?: readonly string[]
 }): BoardOverview {
+  const knownIds = o.statusIds && o.statusIds.length > 0
+    ? o.statusIds
+    : [...new Set(o.tasks.map(t => t.status))]
   const statusCounts = Object.fromEntries(
-    TASK_STATUSES.map(s => [s, 0]),
-  ) as Record<TaskStatus, number>
+    knownIds.map(s => [s, 0]),
+  ) as Record<string, number>
 
   const models = new Map<string, { sessions: number; tokens: number | null }>()
   const harnesses = new Map<string, { sessions: number; tokens: number | null }>()

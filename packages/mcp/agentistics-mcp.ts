@@ -207,14 +207,15 @@ const TOOLS: Tool[] = [
   {
     name: "agentistics_task_status",
     description:
-      "BETA — the task board is new and still changing; its shapes may move between releases. Move a task: backlog | todo | in_progress | blocked | in_review | done | abandoned. Only `done` stamps a delivery and closes rounds-to-delivery; `abandoned` records that the work was given up on, which is a real outcome and not a failure to report. **`blocked` REQUIRES a `reason` or a `blockedBy` list** and is refused (422) without one: it is the status that names a problem somebody has to go and solve, and a blocked card that does not say what it is waiting on cannot be unblocked by anyone but you. **`done` REQUIRES the task to have at least one session filed under it** and is refused (422, `done_needs_session`) without one. Pass `actor` (who you are) so the move is recorded against you in the activity log.",
+      "BETA — the task board is new and still changing; its shapes may move between releases. Move a task to a status. The status VOCABULARY is an editable list now, not a fixed set — call agentistics_task_statuses first if you are unsure what this board currently has; a fresh board starts with exactly `todo`, `in_progress`, `blocked` and `done`. Only `done` stamps a delivery and closes rounds-to-delivery; `abandoned` (when the board has it) records that the work was given up on, which is a real outcome and not a failure to report — but it is NOT created by default, so use agentistics_task_status_edit to add it (or any other status) first if it is missing. **`blocked` REQUIRES a `reason` or a `blockedBy` list** and is refused (422) without one: it is the status that names a problem somebody has to go and solve, and a blocked card that does not say what it is waiting on cannot be unblocked by anyone but you. **`done` REQUIRES the task to have at least one session filed under it** and is refused (422, `done_needs_session`) without one. A `status` naming nothing this board currently has is refused (400, `unknown_status`). Pass `actor` (who you are) so the move is recorded against you in the activity log.",
     inputSchema: {
       type: "object",
       properties: {
         ref: { type: "string" },
         status: {
           type: "string",
-          enum: ["backlog", "todo", "in_progress", "blocked", "in_review", "done", "abandoned"],
+          description:
+            "A status id this board currently has — call agentistics_task_statuses to see the live list. The four every board starts with are todo | in_progress | blocked | done.",
         },
         actor: { type: "string" },
         reason: {
@@ -228,6 +229,26 @@ const TOOLS: Tool[] = [
         },
       },
       required: ["ref", "status"],
+    },
+  },
+  {
+    name: "agentistics_task_statuses",
+    description:
+      "BETA — the task board is new and still changing; its shapes may move between releases. List every status this board currently has (id, label, color, and whether it is protected — todo/in_progress/blocked/done can never be deleted or have their id changed, but their label and color can). Call this before agentistics_task_status if you are not sure a status you want to move a task to actually exists.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "agentistics_task_status_edit",
+    description:
+      "BETA — the task board is new and still changing; its shapes may move between releases. Add, rename/recolor, or delete a status. Pass `label` (and optional `color`, a `#rrggbb` hex string) alone to CREATE a new, non-protected status — its id is derived from the label and returned. Pass `id` with `label` and/or `color` to EDIT an existing status's label/color — works on a protected one too, only its id can never change. Pass `id` with `remove: true` to DELETE it: refused (422, `protected`) for todo/in_progress/blocked/done regardless of usage, and refused (422, `in_use`, with `usageCount`) for any other status still referenced by at least one task or subtask.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Required to edit or delete; omit to create." },
+        label: { type: "string" },
+        color: { type: "string", description: "A #rrggbb hex string." },
+        remove: { type: "boolean" },
+      },
     },
   },
   {
@@ -649,6 +670,26 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(typeof a?.reason === "string" ? { reason: a.reason } : {}),
           ...(Array.isArray(a?.blockedBy) ? { blockedBy: a.blockedBy } : {}),
         });
+        return { content: [{ type: "text", text: JSON.stringify(body, null, 2) }] };
+      }
+      case "agentistics_task_statuses": {
+        const body = await apiGet("/api/tasks/statuses");
+        return { content: [{ type: "text", text: JSON.stringify(body, null, 2) }] };
+      }
+      case "agentistics_task_status_edit": {
+        const a = args as any;
+        const id = typeof a?.id === "string" && a.id ? a.id : null;
+        if (id && a?.remove === true) {
+          const body = await apiSend("DELETE", `/api/tasks/statuses/${encodeURIComponent(id)}`);
+          return { content: [{ type: "text", text: JSON.stringify(body, null, 2) }] };
+        }
+        const payload = {
+          ...(typeof a?.label === "string" ? { label: a.label } : {}),
+          ...(typeof a?.color === "string" ? { color: a.color } : {}),
+        };
+        const body = id
+          ? await apiSend("POST", `/api/tasks/statuses/${encodeURIComponent(id)}`, payload)
+          : await apiSend("POST", "/api/tasks/statuses", payload);
         return { content: [{ type: "text", text: JSON.stringify(body, null, 2) }] };
       }
       case "agentistics_task_comment": {

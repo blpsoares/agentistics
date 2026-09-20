@@ -71,8 +71,15 @@ describe('migrateStatus', () => {
     for (const s of TASK_STATUSES) expect(migrateStatus(s)).toBe(s)
   })
 
-  it('refuses a word that is not a status rather than inventing one', () => {
-    expect(migrateStatus('frobnicated')).toBeNull()
+  it('passes any other non-empty word through too — the vocabulary is a dynamic list now, and this', () => {
+    // function only repairs the two legacy WORDS. Whether a word actually names a real status is
+    // decided at WRITE time, against `TaskBook.statuses` — see this function's own docblock.
+    expect(migrateStatus('waiting_on_client')).toBe('waiting_on_client')
+  })
+
+  it('refuses input that could never be a status id', () => {
+    expect(migrateStatus('')).toBeNull()
+    expect(migrateStatus('   ')).toBeNull()
     expect(migrateStatus(7)).toBeNull()
     expect(migrateStatus(undefined)).toBeNull()
   })
