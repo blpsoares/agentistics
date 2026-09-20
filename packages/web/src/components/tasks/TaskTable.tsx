@@ -46,7 +46,9 @@ import { StatusChip } from './StatusChip'
 import { boardCopy, statusLabel, type Lang } from './copy'
 import { subtaskSessions } from './SubtaskSessions'
 import { SubtaskActionsMenu } from './SubtaskActionsMenu'
-import { groupOf, isGroupMember, isGroupSubtask } from './subtaskGroups'
+import {
+  clusterBarStyle, clusterSubtaskRows, clusterTintStyle, groupOf, isGroupMember, isGroupSubtask,
+} from './subtaskGroups'
 import { subtaskRollupOf } from './subtaskRollup'
 import { PickerMenu } from './PickerMenu'
 import { TaskProgressBar } from './TaskProgressBar'
@@ -308,25 +310,30 @@ function SubtaskRows({
   }
   // 1 (checkbox) + 6 named cells + filler + 1 (remove) must equal cols + 3.
   const filler = Math.max(0, cols - 5)
+  // See `SubtaskTable`'s own doc comment for the full §F.1 clustering reasoning — this mirrors it
+  // exactly, over the same `subtasks` pool (already scoped to one delivery): a member renders
+  // directly under its group regardless of creation order, connected by an inset bar plus a shared
+  // tint, rather than a caption repeated on every member row.
   return (
     <>
-      {subtasks.map(t => {
-        // See `SubtaskTable`'s own row for the full §F.1 reasoning — this mirrors it exactly, over
-        // the same `subtasks` pool (already scoped to one delivery).
+      {clusterSubtaskRows(subtasks).map(({ subtask: t, depth, clustered }) => {
         const isMember = isGroupMember(t)
         const isGroup = isGroupSubtask(t)
         const view = subtaskRollups.find(v => v.id === t.id)
-        const parentGroup = isMember ? groupOf(t, subtasks) : undefined
+        const parentGroup = isMember && !clustered ? groupOf(t, subtasks) : undefined
+        const tint = clusterTintStyle(clustered)
         return (
-        <tr key={t.id} style={{ background: 'var(--bg-surface)' }}>
+        <tr key={t.id} style={{ background: clustered ? undefined : 'var(--bg-surface)' }}>
           {/* The leading "checkbox" slot every row above this one uses for batch-select — a subtask
               is never batch-selectable, so it was always blank here. It now carries the ONE gear
               menu instead (`SubtaskActionsMenu`'s own doc comment): group actions and remove, the
               two of its five sections this board already wires. Blocked-by and the staged-session
               lifecycle are NOT here — this inline view has never had that plumbing (no compose
               dialog, no `onSaveStagedSession`), a pre-existing gap this pass does not invent, so the
-              same component simply omits what it was not given. */}
-          <td style={{ padding: cellPad }}>
+              same component simply omits what it was not given. The inset left bar
+              (`clusterBarStyle`) lands here — the leading edge of every clustered row, header
+              through last member, so it reads as one continuous stripe. */}
+          <td style={{ padding: cellPad, ...tint, ...clusterBarStyle(clustered) }}>
             <SubtaskActionsMenu
               subtask={t}
               siblings={subtasks}
@@ -336,7 +343,10 @@ function SubtaskRows({
               onRemove={onRemove}
             />
           </td>
-          <td style={{ padding: cellPad, paddingLeft: indent }}>
+          {/* A MEMBER is indented one level further than the base subtask indent — the visual
+              nesting that replaces the old "parte do grupo" caption for every properly clustered
+              row. */}
+          <td style={{ padding: cellPad, paddingLeft: indent + (depth === 1 ? 20 : 0), ...tint }}>
             <input
               value={t.title}
               onChange={e => void onPatch(t.id, { title: e.target.value })}
@@ -344,12 +354,19 @@ function SubtaskRows({
                 ...bare,
                 color: t.done ? 'var(--text-tertiary)' : 'var(--text-secondary)', fontSize: 12.5,
                 textDecoration: t.done ? 'line-through' : 'none',
+                // A GROUP's header reads as a container's title, not another row — the weight is
+                // what makes it read as a HEADING when the row is scanned rather than compared
+                // cell-by-cell against its neighbours.
+                fontWeight: isGroup && clustered ? 700 : undefined,
               }}
             />
             {isGroup && view?.groupProgress && (
               <TaskProgressBar done={view.groupProgress.done} total={view.groupProgress.total} height={3} />
             )}
-            {isMember && (
+            {/* An ORPHANED member only (its group is gone from this list) — the one case with no
+                cluster to place it in, so the words are the only thing left saying where it came
+                from. A properly clustered member says nothing here; its position already does. */}
+            {isMember && !clustered && (
               <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>
                 {lang === 'pt' ? 'parte do grupo: ' : 'part of group: '}
                 <span style={{ color: 'var(--text-secondary)' }}>
@@ -358,7 +375,7 @@ function SubtaskRows({
               </div>
             )}
           </td>
-          <td style={{ padding: cellPad }}>
+          <td style={{ padding: cellPad, ...tint }}>
             <ChipSelect
               compact
               value={t.status}
@@ -366,7 +383,7 @@ function SubtaskRows({
               onPick={v => void onPatch(t.id, { status: v as TaskStatus })}
             />
           </td>
-          <td style={{ padding: cellPad }}>
+          <td style={{ padding: cellPad, ...tint }}>
             <input
               value={t.assignee ?? ''} placeholder="—"
               onChange={e => void onPatch(t.id, { assignee: e.target.value })}
@@ -374,20 +391,20 @@ function SubtaskRows({
             />
           </td>
           {/* See `SubtaskTable`: one date picker in this app, and it fits its column. */}
-          <td style={{ padding: cellPad }}>
+          <td style={{ padding: cellPad, ...tint }}>
             <DatePicker
               value={t.startDate ?? ''} label="" placeholder="—" lang="en"
               onChange={v => void onPatch(t.id, { startDate: v })}
             />
           </td>
-          <td style={{ padding: cellPad }}>
+          <td style={{ padding: cellPad, ...tint }}>
             <DatePicker
               value={t.dueDate ?? ''} label="" placeholder="—" lang="en"
               min={t.startDate || undefined}
               onChange={v => void onPatch(t.id, { dueDate: v })}
             />
           </td>
-          <td style={{ padding: cellPad }}>
+          <td style={{ padding: cellPad, ...tint }}>
             {/* A MEMBER can never hold a session (§F.1, refused server-side) — no filing control,
                 and never a chip list unioned from its group's sessions (superseded §B.4). */}
             {!isMember && subtaskSessions({
@@ -401,11 +418,11 @@ function SubtaskRows({
               onOpen: onOpenSession,
             })}
           </td>
-          {filler > 0 && <td colSpan={filler} />}
+          {filler > 0 && <td colSpan={filler} style={tint} />}
           {/* The trailing "remove" slot stays, empty, so this row keeps the same td COUNT the
               group's header expects (see the `filler` comment above) — the action itself moved
               into the gear menu, leading the row, above. */}
-          <td style={{ padding: cellPad }} />
+          <td style={{ padding: cellPad, ...tint }} />
         </tr>
         )
       })}
