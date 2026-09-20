@@ -759,15 +759,8 @@ function StudioBand({
           way back once the tree is minimized. Adding it here would reopen that. */}
       <div
         ref={barWidthRef}
-        role="button"
-        tabIndex={0}
-        aria-expanded={open}
-        aria-label={pt ? 'Abrir ou recolher o Studio' : 'Open or collapse the Studio'}
-        onClick={onToggleOpen}
-        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggleOpen() } }}
         style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', minHeight: 32,
-          cursor: 'pointer', userSelect: 'none',
         }}
       >
         {taskControl}
