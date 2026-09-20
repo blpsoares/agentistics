@@ -641,15 +641,17 @@ describe('Studio', () => {
 
 /**
  * THE GEAR MENU (§2) — everything `StudioBar`'s own always-on row used to carry (the exit, the tree
- * toggle, the flip-side control) plus full screen, now as ROWS of one popover reached from a gear
- * icon on the Buscar/Novo arquivo/Nova pasta row. `studioGearEntries` decides WHAT is offered and
- * what each row SAYS — pure, so it is testable as DATA without a DOM (this package has none, and a
- * popover's own rows render only once OPENED, which `renderToStaticMarkup` cannot do at all).
+ * toggle, the flip-side control), now as ROWS of one popover reached from a gear icon on the
+ * Buscar/Novo arquivo/Nova pasta row. Full screen is NO LONGER one of these rows (2026-09-19) — it
+ * is `PanelFixedControls`' own fixed button now, tested separately in `bandControls.test.tsx`.
+ * `studioGearEntries` decides WHAT is offered and what each row SAYS — pure, so it is testable as
+ * DATA without a DOM (this package has none, and a popover's own rows render only once OPENED,
+ * which `renderToStaticMarkup` cannot do at all).
  */
 describe('studioGearEntries — the gear menu\'s own rows, as data', () => {
   const base = {
     lang: 'en' as const, treeCollapsible: false, treeCollapsed: false, treeSide: 'left' as const,
-    slot: 'right' as const, fullscreenAvailable: false, fullscreen: false,
+    slot: 'right' as const,
   }
 
   test('with nothing else offered, the Studio still always offers its OWN move and close — it can always reach the other slot', () => {
@@ -706,33 +708,17 @@ describe('studioGearEntries — the gear menu\'s own rows, as data', () => {
     expect(fromRight.find(e => e.id === 'tree-side')?.label).toBe('Mover árvore para a esquerda')
   })
 
-  test('full screen is ABSENT wherever it has nowhere to apply — the Studio is not bottom-docked', () => {
-    const ids = studioGearEntries({ ...base, fullscreenAvailable: false, fullscreen: false }).map(e => e.id)
+  test('full screen is NEVER one of these rows any more (2026-09-19) — it is a fixed button now', () => {
+    const ids = studioGearEntries(base).map(e => e.id)
     expect(ids).not.toContain('fullscreen')
+    expect(ids).not.toContain('exit-fullscreen')
   })
 
-  test('full screen states its CURRENT value, both directions, with its own dedicated icon pair', () => {
-    const off = studioGearEntries({ ...base, fullscreenAvailable: true, fullscreen: false })
-    expect(off.find(e => e.id === 'fullscreen')?.label).toBe('Full screen')
-    expect(off.find(e => e.id === 'fullscreen')?.iconId).toBe('maximize')
-    const on = studioGearEntries({ ...base, fullscreenAvailable: true, fullscreen: true })
-    expect(on.find(e => e.id === 'exit-fullscreen')?.label).toBe('Exit full screen')
-    expect(on.find(e => e.id === 'exit-fullscreen')?.iconId).toBe('minimize')
-  })
-
-  test('and in Portuguese', () => {
-    const off = studioGearEntries({ ...base, lang: 'pt', fullscreenAvailable: true, fullscreen: false })
-    expect(off.find(e => e.id === 'fullscreen')?.label).toBe('Tela cheia')
-    const on = studioGearEntries({ ...base, lang: 'pt', fullscreenAvailable: true, fullscreen: true })
-    expect(on.find(e => e.id === 'exit-fullscreen')?.label).toBe('Sair da tela cheia')
-  })
-
-  test('every row, in order — tree first (what StudioBar used to carry), move next, full screen after, close LAST', () => {
+  test('every row, in order — tree first (what StudioBar used to carry), move next, close LAST', () => {
     const everything = studioGearEntries({
-      lang: 'en', treeCollapsible: true, treeCollapsed: false, treeSide: 'left',
-      slot: 'bottom', fullscreenAvailable: true, fullscreen: false,
+      lang: 'en', treeCollapsible: true, treeCollapsed: false, treeSide: 'left', slot: 'bottom',
     })
-    expect(everything.map(e => e.id)).toEqual(['tree-toggle', 'tree-side', 'move-right', 'fullscreen', 'close'])
+    expect(everything.map(e => e.id)).toEqual(['tree-toggle', 'tree-side', 'move-right', 'close'])
   })
 
   test(

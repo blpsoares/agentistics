@@ -66,9 +66,23 @@ test('the edge strip is rendered INSIDE the wrapper, not as an alternative to it
  * This is the same class of invariant as the edge-strip shape above, and the same reason it is a
  * grep: seeing it requires mounting the page against a fleet host and resizing the window, and
  * `packages/web` has no jsdom. The COUNT is what went wrong, so the count is what is asserted.
+ *
+ * TWO SITES AS OF 2026-09-19, NOT ONE — Contents can now dock at the BOTTOM too (`panelSlots.ts`'s
+ * `BOTTOM_PANELS`), and that band lives inside `SessionPanel.tsx`, a different component this page
+ * cannot render into directly. The SAME single computed value is instead handed down as a prop
+ * (`contentsPane={artifactsPane}`), so the regex now legitimately matches the right slot's own JSX
+ * child AND that one prop line. The invariant this test exists to protect is untouched: there is
+ * still exactly ONE `const artifactsPane = (...)` in this file (asserted below), and the right and
+ * bottom slots are MUTUALLY EXCLUSIVE (`panelSlots.ts`'s "a panel sits in at most one slot"), so at
+ * most one of the two textual sites ever actually mounts it into the tree on a given render — never
+ * the four-copies-at-once shape this test was written against.
  */
-test('the artifacts pane is rendered in exactly ONE place', () => {
-  expect([...SRC.matchAll(/\{artifactsPane\}/g)]).toHaveLength(1)
+test('the artifacts pane is rendered from exactly TWO sites — the right slot\'s own JSX, and the one prop that threads it to the bottom band', () => {
+  expect([...SRC.matchAll(/\{artifactsPane\}/g)]).toHaveLength(2)
+})
+
+test('...and it is still exactly ONE computed value, never reconstructed per site', () => {
+  expect([...SRC.matchAll(/const artifactsPane = /g)]).toHaveLength(1)
 })
 
 test('...and the layout is a STYLE, not a second copy of the pane', () => {

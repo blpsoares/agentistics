@@ -10,15 +10,18 @@
  * entry the old band segment offered, plus Contents and Hardware, is the merge, not a second copy
  * beside it.
  *
- * `contents`/`hardware` are RIGHT-SLOT-ONLY panels (`panelSlots.ts`'s own `allowed`), so for them
- * "lit" still means exactly what it meant in the header: occupying the right slot. `studio` is lit
- * whenever it is on screen in EITHER slot, tagged with where — unchanged from the header's own rule.
+ * `contents`/`hardware` USED TO BE right-slot-only panels (`panelSlots.ts`'s own `allowed`), so "lit"
+ * used to mean exactly what it meant in the old header: occupying the right slot. As of 2026-09-19
+ * every panel reaches BOTH slots (see `panelSlots.ts`'s own `BOTTOM_PANELS` doc comment), so `on`
+ * here reads EITHER slot for them too — the same either-slot reading `cli`/`shell`/`studio` already
+ * had, applied uniformly now that there is no closed set left to distinguish them by.
  *
- * `cli`/`shell` are NEW here: because this bar now lives INSIDE the bottom band itself, and the band
- * IS the door to whichever of them it is currently showing, they must read `on` for the BOTTOM slot
- * too, or the band's own occupant would show no lit tab at all the moment this bar replaced its old
- * segment (which always lit the occupant, right or wrong slot never entered into it). Lit in EITHER
- * slot, exactly like Studio, but with no location tag — nobody asked for one on these two.
+ * `cli`/`shell` were the first to need this: because this bar lives INSIDE the bottom band itself,
+ * and the band IS the door to whichever of them it is currently showing, they had to read `on` for
+ * the BOTTOM slot too, or the band's own occupant would show no lit tab at all. `studio` is lit
+ * whenever it is on screen in EITHER slot, tagged with where it sits — the one entry that also
+ * carries a tag, since it is the one panel whose two slots read as genuinely different pictures
+ * ("lateral" vs "embaixo"); nobody asked for the same tag on the other four.
  *
  * Pure and React-free so the ORDER, PRESENCE and TAG rules can be tested without mounting anything —
  * the same shape `panelSlots.ts`'s own `allowed`/`gateOpen` take.
@@ -81,10 +84,9 @@ export function panelBarEntries(
     if (e.id === 'studio') {
       return studioAt !== undefined ? { id: e.id, on: true, studioAt } : { id: e.id, on: false }
     }
-    // contents/hardware can never occupy `bottomOccupant` in a real SlotLayout (`panelSlots.allowed`
-    // refuses the placement outright), so this reads exactly as "lit in the right slot" for them —
-    // the same rule as before — while giving cli/shell the either-slot reading this file's header
-    // describes, from one line rather than two branches.
+    // contents/hardware CAN occupy `bottomOccupant` in a real SlotLayout now (2026-09-19), so this
+    // is a genuine either-slot reading for them too — the same one `cli`/`shell` already had, from
+    // one line rather than a per-panel branch.
     return { id: e.id, on: rightOccupant === e.id || bottomOccupant === e.id }
   })
 }
@@ -119,13 +121,18 @@ export function gatedBottomOccupant(
 }
 
 /** Which band component renders at the foot of the session panel. */
-export type BottomBandKind = 'studio' | 'shell' | 'bar-only' | 'none'
+export type BottomBandKind = 'studio' | 'contents' | 'hardware' | 'shell' | 'bar-only' | 'none'
 
 export interface BottomBandInput {
-  /** `SessionPanel`'s own already-resolved fact: the editor gate is open, this is not a phone (the
-   *  Studio never docks on one — `resolveForViewport` sends it to the right sheet instead) and the
-   *  bottom slot's occupant is `'studio'`. */
-  bottomIsStudio: boolean
+  /**
+   * `SessionPanel`'s own already-resolved fact: which of the three DESKTOP-ONLY bottom occupants
+   * genuinely sits there right now — `'studio'` only while `editorEnabled`; `'contents'`/
+   * `'hardware'` have no gate of their own (`panelSlots.ts`'s `gateOpen`) beyond not being a phone,
+   * and `resolveForViewport` already sends any of the three to the right sheet there, so a caller
+   * that ran the layout through it never has to repeat the mobile check here. `null` when the
+   * bottom slot holds `cli`/`shell` instead, or nothing at all.
+   */
+  bottomOccupant: 'studio' | 'contents' | 'hardware' | null
   /** This session belongs to another machine, reached through a central's relay — no `cli`/`shell`
    *  stream of its own exists to dock. */
   relayed: boolean
@@ -146,18 +153,21 @@ export interface BottomBandInput {
  * from ever showing or opening a shell pane), never on whether the bar itself may exist — the CLI
  * pane is the session's own harness terminal, not the shell, and stays reachable.
  *
- * `bottomIsStudio` still wins first (the Studio's own small bar, `StudioBand`). A session that is
- * local otherwise always gets `'shell'` — `ShellBand` is now the ONE band for every local session,
- * whatever the shell switch says, exactly as it already was the one band for both `cli` and `shell`
- * before this pass ever touched it. A RELAYED session keeps its old, narrower fallback exactly:
- * `'bar-only'` (`PanelBarBand`) on desktop, `'none'` on a phone — that gap is deliberately UNTOUCHED
- * by this fix (see `SessionPanel.tsx`'s own module header on why: mobile has never drawn a fallback
- * for a relayed session, and widening that is a separate change from the one this pass makes).
+ * `bottomOccupant` still wins first, whichever of the three it names (2026-09-19: `contents`/
+ * `hardware` joined `studio` in this role) — none of them is gated by `relayed`, so a relayed
+ * session with, say, Hardware docked at the bottom shows Hardware, not the relayed fallback. A
+ * session that is local otherwise always gets `'shell'` — `ShellBand` is now the ONE band for every
+ * local session with nothing else docked, whatever the shell switch says, exactly as it already was
+ * the one band for both `cli` and `shell` before this pass ever touched it. A RELAYED session with
+ * NOTHING docked keeps its old, narrower fallback exactly: `'bar-only'` (`PanelBarBand`) on desktop,
+ * `'none'` on a phone — that gap is deliberately UNTOUCHED by this fix (see `SessionPanel.tsx`'s own
+ * module header on why: mobile has never drawn a fallback for a relayed session, and widening that
+ * is a separate change from the one this pass makes).
  */
-export function bottomBandFor(input: BottomBandInput): BottomBandKind {
-  if (input.bottomIsStudio) return 'studio'
-  if (!input.relayed) return 'shell'
-  return input.isMobile ? 'none' : 'bar-only'
+export function bottomBandFor({ bottomOccupant, relayed, isMobile }: BottomBandInput): BottomBandKind {
+  if (bottomOccupant !== null) return bottomOccupant
+  if (!relayed) return 'shell'
+  return isMobile ? 'none' : 'bar-only'
 }
 
 /**
@@ -173,4 +183,54 @@ export const BAND_BAR_COMPACT_BREAKPOINT = 1100
 
 export function bandBarCompact(width: number): boolean {
   return width > 0 && width < BAND_BAR_COMPACT_BREAKPOINT
+}
+
+/**
+ * A TAB CLICK SELECTS, IT NEVER TOGGLES (owner, 2026-09-19: "remove o clique na barra pra
+ * minimizar e reabrir... vamos manter no botão de setinha"). Extracted as a PURE function —
+ * `SessionPanel.tsx`'s own `onPanelBarPick` used to inline this per panel by hand, one branch for
+ * `studio`, one for `contents`, one shared branch for `hardware`/`cli`/`shell` — three copies of a
+ * rule that turns out to be exactly the SAME shape for all five, once `panelMinimizeAction`'s own
+ * "the right slot either parks (Studio) or closes outright (everyone else)" fact is read as
+ * `rightOpen` always being `true` for the four panels that never park there.
+ *
+ * BEFORE THIS FIX, picking an already-lit tab CLOSED it — the exact inverse of the always-visible
+ * minimize icon, baked into the one control a reader reaches for constantly just to switch what
+ * they are looking at. Pressing "Studio" while Studio was already open silently closed it, which
+ * is not a "select" gesture by any reading.
+ *
+ * THE THREE ANSWERS:
+ *  - `'open'` — this panel is shown NOWHERE. Open it (each caller's own default location: Contents
+ *    through `openArtifacts()`, everyone else through `openSlotPanel(id)`).
+ *  - `'restore-right'` / `'restore-bottom'` — the panel is ASSIGNED to that slot but its content is
+ *    currently released (`rightOpen`/`bottomOpen` false) — the one case the fixed chevron does not
+ *    already cover, since a minimized/collapsed panel has no visible chevron of its own to press.
+ *    Restore it in place, never re-open it as if it were shown nowhere.
+ *  - `'noop'` — already open and visible. You asked to see what you can already see.
+ *
+ * `rightOccupant`/`bottomOccupant` win in that ORDER because a real `SlotLayout` never assigns one
+ * panel to both slots at once (`panelSlots.ts`'s own invariant) — checking both is defensive, not a
+ * priority rule between two real possibilities.
+ */
+export type PanelBarPickAction =
+  | { kind: 'open' }
+  | { kind: 'restore-right' }
+  | { kind: 'restore-bottom' }
+  | { kind: 'noop' }
+
+export function resolvePanelBarPick(
+  { id, rightOccupant, bottomOccupant, rightOpen, bottomOpen }: {
+    id: PanelBarId
+    rightOccupant: PanelBarId | null
+    bottomOccupant: PanelBarId | null
+    /** Irrelevant unless `rightOccupant === id` — the four panels that close outright rather than
+     *  parking in the right slot never have a real `false` here (there is nothing left assigned to
+     *  restore), so callers for those may always pass `true`. */
+    rightOpen: boolean
+    bottomOpen: boolean
+  },
+): PanelBarPickAction {
+  if (rightOccupant === id) return rightOpen ? { kind: 'noop' } : { kind: 'restore-right' }
+  if (bottomOccupant === id) return bottomOpen ? { kind: 'noop' } : { kind: 'restore-bottom' }
+  return { kind: 'open' }
 }
