@@ -22,8 +22,8 @@ import { AlertTriangle, Search, X } from 'lucide-react'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useDismissOverlay } from '../../lib/dismissOverlay'
 import { overlayPadding } from '../../lib/mobileOverlay'
-import { STATUS, button, field, microLabel, pill, surface, type BoardStatus } from './board'
-import type { TaskListRow } from '../../lib/tasks'
+import { button, field, microLabel, pill, statusStyle, surface } from './board'
+import { useTaskStatuses, type TaskListRow } from '../../lib/tasks'
 
 export interface BlockedDialogProps {
   /** The tasks being blocked. More than one when it comes from the batch bar. */
@@ -39,6 +39,8 @@ export interface BlockedDialogProps {
 export function BlockedDialog(p: BlockedDialogProps) {
   const isMobile = useIsMobile()
   const dismiss = useDismissOverlay(() => p.onCancel())
+  const { statuses } = useTaskStatuses()
+  const blockedStyle = statusStyle(statuses, 'blocked')
   const [reason, setReason] = useState('')
   const [picked, setPicked] = useState<Set<string>>(new Set(p.already ?? []))
   const [q, setQ] = useState('')
@@ -102,8 +104,8 @@ export function BlockedDialog(p: BlockedDialogProps) {
 
         <p style={{ margin: 0, fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
           {p.titles.length === 1
-            ? <>Moving <strong style={{ color: 'var(--text-primary)' }}>{p.titles[0]}</strong> to <span style={pill(STATUS.blocked.color)}>Blocked</span>.</>
-            : <>Moving {p.titles.length} tasks to <span style={pill(STATUS.blocked.color)}>Blocked</span>.</>}
+            ? <>Moving <strong style={{ color: 'var(--text-primary)' }}>{p.titles[0]}</strong> to <span style={pill(blockedStyle.color)}>Blocked</span>.</>
+            : <>Moving {p.titles.length} tasks to <span style={pill(blockedStyle.color)}>Blocked</span>.</>}
           {' '}Name a task it is waiting on, or say what in a sentence. Either is enough — the point
           is that somebody reading the board later knows what to go and unblock.
         </p>
@@ -136,7 +138,7 @@ export function BlockedDialog(p: BlockedDialogProps) {
             )}
             {candidates.map(r => {
               const on = picked.has(r.task.id)
-              const st = STATUS[r.task.status as BoardStatus]
+              const st = statusStyle(statuses, r.task.status)
               return (
                 <button
                   key={r.task.id}

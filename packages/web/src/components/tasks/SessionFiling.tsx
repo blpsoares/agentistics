@@ -29,7 +29,7 @@ import { useDismissOverlay } from '../../lib/dismissOverlay'
 import { HARNESS_LABELS } from '../../lib/harness'
 import type { HarnessId } from '@agentistics/core'
 import {
-  addSubtask, attachSession, createTask, detachSession, useTaskDetail, useTaskList,
+  addSubtask, attachSession, createTask, detachSession, useTaskDetail, useTaskList, useTaskStatuses,
   type AttachRefusalReason, type Subtask, type TaskListRow,
 } from '../../lib/tasks'
 import { BlockedSubtaskResolve } from './BlockedSubtaskResolve'
@@ -39,7 +39,7 @@ import {
   repoFilterOptions, repoTabLabel,
 } from './deliveryPickerFilter'
 import { TabStrip } from '../sessions/formBits'
-import { STATUS, button, field, microLabel, pill, surface, type BoardStatus } from './board'
+import { button, field, microLabel, pill, statusStyle, surface } from './board'
 import { boardCopy, statusLabel, type Lang } from './copy'
 import { BetaTag } from '../BetaTag'
 
@@ -77,6 +77,7 @@ export function SessionFiling(p: SessionFilingProps) {
   const pt = p.lang === 'pt'
   const dismiss = useDismissOverlay(p.onClose)
   const { rows, reload } = useTaskList()
+  const { statuses } = useTaskStatuses()
 
   /**
    * The delivery this session is filed under, matched by NAME — what the fleet row carries. The id
@@ -269,7 +270,7 @@ export function SessionFiling(p: SessionFilingProps) {
           </span>
         )}
         <span style={{ marginLeft: 'auto', ...microLabel, fontSize: 9.5, flexShrink: 0 }}>
-          {statusLabel(st.status, p.lang)}
+          {statusLabel(st.status, p.lang, statuses)}
         </span>
       </button>
     )
@@ -364,10 +365,10 @@ export function SessionFiling(p: SessionFilingProps) {
             {target.task.title}
           </span>
           <span style={{
-            ...pill(STATUS[(target.task.status as BoardStatus)]?.color),
-            background: STATUS[(target.task.status as BoardStatus)]?.dim,
+            ...pill(statusStyle(statuses, target.task.status).color),
+            background: statusStyle(statuses, target.task.status).dim,
           }}>
-            {statusLabel(target.task.status, p.lang)}
+            {statusLabel(target.task.status, p.lang, statuses)}
           </span>
         </div>
 
@@ -549,10 +550,10 @@ export function SessionFiling(p: SessionFilingProps) {
               </span>
               <span style={{
                 marginLeft: 'auto',
-                ...pill(STATUS[(r.task.status as BoardStatus)]?.color),
-                background: STATUS[(r.task.status as BoardStatus)]?.dim,
+                ...pill(statusStyle(statuses, r.task.status).color),
+                background: statusStyle(statuses, r.task.status).dim,
               }}>
-                {statusLabel(r.task.status, p.lang)}
+                {statusLabel(r.task.status, p.lang, statuses)}
               </span>
             </button>
           ))}

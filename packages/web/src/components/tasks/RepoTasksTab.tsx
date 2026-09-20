@@ -15,13 +15,10 @@
 
 import { useMemo, type CSSProperties } from 'react'
 import { SquareArrowOutUpRight } from 'lucide-react'
-import { fmtCost, sortRows, type SortSpec } from '@agentistics/core'
+import { fmtCost, sortRows, type SortSpec, type TaskStatusDef } from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
-import type { TaskListRow } from '../../lib/tasks'
-import {
-  NA, PRIORITY, STATUS, fmtInt, fmtTokens, microLabel, numeric, pill, surface,
-  type BoardStatus,
-} from './board'
+import { useTaskStatuses, type TaskListRow } from '../../lib/tasks'
+import { NA, PRIORITY, fmtInt, fmtTokens, microLabel, numeric, pill, statusStyle, surface } from './board'
 import { TaskProgressBar } from './TaskProgressBar'
 import { HarnessBadges } from './HarnessBadges'
 
@@ -54,8 +51,8 @@ function fmtDay(iso: string | undefined, lang: 'pt' | 'en'): string | null {
   })
 }
 
-function StatusPill({ status }: { status: string }) {
-  const s = STATUS[status as BoardStatus] ?? STATUS.backlog
+function StatusPill({ status, statuses }: { status: string; statuses: readonly TaskStatusDef[] | null }) {
+  const s = statusStyle(statuses, status)
   return <span style={{ ...pill(s.color), background: s.dim }}>{s.label}</span>
 }
 
@@ -63,6 +60,7 @@ export function RepoTasksTab(p: RepoTasksTabProps) {
   const isMobile = useIsMobile()
   const pt = p.lang === 'pt'
   const rows = useMemo(() => sortRows(p.rows, REPO_SORT), [p.rows])
+  const { statuses } = useTaskStatuses()
   const cost = (n: number | null) => (n === null ? NA : fmtCost(n, p.currency, p.brlRate))
 
   if (rows.length === 0) {
@@ -91,7 +89,7 @@ export function RepoTasksTab(p: RepoTasksTabProps) {
               }}
             >
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <StatusPill status={r.task.status} />
+                <StatusPill status={r.task.status} statuses={statuses} />
                 {r.task.priority && r.task.priority !== 'none' && (
                   <span style={{ ...pill(prio.color), background: prio.dim, fontSize: 10 }}>{prio.label}</span>
                 )}
@@ -163,7 +161,7 @@ export function RepoTasksTab(p: RepoTasksTabProps) {
                     <SquareArrowOutUpRight size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
                   </span>
                 </td>
-                <td style={td}><StatusPill status={r.task.status} /></td>
+                <td style={td}><StatusPill status={r.task.status} statuses={statuses} /></td>
                 <td style={{ ...td, minWidth: 120 }}>
                   {r.counts.subtasks > 0
                     ? <TaskProgressBar done={r.counts.subtasksDone} total={r.counts.subtasks} />

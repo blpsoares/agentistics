@@ -30,12 +30,14 @@ import { PRIORITY_ORDER, type TaskPriorityId } from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useFleet } from '../../lib/fleet'
 import {
-  COLUMN_ORDER, PRIORITY, SESSION_STATE, STATUS, button, field, harnessColor, microLabel, pill,
-  surface, type BoardStatus,
+  PRIORITY, SESSION_STATE, button, field, harnessColor, liveStatusMap, liveStatusOrder, microLabel,
+  pill, surface, type BoardStatus,
 } from './board'
 import { ChipSelect, statusOptions } from './ChipSelect'
 import { Select } from '../../pages/settings/primitives'
-import { addSubtask, attachSession, createTask, editTask, markTask, type Subtask } from '../../lib/tasks'
+import {
+  addSubtask, attachSession, createTask, editTask, markTask, useTaskStatuses, type Subtask,
+} from '../../lib/tasks'
 
 const LIVE = new Set(['working', 'waiting', 'waiting-approval'])
 
@@ -55,6 +57,7 @@ export interface TaskComposerProps {
 export function TaskComposer(p: TaskComposerProps) {
   const isMobile = useIsMobile()
   const { fleet } = useFleet('en')
+  const { statuses } = useTaskStatuses()
   const [step, setStep] = useState<1 | 2>(1)
   const [title, setTitle] = useState('')
   const [detail, setDetail] = useState('')
@@ -188,7 +191,7 @@ export function TaskComposer(p: TaskComposerProps) {
               <span style={{ ...microLabel, fontSize: 9 }}>Starts in</span>
               <ChipSelect
                 value={status}
-                options={statusOptions(STATUS, COLUMN_ORDER)}
+                options={statusOptions(liveStatusMap(statuses), liveStatusOrder(statuses))}
                 onPick={v => setStatus(v as BoardStatus)}
               />
             </div>

@@ -10,10 +10,10 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Bot, CalendarClock, MessageSquare, Paperclip, Terminal } from 'lucide-react'
-import { sortRows, type SortSpec } from '@agentistics/core'
+import { sortRows, type SortSpec, type TaskStatusDef } from '@agentistics/core'
 import {
-  COLUMN_ORDER, PRIORITY, SESSION_STATE, STATUS, cardStyle, claimLeft, fmtInt, fmtTokens,
-  microLabel, numeric, pill, surface, type BoardStatus,
+  PRIORITY, SESSION_STATE, cardStyle, claimLeft, fmtInt, fmtTokens, liveStatusOrder, microLabel,
+  numeric, pill, statusStyle, surface, type BoardStatus,
 } from './board'
 import type { LaneKey } from './boardPrefs'
 import { TaskProgressBar } from './TaskProgressBar'
@@ -52,13 +52,14 @@ function Facts({ row }: { row: TaskListRow }) {
   )
 }
 
-function Card({ row, onOpen, live, nowMs }: {
+function Card({ row, onOpen, live, nowMs, statuses }: {
   row: TaskListRow
   onOpen: () => void
   live: readonly { id: string; state: string; harness: string; title: string }[]
   nowMs: number
+  statuses: readonly TaskStatusDef[] | null
 }) {
-  const s = STATUS[row.task.status as BoardStatus] ?? STATUS.todo
+  const s = statusStyle(statuses, row.task.status)
   const counts = row.counts
   const priority = row.task.priority && row.task.priority !== 'none'
     ? PRIORITY[row.task.priority]
@@ -211,6 +212,8 @@ export interface BoardViewProps {
   wip: Record<string, number>
   /** Which columns to draw, in order. Absent = the whole pipeline. */
   columns?: readonly BoardStatus[]
+  /** The board's LIVE status list (`lib/tasks.ts`'s `useTaskStatuses`) — `null` while it loads. */
+  statuses: readonly TaskStatusDef[] | null
 }
 
 /** What a lane is called, and which rows belong to it. */
@@ -250,9 +253,10 @@ export function BoardView(p: BoardViewProps) {
     const names = p.lanes === 'none'
       ? ['']
       : [...new Set(rows.map(r => laneOf(r, p.lanes)))].sort()
-    // The chosen columns, in the chosen order — falling back to the whole pipeline, so a board
-    // whose preference has never been touched looks exactly as it did.
-    const shown = p.columns && p.columns.length > 0 ? p.columns : COLUMN_ORDER
+    // The chosen columns, in the chosen order — falling back to the LIVE list's own order (the
+    // whole pipeline), so a board whose preference has never been touched shows every status the
+    // board currently has, custom ones included, rather than the fixed legacy seven.
+    const shown = p.columns && p.columns.length > 0 ? p.columns : liveStatusOrder(p.statuses)
     return names.map(name => ({
       name,
       columns: shown.map(status => ({
@@ -264,7 +268,7 @@ export function BoardView(p: BoardViewProps) {
         ),
       })),
     }))
-  }, [rows, p.lanes, p.sort, p.columns])
+  }, [rows, p.lanes, p.sort, p.columns, p.statuses])
 
   const drop = (lane: string, status: BoardStatus, index: number) => {
     const id = drag
@@ -313,7 +317,7 @@ export function BoardView(p: BoardViewProps) {
             }}
           >
             {lane.columns.map(col => {
-              const s = STATUS[col.status]
+              const s = statusStyle(p.statuses, col.status)
               const limit = p.wip[col.status]
               const over_ = limit !== undefined && col.rows.length > limit
               const isOverCol = over?.lane === lane.name && over.status === col.status
@@ -343,7 +347,7 @@ export function BoardView(p: BoardViewProps) {
                   }}>
                     {/* The same word the table's band and every chip print. */}
                     <span style={{ fontSize: 12, fontWeight: 600, color: s.color }}>
-                      {statusLabel(col.status, p.lang ?? 'en')}
+                      {statusLabel(col.status, p.lang ?? 'en', p.statuses)}
                     </span>
                     <span style={{ ...microLabel, fontSize: 11 }}>
                       {col.rows.length}{limit !== undefined ? ` / ${limit}` : ''}
@@ -398,6 +402,7 @@ export function BoardView(p: BoardViewProps) {
                           nowMs={nowMs}
                           live={liveByTask.get(r.task.title) ?? []}
                           onOpen={() => onOpen(r.task.id)}
+                          statuses={p.statuses}
                         />
                       </div>
                     ))}
