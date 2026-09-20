@@ -96,7 +96,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
   AlertTriangle, ArrowLeft, ArrowLeftRight, Check, ChevronDown, ChevronLeft, ChevronRight, FilePlus,
-  FolderPlus, Loader, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings,
+  FolderPlus, Loader, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings,
   Undo2, X,
 } from 'lucide-react'
 import {
@@ -123,7 +123,8 @@ import { RepoSearchView } from './RepoSearchView'
 import { RepoTreeView, toggleDirectory, treeViewState, type TreeOps } from './RepoTreeView'
 import { RepoNote } from './repoNote'
 import { insertMention } from '../../lib/mentionInsert'
-import { BandOverflowMenu, type BandOverflowEntry } from './bandControls'
+import { BandOverflowMenu, panelMenuIconFor, type BandOverflowEntry } from './bandControls'
+import { panelMenuEntries, type PanelMenuEntryId, type PanelMenuIconId } from '../../lib/panelMenu'
 import type { HarnessId } from '@agentistics/core'
 
 export interface StudioProps {
@@ -180,6 +181,31 @@ export interface StudioProps {
    * placements — never present and refusing.
    */
   onToggleFullscreen?: () => void
+  /**
+   * WHERE THE STUDIO CURRENTLY SITS — `right` or `bottom` (`lib/panelSlots.ts`'s own `SlotId`),
+   * ALWAYS one or the other wherever this component is actually mounted (`StudioHost` only ever
+   * renders while `isPanelShown(layout, 'studio')`). This is what lets the ONE gear menu below offer
+   * the RIGHT move ("Mover Studio para baixo" at the right, "…para a direita" at the bottom) — the
+   * one thing `StudioBand`'s now-removed separate "Mais ações" used to say on its own, disagreeing
+   * with this menu the moment the two drifted (owner, 2026-09-19: "ao clicar na engrenagem nao
+   * aparecem as opcoes corretas de mover").
+   */
+  slot: 'right' | 'bottom'
+  /**
+   * Move the Studio to the OTHER slot from wherever `slot` says it is now. Always offered — a panel
+   * always has somewhere else to go (`allowed()`, `lib/panelSlots.ts`) — so this is never optional
+   * the way `onToggleFullscreen` is.
+   */
+  onMove: () => void
+  /**
+   * THE ALWAYS-VISIBLE MINIMIZE ICON, beside the gear — present ONLY while the Studio sits in the
+   * RIGHT slot. At the bottom, `StudioBand`'s own collapse chevron already IS this control (see
+   * `panelMenu.ts`'s own `panelMinimizeAction`'s `collapse-bottom` case) — a second one here would
+   * be the exact "two controls, one meaning" duplication this feature exists to remove. Minimizing
+   * PARKS the Studio (`SessionsPage`'s own `studioTarget`, reading `rightOpen`) — its unsaved
+   * buffers survive, and it never asks the "discard?" question `onExit`'s own close does.
+   */
+  onMinimizeRight?: () => void
 }
 
 /** Which layer the panel is showing while no file is open. */
@@ -525,9 +551,9 @@ function storeTreeSide(side: TreeSide): void {
 
 // --- the gear menu (§2: replacing the header row) -------------------------------------------------
 
-export type StudioGearItemId = 'tree-toggle' | 'tree-side' | 'fullscreen' | 'close'
+export type StudioGearItemId = 'tree-toggle' | 'tree-side' | PanelMenuEntryId
 
-export interface StudioGearItem { id: StudioGearItemId; label: string }
+export interface StudioGearItem { id: StudioGearItemId; label: string; iconId?: PanelMenuIconId }
 
 /**
  * THE GEAR MENU'S OWN ROWS, AS DATA — what each one SAYS, given the state it is offered in.
@@ -543,24 +569,33 @@ export interface StudioGearItem { id: StudioGearItemId; label: string }
  *
  * ORDER is stable and deliberate: the tree's own two rows first — what this menu REPLACED
  * (`StudioBar`'s former "Ocultar árvore"/"Árvore à direita") stay adjacent to each other, exactly
- * as they were two separate buttons side by side — full screen next (the newer control), close
- * LAST (the one row whose effect is leaving the panel, and the one `StudioBand`'s own "Mais ações"
- * already offers a second path to whenever the Studio is bottom-docked).
+ * as they were two separate buttons side by side — MOVE next (the panel's own placement, from the
+ * ONE shared builder, `lib/panelMenu.ts`), full screen after that, close LAST (the one row whose
+ * effect is leaving the panel).
+ *
+ * THIS IS NOW THE ONE MENU THE STUDIO CARRIES WHEREVER IT IS (owner, 2026-09-19). It used to have
+ * TWO: this one, and `StudioBand`'s own separate "Mais ações" when bottom-docked — two menus that
+ * could (and did) disagree about what "move" meant the moment the Studio moved to the right, since
+ * only THIS one travels with the component. `StudioBand`'s overflow is gone; its two rows (move,
+ * close) are exactly the shared builder's own `move-right`/`close` rows, merged in here instead.
  *
  * A row is ABSENT rather than present-and-refusing when it has nothing to act on:
- * `treeCollapsible` (the exact gate `StudioBar` used to read for both tree rows) and
- * `fullscreenAvailable` (whether the caller even offered `onToggleFullscreen` — absent wherever the
- * Studio is not bottom-docked, see `SessionsPage`'s own comment on why). "Close" has no gate: it is
- * the one row this menu always carries, the reason `onExit` stays a REQUIRED prop on `Studio`
- * itself (see this file's header on why an exit that can be absent is a reader trapped in a panel).
+ * `treeCollapsible` (the exact gate `StudioBar` used to read for both tree rows), `move-*` (via the
+ * builder's own `allowed()` check — always present for the Studio, since it can always reach the
+ * other slot) and `fullscreenAvailable` (whether the caller even offered `onToggleFullscreen` —
+ * absent wherever the Studio is not bottom-docked, see `SessionsPage`'s own comment on why). "Close"
+ * has no gate: it is the one row this menu always carries, the reason `onExit` stays a REQUIRED
+ * prop on `Studio` itself (see this file's header on why an exit that can be absent is a reader
+ * trapped in a panel).
  */
 export function studioGearEntries({
-  lang, treeCollapsible: canToggleTree, treeCollapsed, treeSide, fullscreenAvailable, fullscreen,
+  lang, treeCollapsible: canToggleTree, treeCollapsed, treeSide, slot, fullscreenAvailable, fullscreen,
 }: {
   lang: 'pt' | 'en'
   treeCollapsible: boolean
   treeCollapsed: boolean
   treeSide: TreeSide
+  slot: 'right' | 'bottom'
   fullscreenAvailable: boolean
   fullscreen: boolean
 }): StudioGearItem[] {
@@ -578,13 +613,11 @@ export function studioGearEntries({
         : (pt ? 'Mover árvore para a esquerda' : 'Move tree to the left'),
     })
   }
-  if (fullscreenAvailable) {
-    items.push({
-      id: 'fullscreen',
-      label: fullscreen ? (pt ? 'Sair da tela cheia' : 'Exit full screen') : (pt ? 'Tela cheia' : 'Full screen'),
-    })
+  for (const entry of panelMenuEntries({
+    panel: 'studio', slot, lang, panelName: 'Studio', fullscreenAvailable, fullscreen,
+  })) {
+    items.push({ id: entry.id, label: entry.label, iconId: entry.iconId })
   }
-  items.push({ id: 'close', label: pt ? 'Fechar Studio' : 'Close Studio' })
   return items
 }
 
@@ -661,7 +694,7 @@ export function nextGoTo(
 
 export function Studio({
   sessionId, lang, autosave, turns, onExit, harness, composerMounted = true, onMention,
-  fullscreen = false, onToggleFullscreen,
+  fullscreen = false, onToggleFullscreen, slot, onMove, onMinimizeRight,
 }: StudioProps) {
   const isMobile = useIsMobile()
   const pt = lang === 'pt'
@@ -1034,15 +1067,15 @@ export function Studio({
   }, [fullscreen, onToggleFullscreen])
 
   /**
-   * THE GEAR MENU (§2 — replacing the header row). `studioGearEntries` decides WHAT is offered and
-   * what each row SAYS; this only wires an icon and an action to each id, and only for the ids that
-   * come back — a row this function did not return is a row with nothing to act on, never a
-   * disabled one. `BandOverflowMenu` is the SAME popover `StudioBand`'s own "Mais ações" renders
-   * (`bandControls.tsx`), given its own `Settings` icon so the two read as different menus at a
-   * glance rather than two triggers that look alike and open onto different things.
+   * THE GEAR MENU (§2 — replacing the header row; §3, 2026-09-19: now the Studio's ONE menu in
+   * either slot — see `studioGearEntries`'s own header). `studioGearEntries` decides WHAT is
+   * offered and what each row SAYS; this only wires an icon and an action to each id, and only for
+   * the ids that come back — a row this function did not return is a row with nothing to act on,
+   * never a disabled one. `BandOverflowMenu` is given its own `Settings` icon so it reads as a
+   * different menu from the band's plain "⋯" at a glance.
    */
   const gearIds = studioGearEntries({
-    lang, treeCollapsible: collapsible, treeCollapsed, treeSide,
+    lang, treeCollapsible: collapsible, treeCollapsed, treeSide, slot,
     fullscreenAvailable: onToggleFullscreen !== undefined, fullscreen,
   })
   const gearAction: Record<StudioGearItemId, { icon: ReactNode; onSelect: () => void }> = {
@@ -1054,11 +1087,14 @@ export function Studio({
       icon: <ArrowLeftRight size={14} />,
       onSelect: () => setTreeSide(treeSide === 'left' ? 'right' : 'left'),
     },
-    fullscreen: {
-      icon: fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />,
-      onSelect: () => onToggleFullscreen?.(),
-    },
-    close: { icon: <X size={14} />, onSelect: onExit },
+    // MOVE — both directions call the SAME `onMove`, since `slot` already decides which single one
+    // of the two rows the builder actually returned; `panelMenuIconFor` is the one place either
+    // icon is resolved, the ARROW convention `panelMenu.ts`'s own header states.
+    'move-right': { icon: panelMenuIconFor('arrow-right'), onSelect: onMove },
+    'move-bottom': { icon: panelMenuIconFor('arrow-down'), onSelect: onMove },
+    fullscreen: { icon: panelMenuIconFor('maximize'), onSelect: () => onToggleFullscreen?.() },
+    'exit-fullscreen': { icon: panelMenuIconFor('minimize'), onSelect: () => onToggleFullscreen?.() },
+    close: { icon: panelMenuIconFor('x'), onSelect: onExit },
   }
   const gearEntries: BandOverflowEntry[] = gearIds.map(item => ({
     id: item.id, label: item.label, ...gearAction[item.id],
@@ -1070,6 +1106,29 @@ export function Studio({
       entries={gearEntries}
       isMobile={isMobile}
     />
+  )
+  /**
+   * THE ALWAYS-VISIBLE MINIMIZE ICON (owner, 2026-09-19: "sempre visível... beside the gear"),
+   * present only while the Studio sits in the RIGHT slot — at the bottom `StudioBand`'s own collapse
+   * chevron already is this control (see `Studio.onMinimizeRight`'s own doc comment). A CHEVRON,
+   * never `Minimize2` — that icon is full screen's own "go back", and reusing it here would read as
+   * the same action. Pointed at the edge it collapses TOWARD, the same "icon points at what happens"
+   * rule the move rows above follow.
+   */
+  const minimizeButton = onMinimizeRight && (
+    <button
+      className="ag-tap-icon"
+      type="button"
+      onClick={onMinimizeRight}
+      title={pt ? 'Minimizar o Studio' : 'Minimize the Studio'}
+      aria-label={pt ? 'Minimizar o Studio' : 'Minimize the Studio'}
+      style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        width: 26, height: 26, padding: 0, borderRadius: 6,
+        border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+        color: 'var(--text-secondary)', cursor: 'pointer',
+      }}
+    >{panelMenuIconFor('chevron-right', 14)}</button>
   )
 
   return (
@@ -1129,6 +1188,9 @@ export function Studio({
                     special to say, and the panel bar / mobile session menu already name it. */}
                 {!isMobile && <BetaTag what={pt ? 'O Studio' : 'The Studio'} />}
                 {gearMenu}
+                {/* BESIDE THE GEAR (owner, 2026-09-19) — see `minimizeButton`'s own header for why
+                    it exists only here, in the right slot, and never at the bottom. */}
+                {minimizeButton}
               </>}
             />
           )}
