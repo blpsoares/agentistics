@@ -29,13 +29,13 @@ import {
 } from 'lucide-react'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import {
-  COLUMN_ORDER, NA, PRIORITY, STATUS, button, claimLeft, field, fmtInt, fmtTokens,
-  harnessColor, microLabel, numeric, pill, surface, type BoardStatus, type ColumnId,
+  NA, PRIORITY, button, claimLeft, field, fmtInt, fmtTokens, harnessColor, liveStatusMap,
+  liveStatusOrder, microLabel, numeric, pill, statusStyle, surface, type BoardStatus, type ColumnId,
 } from './board'
 import { useMoney, type Money } from './money'
 import {
   DEFAULT_SORT, nextSort, PRIORITY_ORDER, sortRows,
-  type SortKey, type SortSpec, type TaskPriorityId,
+  type SortKey, type SortSpec, type TaskPriorityId, type TaskStatusDef,
 } from '@agentistics/core'
 import { readBoardPrefs, writeBoardPrefs } from './boardPrefs'
 import { ConfirmModal } from '../../pages/settings/primitives'
@@ -182,6 +182,7 @@ function cellFor(
   nowMs: number,
   lang: 'pt' | 'en',
   money: Money,
+  statuses: readonly TaskStatusDef[] | null,
 ): React.ReactNode {
   const r = row.rollup
   switch (col) {
@@ -193,6 +194,7 @@ function cellFor(
         compact
         value={row.task.status}
         lang={lang}
+        statuses={statuses}
         onPick={v => onStatus(v as TaskStatus)}
       />
     )
@@ -281,7 +283,7 @@ export const subtaskColumns = (lang: Lang): string[] => {
 }
 
 function SubtaskRows({
-  subtasks, subtaskRollups, indent, cols, sessions, lang, onPatch, onRemove, onCreateGroup,
+  subtasks, subtaskRollups, indent, cols, sessions, lang, statuses, onPatch, onRemove, onCreateGroup,
   onLinkSession, onUnfile, onOpenSession,
 }: {
   subtasks: Subtask[]
@@ -295,6 +297,8 @@ function SubtaskRows({
   /** The DELIVERY's sessions. Each subtask draws the ones filed under IT — see `SubtaskSessions`. */
   sessions: readonly TaskSessionRow[]
   lang: Lang
+  /** The board's LIVE status list (`lib/tasks.ts`'s `useTaskStatuses`) — `null` while it loads. */
+  statuses: readonly TaskStatusDef[] | null
   onPatch: (id: string, patch: SubtaskPatch) => Promise<StatusWriteResult>
   onRemove: (id: string) => void
   onCreateGroup: (title: string) => Promise<string | null>
@@ -338,6 +342,7 @@ function SubtaskRows({
               subtask={t}
               siblings={subtasks}
               lang={lang}
+              statuses={statuses}
               onPatch={onPatch}
               onCreateGroup={onCreateGroup}
               onRemove={onRemove}
@@ -379,7 +384,7 @@ function SubtaskRows({
             <ChipSelect
               compact
               value={t.status}
-              options={statusOptions(STATUS, COLUMN_ORDER)}
+              options={statusOptions(liveStatusMap(statuses), liveStatusOrder(statuses))}
               onPick={v => void onPatch(t.id, { status: v as TaskStatus })}
             />
           </td>
@@ -463,6 +468,8 @@ export interface TaskTableProps {
   onUnfileSession: (ref: string, sessionId: string) => void | Promise<void>
   /** Open a session's own screen. Absent renders each reference as a label. */
   onOpenSession?: (sessionId: string) => void
+  /** The board's LIVE status list (`lib/tasks.ts`'s `useTaskStatuses`) — `null` while it loads. */
+  statuses: readonly TaskStatusDef[] | null
 }
 
 export function TaskTable(p: TaskTableProps) {
@@ -479,7 +486,16 @@ export function TaskTable(p: TaskTableProps) {
     const t = setInterval(() => setNowMs(Date.now()), 60_000)
     return () => clearInterval(t)
   }, [])
-  const [groupsShown, setGroupsShown] = useState<BoardStatus[]>(stored.groups ?? [...COLUMN_ORDER])
+  const [groupsShown, setGroupsShown] = useState<BoardStatus[]>(
+    stored.groups ?? liveStatusOrder(p.statuses),
+  )
+  // The live list resolves ASYNCHRONOUSLY (`useTaskStatuses`) — a status a person just created
+  // must still get its own group the first time it renders, so a default (never customized: no
+  // `stored.groups`) tracks the list rather than freezing at whatever `useState`'s initializer saw
+  // on the render before the fetch resolved.
+  useEffect(() => {
+    if (stored.groups === null) setGroupsShown(liveStatusOrder(p.statuses))
+  }, [p.statuses])
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set(stored.collapsed))
   const [menu, setMenu] = useState<'columns' | 'groups' | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -501,10 +517,10 @@ export function TaskTable(p: TaskTableProps) {
   // Every group is BUILT, even a hidden one: the chooser needs its count to say what it is hiding.
   // Sorted INSIDE the group, never across: the grouping is the first ordering and a sort that
   // reordered the bands would silently undo the arrangement chosen a control away.
-  const groups = useMemo(() => COLUMN_ORDER.map(status => ({
+  const groups = useMemo(() => liveStatusOrder(p.statuses).map(status => ({
     status,
     rows: sortRows(p.rows.filter(r => (r.task.status as BoardStatus) === status), sort),
-  })), [p.rows, sort])
+  })), [p.rows, sort, p.statuses])
 
   const setColumns = (next: ColumnId[]) => { setShown(next); writeBoardPrefs({ columns: next }) }
   const setSort = (next: SortSpec) => { setSortState(next); writeBoardPrefs({ sort: next }) }
@@ -573,19 +589,19 @@ export function TaskTable(p: TaskTableProps) {
             // The SAME word the chip in every row of this group prints — one vocabulary, one
             // language. The heading used to read the English constant while the cell beside it
             // was translated.
-            label: statusLabel(g.status, p.lang ?? 'en'),
-            color: STATUS[g.status].color,
+            label: statusLabel(g.status, p.lang ?? 'en', p.statuses),
+            color: statusStyle(p.statuses, g.status).color,
             // The count of a HIDDEN group too — "hidden" must not read as "empty".
             hint: String(g.rows.length),
           }))}
           value={groupsShown}
           // The picked ORDER is kept, not re-canonicalised: the board and the table share this
-          // field, and the board draws its columns in it — forcing `COLUMN_ORDER` here would undo
-          // a reorder made one screen away.
+          // field, and the board draws its columns in it — forcing the live list's own order here
+          // would undo a reorder made one screen away.
           onChange={next => setGroups(next as BoardStatus[])}
           // ORDERABLE, exactly like the columns beside it. The order was always honoured (`visible`
-          // walks `groupsShown`, not `COLUMN_ORDER`) and the only way to change it was to untick
-          // every group and tick them back in the order you wanted — a sequence with no control.
+          // walks `groupsShown`, not the live list's raw order) and the only way to change it was to
+          // untick every group and tick them back in the order you wanted — a sequence with no control.
           orderable
           note="Drag a ticked group, or use ▲▼, to reorder the bands. A hidden group's tasks are still there."
         >
@@ -615,7 +631,7 @@ export function TaskTable(p: TaskTableProps) {
       {/* One CARD per group, each folding on its own. A single table holding every status made the
           whole board one scroll and one thing to collapse; a group is what people actually work in. */}
       {visible.map(g => {
-        const s = STATUS[g.status]
+        const s = statusStyle(p.statuses, g.status)
         const isFolded = collapsed.has(g.status)
         return (
           <div key={g.status} style={{ ...surface, overflow: 'hidden', borderLeft: `3px solid ${s.color}` }}>
@@ -631,7 +647,7 @@ export function TaskTable(p: TaskTableProps) {
               {/* The reader's word, not the constant — the picker one control away already said
                   `Em andamento` over the very band this heading called `In progress`. */}
               <span style={{ fontSize: 12.5, fontWeight: 700, color: s.color }}>
-                {statusLabel(g.status, p.lang ?? 'en')}
+                {statusLabel(g.status, p.lang ?? 'en', p.statuses)}
               </span>
               <span style={{ ...microLabel, fontSize: 11 }}>{g.rows.length}</span>
             </div>
@@ -755,6 +771,7 @@ export function TaskTable(p: TaskTableProps) {
                                   nowMs,
                                   p.lang ?? 'en',
                                   money,
+                                  p.statuses,
                                 )}
                               </td>
                             ))}
@@ -786,6 +803,7 @@ export function TaskTable(p: TaskTableProps) {
                                 indent={34} cols={cols.length}
                                 sessions={detail?.sessions ?? []}
                                 lang={p.lang ?? 'en'}
+                                statuses={p.statuses}
                                 onPatch={(id, patch) => p.onPatchSubtask(row.task.id, id, patch)}
                                 onRemove={id => p.onRemoveSubtask(row.task.id, id)}
                                 onCreateGroup={title => p.onCreateGroupSubtask(row.task.id, title)}
@@ -916,7 +934,7 @@ export function TaskTable(p: TaskTableProps) {
               value="__none__"
               options={[
                 { value: '__none__', label: 'Move to…', color: 'var(--text-secondary)', dim: 'var(--bg-elevated)' },
-                ...statusOptions(STATUS, COLUMN_ORDER),
+                ...statusOptions(liveStatusMap(p.statuses), liveStatusOrder(p.statuses)),
               ]}
               onPick={v => {
                 if (v === '__none__') return

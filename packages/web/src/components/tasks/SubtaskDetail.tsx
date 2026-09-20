@@ -47,7 +47,7 @@ import { CommentsTab, Rollup, Stat } from './DeliveryDetail'
 import { subtaskRollupOf, subtaskStatsOf } from './subtaskRollup'
 import { isGroupSubtask } from './subtaskGroups'
 import {
-  attachSession, detachSession, fmtDuration, patchSubtask,
+  attachSession, detachSession, fmtDuration, patchSubtask, useTaskStatuses,
   type Subtask, type TaskDetail, type TaskStatus,
 } from '../../lib/tasks'
 
@@ -69,6 +69,7 @@ export function SubtaskDetail(p: SubtaskDetailProps) {
   const pt = p.lang === 'pt'
   const [busy, setBusy] = useState(false)
   const [linking, setLinking] = useState(false)
+  const { statuses } = useTaskStatuses()
 
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); await fn(); await p.reload(); setBusy(false) }
   const patch = (changes: Partial<Pick<Subtask, 'status' | 'assignee' | 'dueDate' | 'startDate'>>) =>
@@ -103,6 +104,7 @@ export function SubtaskDetail(p: SubtaskDetailProps) {
             <StatusChip
               value={p.subtask.status}
               lang={p.lang}
+              statuses={statuses}
               {...(busy ? { disabled: true } : {})}
               onPick={st => void patch({ status: st as TaskStatus })}
             />

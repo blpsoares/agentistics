@@ -434,7 +434,20 @@ export function boardCopy(lang: Lang): BoardCopy {
   return lang === 'pt' ? PT : EN
 }
 
-/** The status word alone, which is what most cells need. Unknown ids render as themselves. */
-export function statusLabel(status: string, lang: Lang): string {
+/**
+ * The status word alone, which is what most cells need.
+ *
+ * `statuses` is the board's LIVE list (`lib/tasks.ts`'s `useTaskStatuses`) — when it is passed and
+ * carries the id, its own `label` wins, because that is the one place a status's real name lives
+ * now: a person can rename `done` to "Finalizado" via `ManageStatusesModal`, and this table's fixed
+ * PT/EN words must not keep overriding that choice back to "Entregue" forever. The fixed table below
+ * is only the fallback for the brief window before that list has loaded (`statuses` omitted or
+ * `null`) and for a caller that has no list to pass at all — unknown ids still render as themselves.
+ */
+export function statusLabel(
+  status: string, lang: Lang, statuses?: readonly { id: string; label: string }[] | null,
+): string {
+  const live = statuses?.find(s => s.id === status)
+  if (live) return live.label
   return boardCopy(lang).status[status] ?? status
 }

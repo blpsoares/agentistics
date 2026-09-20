@@ -8,7 +8,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { Filters, StagedSessionDraft, TaskPriorityId, TaskProgress } from '@agentistics/core'
+import {
+  sortTaskStatuses, type Filters, type StagedSessionDraft, type TaskPriorityId, type TaskProgress,
+} from '@agentistics/core'
 import { getDateRangeFilter } from '../hooks/useData'
 
 export type LinkProvenance = 'assigned' | 'observed' | 'none'
@@ -871,6 +873,31 @@ export async function fetchTaskStatuses(): Promise<TaskStatusRow[]> {
   } catch {
     return []
   }
+}
+
+/**
+ * The board's LIVE status list, for every surface that renders a column, a pill or a picker off it
+ * — the one fetch every one of them shares rather than each rolling its own. `null` means "still
+ * loading" (the first render, or a failed fetch): every consumer must treat that as "show a sane
+ * fallback", never as "there are no statuses" — see `board.ts`'s `statusStyle`/`liveStatusOrder`,
+ * which fall back to the fixed legacy vocabulary while this is `null`.
+ *
+ * A failed fetch keeps whatever was last loaded rather than clearing it back to `null` — the same
+ * rule `useTaskActivity` follows: "nothing changed" and "nobody answered" are different, and a
+ * board that blanks its columns because one poll dropped would be worse than one showing a stale
+ * list for a few seconds.
+ */
+export function useTaskStatuses() {
+  const [statuses, setStatuses] = useState<TaskStatusRow[] | null>(null)
+  const reload = useCallback(async () => {
+    const list = await fetchTaskStatuses()
+    if (list.length > 0) setStatuses(sortTaskStatuses(list) as TaskStatusRow[])
+    // An empty reply from a reachable server ("no statuses at all") cannot happen — the board always
+    // seeds the four protected ones — so an empty list here is treated as a failed read, not a real
+    // answer, and the previous list (or `null` on the very first load) is kept.
+  }, [])
+  useEffect(() => { void reload() }, [reload])
+  return { statuses, reload }
 }
 
 /** Create a new, non-protected status. The id is DERIVED server-side from the label — never chosen

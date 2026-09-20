@@ -21,10 +21,7 @@ import { Laptop, Layers, Rows3 } from 'lucide-react'
 import { fmtCost } from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import type { CentralTaskMachine, CentralTaskRow } from '../../lib/tasks'
-import {
-  NA, STATUS, button, fmtInt, fmtTokens, microLabel, numeric, pill, surface,
-  type BoardStatus,
-} from './board'
+import { NA, button, fmtInt, fmtTokens, microLabel, numeric, pill, statusStyle, surface } from './board'
 import { TaskProgressBar } from './TaskProgressBar'
 import { HarnessBadges } from './HarnessBadges'
 
@@ -35,8 +32,16 @@ export interface CentralTaskBoardProps {
   brlRate: number
 }
 
+/**
+ * A central has no filesystem access to a member's board, so it never sees that machine's LIVE
+ * status list (`TaskStatusDef[]`) — only the bare status id each shared `CentralTaskRow` carries.
+ * `statusStyle(null, status)` resolves it against the fixed legacy vocabulary and, for anything
+ * that machine created beyond it, renders the bare id in a neutral colour rather than mislabelling
+ * it as some other status — the same honest-fallback rule every other reader of a live list follows
+ * when that list cannot be had at all.
+ */
 function StatusPill({ status }: { status: string }) {
-  const s = STATUS[status as BoardStatus] ?? STATUS.backlog
+  const s = statusStyle(null, status)
   return <span style={{ ...pill(s.color), background: s.dim }}>{s.label}</span>
 }
 

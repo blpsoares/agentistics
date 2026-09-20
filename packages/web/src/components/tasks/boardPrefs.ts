@@ -16,7 +16,7 @@
  * remember which columns were shown is worse than one that opens on the defaults.
  */
 
-import { COLUMN_ORDER, type BoardStatus, type ColumnId } from './board'
+import type { BoardStatus, ColumnId } from './board'
 import { DEFAULT_SORT, type SortSpec } from '@agentistics/core'
 
 const KEY = 'agentistics-task-board-v1'
@@ -83,8 +83,14 @@ function readSort(v: unknown): SortSpec {
 const isView = (v: unknown): v is BoardView =>
   v === 'overview' || v === 'board' || v === 'table'
 
+// The status vocabulary is an editable LIST now (`@agentistics/core`'s `taskStatus.ts`), so a
+// stored group/collapsed id can be any status a person has created — no longer just one of the
+// fixed seven `COLUMN_ORDER` used to gate against. A stale id (a status since deleted) is left for
+// the READER to drop, cross-checked against the live list it has and this one does not
+// (`board.ts`'s `liveStatusOrder`/`statusStyle`) — this file only validates that the stored value
+// is a list of strings at all.
 const statuses = (v: unknown): BoardStatus[] | null =>
-  Array.isArray(v) ? v.filter((x): x is BoardStatus => COLUMN_ORDER.includes(x as BoardStatus)) : null
+  Array.isArray(v) ? v.filter((x): x is BoardStatus => typeof x === 'string') : null
 
 export function readBoardPrefs(): BoardPrefs {
   try {

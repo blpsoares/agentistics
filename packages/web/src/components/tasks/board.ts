@@ -12,10 +12,17 @@
 
 import type { CSSProperties } from 'react'
 import { HARNESS_COLORS } from '../../lib/harness'
-import type { HarnessId } from '@agentistics/core'
+import { sortTaskStatuses, type HarnessId, type TaskStatusDef } from '@agentistics/core'
 
-export type BoardStatus =
-  | 'backlog' | 'todo' | 'in_progress' | 'blocked' | 'in_review' | 'done' | 'abandoned'
+/**
+ * A status id. Used to be a closed seven-value union (`backlog | todo | in_progress | blocked |
+ * in_review | done | abandoned`) before the status list became editable
+ * (`@agentistics/core`'s `taskStatus.ts`) — widened to a plain string for the same reason
+ * `lib/tasks.ts`'s `TaskStatus` was: it is kept as its own name, rather than inlined as `string`
+ * everywhere, so the ~20 call sites across this tree that cast `as BoardStatus` or declare
+ * `BoardStatus[]` state keep reading as "a status id" to a reader, without a mechanical rename.
+ */
+export type BoardStatus = string
 
 /**
  * The table's columns, named HERE rather than in `TaskTable`.
@@ -34,9 +41,14 @@ export type ColumnId =
   | 'blockedBy' | 'created' | 'updated'
 
 /**
- * A status has a colour and it is the SAME colour everywhere — the column header, the card's stripe
- * and the table's status cell. Monday's whole legibility trick is that a status is a colour you
- * learn once.
+ * The fixed seven-status vocabulary the board shipped with — now the LOADING-STATE fallback and
+ * the legacy-migration reference only. Real rendering resolves a status id against the LIVE list
+ * instead (`statusStyle`/`liveStatusMap`/`liveStatusOrder` below, fed by `lib/tasks.ts`'s
+ * `useTaskStatuses`); this map is what those functions fall back to for the brief window before
+ * that fetch resolves, so nothing on screen is unstyled while it is in flight. A status has a
+ * colour and it is the SAME colour everywhere — the column header, the card's stripe and the
+ * table's status cell — which is now a fact about the SERVER's stored `TaskStatusDef.color`, not
+ * about this table.
  */
 export const STATUS: Record<BoardStatus, { label: string; color: string; dim: string }> = {
   backlog: { label: 'Backlog', color: 'var(--text-tertiary)', dim: 'var(--border)' },
@@ -81,9 +93,66 @@ export function claimLeft(expiresAt: string, nowMs: number): { text: string; exp
   return { text: `${Math.round(mins / 60)}h left`, expired: false }
 }
 
-/** Left to right, the way work moves. */
+/** Left to right, the way work moves — the LOADING-STATE fallback order; see `STATUS`'s own note.
+ *  Real rendering orders the LIVE list instead (`liveStatusOrder`). */
 export const COLUMN_ORDER: BoardStatus[] =
   ['backlog', 'todo', 'in_progress', 'blocked', 'in_review', 'done', 'abandoned']
+
+const UNKNOWN_STATUS_COLOR = 'var(--text-tertiary)'
+const UNKNOWN_STATUS_DIM = 'var(--border)'
+
+/**
+ * An alpha-tinted background from a status's own stored hex colour. The fixed seven-status palette
+ * hardcoded a `dim` design token per entry (`--accent-blue-dim` and friends, ~14-16% tints); a
+ * status a user creates or repaints has no such token — only the hex it was given — so its tint is
+ * computed instead of looked up. A malformed value (should not happen; colours are validated at
+ * write time by `isValidStatusColor`) falls back to the neutral border tint rather than crashing.
+ */
+export function dimFromHex(hex: string, alpha = 0.16): string {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex)
+  if (!m) return UNKNOWN_STATUS_DIM
+  const n = parseInt(m[1]!, 16)
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+/**
+ * The board's LIVE status vocabulary, as the same `{ label, color, dim }` shape `STATUS` used to
+ * hand out for the fixed seven — every existing consumer of that shape (`ChipSelect`'s
+ * `statusOptions`, a pill's border/background) keeps working unchanged, fed a live record instead
+ * of the frozen one. `list: null` (still loading — see `useTaskStatuses`) resolves through the
+ * fixed `STATUS` map so nothing renders unstyled during the fetch.
+ */
+export function liveStatusMap(
+  list: readonly TaskStatusDef[] | null,
+): Record<string, { label: string; color: string; dim: string }> {
+  if (!list) return STATUS
+  return Object.fromEntries(
+    list.map(s => [s.id, { label: s.label, color: s.color, dim: dimFromHex(s.color) }]),
+  )
+}
+
+/** Left-to-right column/group order from the LIVE list (`sortTaskStatuses`, `@agentistics/core`) —
+ *  `list: null` falls back to the fixed `COLUMN_ORDER` while the fetch is in flight. A custom status
+ *  a person creates gets its own slot here, in the position its `order` puts it. */
+export function liveStatusOrder(list: readonly TaskStatusDef[] | null): string[] {
+  return list ? sortTaskStatuses(list).map(s => s.id) : [...COLUMN_ORDER]
+}
+
+/**
+ * Resolve ONE status id against the live list — the single call most pill/chip rendering needs.
+ * An id absent from a LOADED list (a stale reference, or a status deleted since — should not
+ * normally happen, writes are validated against the live list server-side) renders as the bare id
+ * in a neutral colour nobody chose, rather than crashing or inventing a colour for it. Never a
+ * confident substitute (the old code's `?? STATUS.backlog`/`?? STATUS.todo` fallbacks silently
+ * relabelled an unrecognised status as a real one).
+ */
+export function statusStyle(
+  list: readonly TaskStatusDef[] | null, id: string,
+): { label: string; color: string; dim: string } {
+  const found = liveStatusMap(list)[id]
+  return found ?? { label: id, color: UNKNOWN_STATUS_COLOR, dim: UNKNOWN_STATUS_DIM }
+}
 
 /** How a live session reads on a task's row — the fleet's own vocabulary, not a second one. */
 export const SESSION_STATE: Record<string, { label: string; color: string }> = {

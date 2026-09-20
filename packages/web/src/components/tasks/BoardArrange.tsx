@@ -13,10 +13,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ArrowDownUp, Columns3, LayoutList, Rows3, X } from 'lucide-react'
-import { PRIORITY_ORDER, type SortKey, type SortSpec } from '@agentistics/core'
+import { PRIORITY_ORDER, type SortKey, type SortSpec, type TaskStatusDef } from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import {
-  COLUMN_ORDER, STATUS, button, field, microLabel, pill, surface, type BoardStatus,
+  button, field, liveStatusMap, liveStatusOrder, microLabel, pill, surface, type BoardStatus,
 } from './board'
 import { PickerMenu } from './PickerMenu'
 import { LANE_KEYS, type LaneKey } from './boardPrefs'
@@ -58,6 +58,8 @@ export interface BoardArrangeProps {
   onColumns: (next: BoardStatus[]) => void
   /** How many cards sit in each status, so a HIDDEN column still says what it holds. */
   counts: Record<string, number>
+  /** The board's LIVE status list (`lib/tasks.ts`'s `useTaskStatuses`) — `null` while it loads. */
+  statuses: readonly TaskStatusDef[] | null
 }
 
 export function BoardArrange(p: BoardArrangeProps) {
@@ -65,6 +67,8 @@ export function BoardArrange(p: BoardArrangeProps) {
   const [menu, setMenu] = useState<'sort' | 'lanes' | 'wip' | null>(null)
   const [at, setAt] = useState<{ left: number; top: number } | null>(null)
   const bar = useRef<HTMLDivElement>(null)
+  const statusOrder = liveStatusOrder(p.statuses)
+  const statusMap = liveStatusMap(p.statuses)
 
   /**
    * The panels are FIXED and live in a portal, and they open to the RIGHT of their button.
@@ -140,10 +144,10 @@ export function BoardArrange(p: BoardArrangeProps) {
       <PickerMenu
         title="Columns on the board"
         triggerStyle={trigger}
-        items={COLUMN_ORDER.map(st => ({
+        items={statusOrder.map(st => ({
           value: st,
-          label: STATUS[st].label,
-          color: STATUS[st].color,
+          label: statusMap[st]?.label ?? st,
+          color: statusMap[st]?.color ?? 'var(--text-tertiary)',
           hint: String(p.counts[st] ?? 0),
         }))}
         value={p.columns}
@@ -219,8 +223,8 @@ export function BoardArrange(p: BoardArrangeProps) {
         {panel('wip', 260, (
           <>
               <div style={{ ...microLabel, marginBottom: 3 }}>Cards per column</div>
-              {COLUMN_ORDER.map(st => {
-                const c = STATUS[st]
+              {statusOrder.map(st => {
+                const c = statusMap[st] ?? { label: st, color: 'var(--text-tertiary)' }
                 const v = p.wip[st]
                 return (
                   <label key={st} style={{ ...row(v !== undefined), cursor: 'default' }}>
@@ -262,13 +266,13 @@ export function BoardArrange(p: BoardArrangeProps) {
 
       <span style={{ flex: 1 }} />
       {(p.sort.key !== 'manual' || p.lanes !== 'none' || limited > 0
-        || p.columns.length !== COLUMN_ORDER.length) && (
+        || p.columns.length !== statusOrder.length) && (
         <button
           onClick={() => {
             p.onSort({ key: 'manual', dir: 'asc' })
             p.onLanes('none')
             p.onWip({})
-            p.onColumns([...COLUMN_ORDER])
+            p.onColumns([...statusOrder])
           }}
           style={{ ...trigger, color: 'var(--text-tertiary)' }}
           title="Back to the plain board"

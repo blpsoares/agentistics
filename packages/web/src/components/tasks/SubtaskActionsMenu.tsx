@@ -32,9 +32,10 @@ import { createPortal } from 'react-dom'
 import {
   Ban, ChevronLeft, Plus, Rocket, Settings, SquarePen, Trash2, Users, XCircle,
 } from 'lucide-react'
+import type { TaskStatusDef } from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { Select } from '../../pages/settings/primitives'
-import { STATUS, microLabel, pill, surface, type BoardStatus } from './board'
+import { microLabel, pill, statusStyle, surface } from './board'
 import { statusLabel, type Lang } from './copy'
 import { createGroupCandidates, groupMembers, groupOf, joinGroupCandidates } from './subtaskGroups'
 import { planSubtaskActions } from './subtaskActionsPlan'
@@ -45,6 +46,8 @@ export interface SubtaskActionsMenuProps {
   /** The delivery's OTHER subtasks — the only pool blocked-by and group candidates come from. */
   siblings: readonly Subtask[]
   lang: Lang
+  /** The board's LIVE status list (`lib/tasks.ts`'s `useTaskStatuses`) — `null` while it loads. */
+  statuses: readonly TaskStatusDef[] | null
   /** Patch ANY subtask of this delivery by id — used for this row and, while forming a group, for
    *  the sibling being joined to it. */
   onPatch: (id: string, patch: SubtaskPatch) => Promise<StatusWriteResult>
@@ -359,8 +362,8 @@ export function SubtaskActionsMenu(p: SubtaskActionsMenuProps) {
                     textDecoration: b.done ? 'line-through' : 'none',
                     color: b.done ? 'var(--text-tertiary)' : 'var(--text-secondary)',
                   }}>{b.title}</span>
-                  <span style={pill(STATUS[b.status as BoardStatus]?.color)}>
-                    {statusLabel(b.status, p.lang)}
+                  <span style={pill(statusStyle(p.statuses, b.status).color)}>
+                    {statusLabel(b.status, p.lang, p.statuses)}
                   </span>
                   <button
                     onClick={() => void setBlockedBy(blockedBy.filter(x => x !== b.id))}
@@ -377,7 +380,7 @@ export function SubtaskActionsMenu(p: SubtaskActionsMenuProps) {
                     searchPlaceholder={pt ? 'Buscar…' : 'Search…'}
                     options={p.siblings
                       .filter(s => s.id !== p.subtask.id && !blockedBy.includes(s.id))
-                      .map(s => ({ value: s.id, label: s.title, hint: statusLabel(s.status, p.lang) }))}
+                      .map(s => ({ value: s.id, label: s.title, hint: statusLabel(s.status, p.lang, p.statuses) }))}
                     onChange={v => { if (v) void setBlockedBy([...blockedBy, v]); setPickingBlocker(false) }}
                   />
                 )

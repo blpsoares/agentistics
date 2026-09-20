@@ -54,9 +54,12 @@
 
 import { useState } from 'react'
 import { Plus } from 'lucide-react'
-import type { StagedSessionDraft } from '@agentistics/core'
+import type { StagedSessionDraft, TaskStatusDef } from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
-import { COLUMN_ORDER, STATUS, fmtTokens, microLabel, numeric, pill, surface, type BoardStatus } from './board'
+import {
+  fmtTokens, liveStatusMap, liveStatusOrder, microLabel, numeric, pill, statusStyle, surface,
+  type BoardStatus,
+} from './board'
 import { SessionPicker } from './SessionPicker'
 import { DoneNeedsSessionDialog } from './DoneNeedsSessionDialog'
 import { DatePicker } from '../DatePicker'
@@ -76,14 +79,18 @@ import type {
   TaskFile, TaskSessionRow, TaskStatus,
 } from '../../lib/tasks'
 
-function StatusPick({ value, lang, onPick }: {
+function StatusPick({ value, lang, statuses, onPick }: {
   value: TaskStatus
   lang: Lang
+  /** The board's LIVE status list (`lib/tasks.ts`'s `useTaskStatuses`) — `null` while it loads. */
+  statuses: readonly TaskStatusDef[] | null
   onPick: (s: TaskStatus) => void
 }) {
   const isMobile = useIsMobile()
   const [open, setOpen] = useState(false)
-  const s = STATUS[value as BoardStatus] ?? STATUS.todo
+  const s = statusStyle(statuses, value)
+  const map = liveStatusMap(statuses)
+  const order = liveStatusOrder(statuses)
   return (
     <div style={{ position: 'relative' }}>
       <button className="ag-tap"
@@ -92,7 +99,7 @@ function StatusPick({ value, lang, onPick }: {
           border: `1px solid ${s.color}`, cursor: 'pointer', padding: '3px 9px', borderRadius: 5,
           background: s.dim, color: s.color, fontSize: 10.5, fontWeight: 600, whiteSpace: 'nowrap',
         }}
-      >{statusLabel(value, lang)}</button>
+      >{statusLabel(value, lang, statuses)}</button>
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 30 }} />
@@ -101,8 +108,8 @@ function StatusPick({ value, lang, onPick }: {
             ...surface, background: 'var(--bg-elevated)', padding: 4, display: 'grid', gap: 2,
             boxShadow: 'var(--shadow-elevated)',
           }}>
-            {COLUMN_ORDER.map(st => {
-              const c = STATUS[st]
+            {order.map(st => {
+              const c = map[st] ?? { label: st, color: 'var(--text-tertiary)', dim: 'var(--border)' }
               return (
                 <button
                   // A MENU ROW pays its 44px in PAINT. `.ag-tap` is for controls whose smallness
@@ -114,7 +121,7 @@ function StatusPick({ value, lang, onPick }: {
                     minHeight: isMobile ? 44 : undefined,
                     borderRadius: 5, background: c.dim, color: c.color, fontSize: 10.5, fontWeight: 600,
                   }}
-                >{statusLabel(st, lang)}</button>
+                >{statusLabel(st, lang, statuses)}</button>
               )
             })}
           </div>
@@ -163,6 +170,8 @@ export interface SubtaskTableProps {
    *  `TaskDetail.subtaskRollups`, straight off the server's `subtaskViews()`. */
   subtaskRollups: readonly SubtaskView[]
   lang: Lang
+  /** The board's LIVE status list (`lib/tasks.ts`'s `useTaskStatuses`) — `null` while it loads. */
+  statuses: readonly TaskStatusDef[] | null
   onAdd: (title: string) => void | Promise<void>
   /** Returns the write's outcome — the status pick below needs it to catch `done_needs_session`
    *  and open the resolution dialog, rather than swallow the refusal like every other patch; the
@@ -299,6 +308,7 @@ export function SubtaskTable(p: SubtaskTableProps) {
                   subtask={t}
                   siblings={p.subtasks}
                   lang={p.lang}
+                  statuses={p.statuses}
                   onPatch={p.onPatch}
                   onCreateGroup={p.onCreateGroup}
                   onRemove={p.onRemove}
@@ -356,7 +366,7 @@ export function SubtaskTable(p: SubtaskTableProps) {
               </td>
               <td style={{ ...cell, minWidth: 90, whiteSpace: 'nowrap', ...tint }}>
                 <StatusPick
-                  value={t.status} lang={p.lang}
+                  value={t.status} lang={p.lang} statuses={p.statuses}
                   onPick={s => void pickStatus(t, s)}
                 />
               </td>
