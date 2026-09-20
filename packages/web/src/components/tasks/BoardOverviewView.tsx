@@ -18,8 +18,9 @@
 import { useMemo, type ReactNode } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { CircleDashed, CircleCheck, CircleSlash, Coins, Timer, Activity } from 'lucide-react'
+import type { TaskStatusDef } from '@agentistics/core'
 import {
-  COLUMN_ORDER, NA, STATUS, fmtInt, fmtTokens, harnessColor, microLabel, numeric, surface,
+  NA, fmtInt, fmtTokens, harnessColor, liveStatusOrder, microLabel, numeric, statusStyle, surface,
 } from './board'
 import { useMoney } from './money'
 import { fmtDuration, type BoardOverview, type Bucket } from '../../lib/tasks'
@@ -158,7 +159,11 @@ function BoardActivity({ daily, isMobile }: { daily: BoardOverview['daily']; isM
   )
 }
 
-export function BoardOverviewView({ o }: { o: BoardOverview }) {
+export function BoardOverviewView({ o, statuses }: {
+  o: BoardOverview
+  /** The board's LIVE status list (`lib/tasks.ts`'s `useTaskStatuses`) — `null` while it loads. */
+  statuses: readonly TaskStatusDef[] | null
+}) {
   const money = useMoney()
   const isMobile = useIsMobile()
 
@@ -245,8 +250,17 @@ export function BoardOverviewView({ o }: { o: BoardOverview }) {
           left off the row.
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {COLUMN_ORDER.map(st => {
-            const c = STATUS[st]
+          {/*
+           * The LIVE list's own order, plus any id `statusCounts` carries that the live list does
+           * not (a status since DELETED — deletable only once nothing points at it, but a task
+           * counted under it before that could still be closed and sitting in history). Appending
+           * rather than dropping it: a status count is real work that happened, and hiding it would
+           * make the total above it stop matching the sum of the chips below.
+           */}
+          {[...liveStatusOrder(statuses), ...Object.keys(o.statusCounts).filter(
+            id => !liveStatusOrder(statuses).includes(id),
+          )].map(st => {
+            const c = statusStyle(statuses, st)
             const n = o.statusCounts[st] ?? 0
             return (
               <div key={st} style={{

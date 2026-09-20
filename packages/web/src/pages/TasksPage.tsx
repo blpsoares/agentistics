@@ -14,7 +14,7 @@
  * shows both and no total, and an open task shows no duration — "still running" is not "took N h".
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import {
@@ -56,15 +56,15 @@ import { NewTaskWizard } from '../components/tasks/NewTaskWizard'
 import { ManageStatusesModal } from '../components/tasks/ManageStatusesModal'
 import { NewSessionModal } from '../components/sessions/NewSessionModal'
 import {
-  COLUMN_ORDER, NA, PRIORITY, SESSION_STATE, STATUS, button, claimLeft, field, fmtInt, fmtTokens,
-  harnessColor, microLabel, numeric, pill, surface, type BoardStatus,
+  NA, PRIORITY, SESSION_STATE, button, claimLeft, field, fmtInt, fmtTokens, harnessColor,
+  liveStatusOrder, microLabel, numeric, pill, statusStyle, surface, type BoardStatus,
 } from '../components/tasks/board'
 import {
   addComment, addLink, addSubtask, createTask, deleteFile, deleteTask, editComment, fileUrl,
   attachSession, detachSession, fmtDuration, markTask, patchSubtask, removeComment, removeLink,
   removeSubtask,
   editTask, moveTask, setBlockedBy, uploadFile,
-  useCentralTasks, useTaskDetail, useTaskList,
+  useCentralTasks, useTaskDetail, useTaskList, useTaskStatuses,
   type AttemptRollup, type AttemptView, type TaskDetail, type TaskFieldPatch, type TaskFile,
   type TaskListRow, type TaskRecord, type TasksError, type TaskStatus,
 } from '../lib/tasks'
@@ -140,6 +140,7 @@ function TaskList() {
   // is what makes "what did this cost me last week" answerable.
   const { filters, lang } = useOutletContext<AppContext>()
   const { rows, overview, excluded, error, reload } = useTaskList(filters)
+  const { statuses, reload: reloadStatuses } = useTaskStatuses()
   const navigate = useNavigate()
   const isMobile = useIsMobile()
   // Metrics FIRST. The kanban answers "which column is full"; this answers "what is it costing me",
@@ -157,9 +158,17 @@ function TaskList() {
   const [lanes, setLanesState] = useState<LaneKey>(stored.lanes)
   const setLanes = (v: LaneKey) => { setLanesState(v); writeBoardPrefs({ lanes: v }) }
   const [wip, setWipState] = useState<Record<string, number>>(stored.wip)
-  // The visible columns, shared with the table's group chooser — `boardPrefs.groups`.
-  const [boardColumns, setBoardColumnsState] = useState<BoardStatus[]>(stored.groups ?? [...COLUMN_ORDER])
+  // The visible columns, shared with the table's group chooser — `boardPrefs.groups`. Falls back to
+  // the LIVE list's own order (every status the board currently has, custom ones included) rather
+  // than the fixed legacy seven, so a board nobody has customized shows what is really there.
+  const [boardColumns, setBoardColumnsState] = useState<BoardStatus[]>(
+    stored.groups ?? liveStatusOrder(statuses),
+  )
   const setBoardColumns = (v: BoardStatus[]) => { setBoardColumnsState(v); writeBoardPrefs({ groups: v }) }
+  // The live list resolves asynchronously — see `TaskTable.tsx`'s identical effect for the reason.
+  useEffect(() => {
+    if (stored.groups === null) setBoardColumnsState(liveStatusOrder(statuses))
+  }, [statuses])
   /**
    * The tasks on their way to `blocked`, waiting on the dialog's answer.
    *
@@ -175,9 +184,9 @@ function TaskList() {
   const { fleet } = useFleet('en')
   const [q, setQ] = useState('')
   const [open, setOpen] = useState(false)
-  /** The status vocabulary editor — a NEW, self-contained screen (see its own docblock); it never
-   *  touches the board's own rendering, which still draws through `board.ts`'s fixed seven-status
-   *  map until a follow-up piece of work wires the dynamic list into it. */
+  /** The status vocabulary editor (see its own docblock) — closing it reloads the live list, so a
+   *  rename, a recolour or a new/deleted status reaches the board immediately without a page
+   *  refresh. */
   const [managingStatuses, setManagingStatuses] = useState(false)
   /** The task whose session wizard is up — see `onCreateSession`. */
   const [starting, setStarting] = useState<{ taskId: string; title: string } | null>(null)
@@ -256,7 +265,10 @@ function TaskList() {
       </div>
 
       {managingStatuses && (
-        <ManageStatusesModal lang={lang} onClose={() => setManagingStatuses(false)} />
+        <ManageStatusesModal
+          lang={lang}
+          onClose={() => { setManagingStatuses(false); void reloadStatuses() }}
+        />
       )}
 
       {open && (
@@ -316,7 +328,7 @@ function TaskList() {
         </div>
       )}
 
-      {view === 'overview' && overview && <BoardOverviewView o={overview} />}
+      {view === 'overview' && overview && <BoardOverviewView o={overview} statuses={statuses} />}
 
       {view !== 'overview' && rows !== null && shown.length === 0 && (
         <EmptyNotice error={rows.length > 0 ? null : error} />
@@ -327,11 +339,12 @@ function TaskList() {
             sort={sort} onSort={setSort}
             lanes={lanes} onLanes={setLanes}
             wip={wip} onWip={setWip}
-            // The board and the table share ONE set of visible columns: they are the same seven
-            // statuses, and letting each remember its own would mean hiding `abandoned` twice.
+            // The board and the table share ONE set of visible columns: they are the LIVE statuses,
+            // and letting each remember its own would mean hiding a status twice.
             columns={boardColumns}
             onColumns={setBoardColumns}
-            counts={Object.fromEntries(COLUMN_ORDER.map(st => [
+            statuses={statuses}
+            counts={Object.fromEntries(liveStatusOrder(statuses).map(st => [
               st, shown.filter(r => r.task.status === st).length,
             ]))}
           />
@@ -342,6 +355,7 @@ function TaskList() {
             lanes={lanes}
             wip={wip}
             columns={boardColumns}
+            statuses={statuses}
             sessions={fleet.sessions}
             onOpen={id => navigate(`/tasks/${encodeURIComponent(id)}`)}
             onStatus={(id, status) => void toStatus([id], status)}
@@ -353,6 +367,7 @@ function TaskList() {
         <TaskTable
           rows={shown}
           lang={lang}
+          statuses={statuses}
           details={details}
           onOpen={id => navigate(`/tasks/${encodeURIComponent(id)}`)}
           onStatus={(ref, status) => void toStatus([ref], status)}
@@ -434,6 +449,7 @@ function TaskList() {
 function TaskDetailView({ id }: { id: string }) {
   const { filters, lang } = useOutletContext<AppContext>()
   const { detail, error, reload } = useTaskDetail(id, filters)
+  const { statuses } = useTaskStatuses()
   const navigate = useNavigate()
   const isMobile = useIsMobile()
 
@@ -441,7 +457,7 @@ function TaskDetailView({ id }: { id: string }) {
   if (error) return <div style={{ padding: 18 }}><EmptyNotice error={error} /></div>
   if (!detail) return <div style={{ padding: 18, color: 'var(--text-tertiary)', fontSize: 12.5 }}>Loading…</div>
 
-  const s = STATUS[detail.task.status as BoardStatus] ?? STATUS.todo
+  const s = statusStyle(statuses, detail.task.status)
 
   return (
     <div style={{
@@ -477,7 +493,7 @@ function TaskDetailView({ id }: { id: string }) {
         <span style={{
           padding: '3px 11px', borderRadius: 6, fontSize: 11,
           background: s.dim, color: s.color, border: `1px solid ${s.color}`,
-        }}>{statusLabel(detail.task.status, lang)}</span>
+        }}>{statusLabel(detail.task.status, lang, statuses)}</span>
       </div>
 
       <DeliveryDetail

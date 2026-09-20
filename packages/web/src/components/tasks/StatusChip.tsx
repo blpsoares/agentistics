@@ -17,15 +17,19 @@
  * a dropdown is a second set of those decisions.
  */
 
-import { COLUMN_ORDER, STATUS, type BoardStatus } from './board'
+import type { TaskStatusDef } from '@agentistics/core'
+import { liveStatusMap, liveStatusOrder, type BoardStatus } from './board'
 import { ChipSelect } from './ChipSelect'
-import { boardCopy, type Lang } from './copy'
+import { type Lang } from './copy'
 
 export interface StatusChipProps {
   value: string
   /** `blocked` reaches the caller like any other status — the reason dialog is the caller's. */
   onPick: (status: BoardStatus) => void
   lang: Lang
+  /** The board's LIVE status list (`lib/tasks.ts`'s `useTaskStatuses`) — `null` while it loads,
+   *  in which case the fixed legacy vocabulary is shown so the menu is never empty. */
+  statuses: readonly TaskStatusDef[] | null
   /** Tight cells (a table row, a card) get the compact padding; a rail gets the roomier one. */
   compact?: boolean
   /** Fill the column. Off where the chip sits among other controls. */
@@ -33,22 +37,24 @@ export interface StatusChipProps {
   disabled?: boolean
 }
 
-export function StatusChip({ value, onPick, lang, compact, block = true, disabled }: StatusChipProps) {
-  const copy = boardCopy(lang)
+export function StatusChip({ value, onPick, statuses, compact, block = true, disabled }: StatusChipProps) {
   // Built here rather than passed in, so no caller can offer a different set of statuses — the
-  // point of the component is that the menu is the same everywhere.
-  const options = COLUMN_ORDER.map(id => ({
+  // point of the component is that the menu is the same everywhere. Every entry's label/colour is
+  // the LIVE one (a person's rename or custom status wins over any fixed word).
+  const map = liveStatusMap(statuses)
+  const order = liveStatusOrder(statuses)
+  const options = order.map(id => ({
     value: id,
-    label: copy.status[id] ?? STATUS[id].label,
-    color: STATUS[id].color,
-    dim: STATUS[id].dim,
+    label: map[id]?.label ?? id,
+    color: map[id]?.color ?? 'var(--text-tertiary)',
+    dim: map[id]?.dim ?? 'var(--border)',
   }))
   return (
     <ChipSelect
       value={value}
       options={options}
       onPick={v => onPick(v as BoardStatus)}
-      title={copy.status[value] ?? value}
+      title={map[value]?.label ?? value}
       {...(compact ? { compact } : {})}
       {...(disabled ? { disabled } : {})}
       block={block}

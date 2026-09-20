@@ -39,8 +39,8 @@ import {
   type CommentAttachment, type CommentPart,
 } from '../../lib/commentBody'
 import {
-  COLUMN_ORDER, NA, PRIORITY, SESSION_STATE, STATUS, button, claimLeft, field, fmtInt, fmtTokens,
-  harnessColor, microLabel, numeric, pill, surface, type BoardStatus,
+  NA, PRIORITY, SESSION_STATE, button, claimLeft, field, fmtInt, fmtTokens,
+  harnessColor, microLabel, numeric, pill, statusStyle, surface,
 } from './board'
 import { useMoney } from './money'
 import { boardCopy, statusLabel, type Lang } from './copy'
@@ -60,7 +60,7 @@ import {
   addComment, addLink, addSubtask, attachSession, claimTask, clearStagedSession, deleteFile,
   deleteTask, detachSession, editComment, editTask, fileUrl, fmtDuration, materializeStagedAttachments,
   markTask, patchSubtask, removeComment, removeLink, removeSubtask, saveStagedSession, setBlockedBy,
-  uploadFile, useTaskActivity, useTaskDetail, useTaskList,
+  uploadFile, useTaskActivity, useTaskDetail, useTaskList, useTaskStatuses,
   type AttemptRollup, type AttemptView, type Subtask, type TaskDetail, type TaskFieldPatch,
   type TaskFile, type TaskListRow, type TaskRecord, type TaskStatus,
 } from '../../lib/tasks'
@@ -116,11 +116,13 @@ function ActivityTab({ id }: { id: string }) {
   )
 }
 
-function PlanCard({ task, busy, lang, onPatch, onStatus, onClaim }: {
+function PlanCard({ task, busy, lang, statuses, onPatch, onStatus, onClaim }: {
   task: TaskRecord
   busy: boolean
   onPatch: (patch: TaskFieldPatch) => void | Promise<void>
   lang: 'pt' | 'en'
+  /** The board's LIVE status list (`lib/tasks.ts`'s `useTaskStatuses`) — `null` while it loads. */
+  statuses: ReturnType<typeof useTaskStatuses>['statuses']
   onStatus: (s: TaskStatus) => void | Promise<void>
   onClaim: (release: boolean) => void | Promise<void>
 }) {
@@ -152,6 +154,7 @@ function PlanCard({ task, busy, lang, onPatch, onStatus, onClaim }: {
           <StatusChip
             value={task.status}
             lang={lang}
+            statuses={statuses}
             {...(busy ? { disabled: true } : {})}
             onPick={(st: string) => void onStatus(st as TaskStatus)}
           />
@@ -235,20 +238,23 @@ function PlanCard({ task, busy, lang, onPatch, onStatus, onClaim }: {
         ))}
       </div>
 
-      {task.status === 'blocked' && task.blockedReason && (
+      {task.status === 'blocked' && task.blockedReason && (() => {
         // Asking for the reason and then not showing it would be theatre. It sits under the status
         // it belongs to, in the status's own colour, and goes when the task leaves `blocked`.
-        <div style={{
-          fontSize: 12, lineHeight: 1.5, padding: '8px 10px', borderRadius: 7,
-          background: STATUS.blocked.dim, color: 'var(--text-secondary)',
-          border: `1px solid ${STATUS.blocked.color}`,
-        }}>
-          <span style={{ ...microLabel, fontSize: 9, display: 'block', marginBottom: 3, color: STATUS.blocked.color }}>
-            {copy.waitingOn}
-          </span>
-          {task.blockedReason}
-        </div>
-      )}
+        const blockedStyle = statusStyle(statuses, 'blocked')
+        return (
+          <div style={{
+            fontSize: 12, lineHeight: 1.5, padding: '8px 10px', borderRadius: 7,
+            background: blockedStyle.dim, color: 'var(--text-secondary)',
+            border: `1px solid ${blockedStyle.color}`,
+          }}>
+            <span style={{ ...microLabel, fontSize: 9, display: 'block', marginBottom: 3, color: blockedStyle.color }}>
+              {copy.waitingOn}
+            </span>
+            {task.blockedReason}
+          </div>
+        )
+      })()}
 
       <div style={{ display: 'grid', gap: 6, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
         <span style={{ ...microLabel, fontSize: 9 }}>{copy.workingOnIt}</span>
@@ -500,10 +506,12 @@ function LinksPanel({ id, task, onChanged, bare }: {
  * A blocker that is already closed is struck through rather than removed: the record of what held
  * the work up is part of the delivery's story, and silently dropping it rewrites that story.
  */
-function BlockedBy({ id, task, lang, onChanged, bare }: {
+function BlockedBy({ id, task, lang, statuses, onChanged, bare }: {
   id: string
   task: TaskListRow['task']
   lang: Lang
+  /** The board's LIVE status list (`lib/tasks.ts`'s `useTaskStatuses`) — `null` while it loads. */
+  statuses: ReturnType<typeof useTaskStatuses>['statuses']
   onChanged: () => Promise<void> | void
   /** See `LinksPanel`. */
   bare?: boolean
@@ -542,8 +550,8 @@ function BlockedBy({ id, task, lang, onChanged, bare }: {
               textDecoration: closed ? 'line-through' : 'none',
               color: closed ? 'var(--text-tertiary)' : 'var(--text-secondary)',
             }}>{b.task.title}</span>
-            <span style={pill(STATUS[b.task.status as BoardStatus]?.color)}>
-              {statusLabel(b.task.status, lang)}
+            <span style={pill(statusStyle(statuses, b.task.status).color)}>
+              {statusLabel(b.task.status, lang, statuses)}
             </span>
             <button
               onClick={() => void set((task.blockedBy ?? []).filter(x => x !== b.task.id))}
@@ -570,7 +578,7 @@ function BlockedBy({ id, task, lang, onChanged, bare }: {
               .map(r => ({
                 value: r.task.id,
                 label: r.task.title,
-                hint: statusLabel(r.task.status, lang),
+                hint: statusLabel(r.task.status, lang, statuses),
               }))}
             onChange={v => {
               if (v) void set([...(task.blockedBy ?? []), v])
@@ -1233,6 +1241,10 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
   // The other tasks, to offer as blockers. The board is small enough that this is the same list the
   // page already loads; a second endpoint for "what could block this" would be a second answer.
   const { rows: boardRows } = useTaskList()
+  // The board's LIVE status list — fetched here rather than threaded from every caller (the page
+  // and the session aside's Task tab both mount this component fresh), same pattern as `boardRows`
+  // just above.
+  const { statuses } = useTaskStatuses()
 
   /**
    * FIRING a staged session (t-918cc82233) — two paths, decided by whether the draft already names
@@ -1425,6 +1437,7 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
               sessions={detail.sessions}
               subtaskRollups={detail.subtaskRollups}
               lang={lang}
+              statuses={statuses}
               onAdd={title => run(() => addSubtask(id, title))}
               onPatch={async (sid, patch) => {
                 // Same shape as `run()`, but the RESULT reaches the caller — `SubtaskTable` needs
@@ -1491,6 +1504,7 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
             task={detail.task}
             busy={busy}
             lang={lang}
+            statuses={statuses}
             onPatch={async patch => { await run(() => editTask(id, patch)) }}
             onStatus={async st => {
               if (st === 'blocked') { setBlocking(true); return }
@@ -1548,7 +1562,7 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
           </RailSection>
 
           <RailSection id="blocked" title={copy.blockedBy} badge={detail.task.blockedBy?.length ?? 0}>
-            <BlockedBy id={id} task={detail.task} lang={lang} onChanged={reload} bare />
+            <BlockedBy id={id} task={detail.task} lang={lang} statuses={statuses} onChanged={reload} bare />
           </RailSection>
 
           {/*

@@ -25,8 +25,10 @@ import { useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ArrowLeft, Check, CornerDownRight, Plus, Search, X } from 'lucide-react'
 import { useIsMobile } from '../../hooks/useIsMobile'
-import { addSubtask, createTask, useTaskDetail, useTaskList, type Subtask, type TaskListRow } from '../../lib/tasks'
-import { STATUS, button, field, microLabel, pill, surface, type BoardStatus } from './board'
+import {
+  addSubtask, createTask, useTaskDetail, useTaskList, useTaskStatuses, type Subtask, type TaskListRow,
+} from '../../lib/tasks'
+import { button, field, microLabel, pill, statusStyle, surface } from './board'
 import { boardCopy, statusLabel, type Lang } from './copy'
 import { BetaTag } from '../BetaTag'
 import { overlayPadding } from '../../lib/mobileOverlay'
@@ -51,6 +53,7 @@ export function TaskPicker(p: TaskPickerProps) {
   const copy = boardCopy(p.lang)
   const pt = p.lang === 'pt'
   const { rows, reload } = useTaskList()
+  const { statuses } = useTaskStatuses()
 
   const [chosen, setChosen] = useState<TaskListRow | null>(null)
   const { detail, reload: reloadDetail } = useTaskDetail(chosen?.task.id)
@@ -141,10 +144,10 @@ export function TaskPicker(p: TaskPickerProps) {
             {chosen.task.title}
           </span>
           <span style={{
-            ...pill(STATUS[(chosen.task.status as BoardStatus)]?.color),
-            background: STATUS[(chosen.task.status as BoardStatus)]?.dim,
+            ...pill(statusStyle(statuses, chosen.task.status).color),
+            background: statusStyle(statuses, chosen.task.status).dim,
           }}>
-            {statusLabel(chosen.task.status, p.lang)}
+            {statusLabel(chosen.task.status, p.lang, statuses)}
           </span>
         </div>
 
@@ -201,7 +204,7 @@ export function TaskPicker(p: TaskPickerProps) {
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {st.title}
               </span>
-              <span style={{ ...microLabel, fontSize: 9.5 }}>{statusLabel(st.status, p.lang)}</span>
+              <span style={{ ...microLabel, fontSize: 9.5 }}>{statusLabel(st.status, p.lang, statuses)}</span>
             </button>
           ))}
         </div>
@@ -269,10 +272,10 @@ export function TaskPicker(p: TaskPickerProps) {
               </span>
               <span style={{
                 marginLeft: 'auto',
-                ...pill(STATUS[(r.task.status as BoardStatus)]?.color),
-                background: STATUS[(r.task.status as BoardStatus)]?.dim,
+                ...pill(statusStyle(statuses, r.task.status).color),
+                background: statusStyle(statuses, r.task.status).dim,
               }}>
-                {statusLabel(r.task.status, p.lang)}
+                {statusLabel(r.task.status, p.lang, statuses)}
               </span>
             </button>
           ))}
