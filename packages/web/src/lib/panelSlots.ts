@@ -20,6 +20,11 @@
  * what makes "every panel × slot × occupant" a table a test can walk exhaustively, and it is what a
  * re-parenting host (`StudioHost.tsx`) can reason about without touching a live subscription.
  *
+ * EVERY PANEL REACHES BOTH SLOTS (owner, 2026-09-19 — see `BOTTOM_PANELS`'s own doc comment for the
+ * decision and the reasoning it replaces). `contents` no longer has a slot it "never goes to";
+ * `allowed()` is kept as the one gate every caller still asks, rather than assuming the answer, so a
+ * future panel that genuinely cannot reach one slot has somewhere to say so.
+ *
  * THE STORE, layered on top, is the per-browser preference — like `boardPrefs.ts` / `shellBand.ts`'s
  * own `readBandPrefs`, never `/api/preferences` (shared by everyone signed in on a central). It is
  * guarded exactly like those: a private window, cleared site data or a browser blocking storage costs
@@ -74,18 +79,31 @@ export const DEFAULT_LAST_SLOT: Record<PanelId, SlotId> = {
   contents: 'right', studio: 'right', cli: 'bottom', shell: 'bottom', hardware: 'right',
 }
 
-/** What each slot may host — CLOSED sets, so a new panel must be added here on purpose.
- *  `hardware` is RIGHT ONLY — it answers "what is this machine doing right now", which is a
- *  question with no useful shape in a band under the composer, and nobody asked for it there. */
+/**
+ * What each slot may host — CLOSED sets, so a new panel must be added here on purpose.
+ *
+ * DECISION (owner, 2026-09-19): "o hardware nao ta com a opcao de abrir no componente inferior e
+ * nem o Conteúdo, ambos também deveriam estar aparecendo... assim vamos conseguir unificar melhor
+ * as opcoes que temos". `contents`/`hardware` used to be RIGHT-ONLY — the reasoning on record was
+ * "a tabbed list does not fit a band" / "no useful shape under the composer, nobody asked for it
+ * there" — and the owner is now asking for exactly that, so both join `BOTTOM_PANELS` too. Every
+ * panel now reaches BOTH slots, which is what makes "all five panels behave alike" (this feature's
+ * own goal) a fact about the model rather than something each caller has to special-case around.
+ * The OLD reasoning is kept here, not deleted, because it explains why the sets existed as anything
+ * other than "every panel, both slots" in the first place — a future narrowing needs to know what
+ * was tried before, not just what the current table says.
+ */
 const RIGHT_PANELS: readonly PanelId[] = ['contents', 'studio', 'cli', 'shell', 'hardware']
-const BOTTOM_PANELS: readonly PanelId[] = ['cli', 'shell', 'studio']
+const BOTTOM_PANELS: readonly PanelId[] = ['cli', 'shell', 'studio', 'contents', 'hardware']
 
 export const EMPTY_SLOT_LAYOUT: SlotLayout = {
   right: null, bottom: null, bottomOpen: false, rightOpen: true, lastSlot: { ...DEFAULT_LAST_SLOT },
 }
 
-/** May this panel ever sit in this slot? `contents` is the one panel excluded from `bottom` — a
- *  tabbed list was never asked for in a band and does not fit one. */
+/** May this panel ever sit in this slot? As of 2026-09-19 every panel reaches both slots (see
+ *  `BOTTOM_PANELS`'s own doc comment) — this stays the one gate every caller asks rather than
+ *  assuming "yes", so a panel added later that genuinely cannot reach one slot has one place to
+ *  say so. */
 export function allowed(slot: SlotId, panel: PanelId): boolean {
   return slot === 'right' ? RIGHT_PANELS.includes(panel) : BOTTOM_PANELS.includes(panel)
 }
@@ -204,15 +222,25 @@ export function setRightOpen(layout: SlotLayout, open: boolean): SlotLayout {
 /**
  * The layout as a PHONE reads it. A phone has no bottom slot and no side-by-side (`dockedAllowed`
  * in `terminalSurface.ts` already says the band cannot exist below the breakpoint), so a stored
- * `bottom: 'studio'` is read as the fullscreen right sheet instead — WITHOUT rewriting storage, so
+ * `bottom` panel is read as the fullscreen right sheet instead — WITHOUT rewriting storage, so
  * turning the phone back into a desktop restores the layout exactly as it was left.
+ *
+ * GENERALIZED FROM `'studio'`-ONLY (2026-09-19, alongside `BOTTOM_PANELS` gaining `contents`/
+ * `hardware`): any desktop-only bottom occupant reads the same way on a phone, or a `bottom:
+ * 'contents'` stored from a desktop session would survive untouched into `SessionPanel.tsx`'s own
+ * mobile branch, which has no bottom band to draw it in at all. `cli`/`shell` are the one exception
+ * — a phone's own `SessionPanel` already renders its OWN self-contained terminal/chat toggle
+ * regardless of what `panelSlots` says for those two, so leaving them as the raw stored value here
+ * is harmless and avoids fighting a path this function was never asked to change.
  */
 export function resolveForViewport(layout: SlotLayout, isMobile: boolean): SlotLayout {
-  if (!isMobile || layout.bottom !== 'studio') return layout
+  if (!isMobile || layout.bottom === null || layout.bottom === 'cli' || layout.bottom === 'shell') {
+    return layout
+  }
   // `rightOpen: true` explicitly — a phone has no minimize control of its own (the right slot is a
   // fullscreen sheet there, design §1.6), so a `false` carried over from a desktop session would
   // otherwise open this sheet already collapsed with no visible way to expand it.
-  return { ...layout, right: 'studio', bottom: null, rightOpen: true }
+  return { ...layout, right: layout.bottom, bottom: null, rightOpen: true }
 }
 
 /**

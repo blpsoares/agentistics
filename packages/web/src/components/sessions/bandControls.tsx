@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
-  ArrowDown, ArrowRight, ChevronRight, Cpu, FileText, FolderTree, Maximize2, Minimize2, MoreHorizontal,
-  TerminalSquare, X,
+  ArrowDown, ArrowRight, ChevronDown, ChevronUp, Cpu, FileText, FolderTree, Maximize2,
+  Minimize2, MoreHorizontal, Settings, TerminalSquare, X,
 } from 'lucide-react'
 import { studioLocationLabel, type PanelBarEntry, type PanelBarId } from '../../lib/panelBar'
 import type { PanelMenuIconId } from '../../lib/panelMenu'
@@ -269,11 +269,12 @@ export function BandSegmentTab({ on, onClick, icon, label, isMobile, title }: {
 
 /**
  * THE ONE PLACE `lib/panelMenu.ts`'s ICON IDS BECOME REAL ICONS — every menu built from
- * `panelMenuEntries` (`StudioBand`'s own gear, `ShellBand`'s overflow, the right slot's own move
+ * `panelMenuEntries` (`ShellBand`'s own gear, `Studio.tsx`'s own gear, the right slot's own move
  * menu) resolves through this, so an id and its picture cannot disagree between callers the way
  * `PanelRightOpen`'s inward-pointing chevron once disagreed with "Move to the right". See that
  * module's own header for the convention this renders: arrows for a move, `Maximize2`/`Minimize2`
- * for full screen, never reused for anything else.
+ * for full screen (now `PanelFixedControls`' own fixed button rather than a menu row), never reused
+ * for anything else.
  */
 export function panelMenuIconFor(id: PanelMenuIconId, size = 14): ReactNode {
   switch (id) {
@@ -281,7 +282,6 @@ export function panelMenuIconFor(id: PanelMenuIconId, size = 14): ReactNode {
     case 'arrow-down': return <ArrowDown size={size} />
     case 'maximize': return <Maximize2 size={size} />
     case 'minimize': return <Minimize2 size={size} />
-    case 'chevron-right': return <ChevronRight size={size} />
     case 'x': return <X size={size} />
   }
 }
@@ -408,5 +408,98 @@ export function BandOverflowMenu({ label, entries, isMobile = false, icon }: {
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * PanelFixedControls — the ONE cluster of per-panel controls (owner, 2026-09-19: "botões que
+ * ficaram fixos pra qualquer aba que for aberta: tela cheia, minimizar... vamos ter apenas 1 icone
+ * de engrenagem, ele sera o responsavel pelas configurações das abas de cada uma em individual").
+ * Every panel that draws its own chrome — the bottom band's own bar (`ShellBand`, and the new
+ * Contents/Hardware bands), the right slot's small header (`SessionsPage`'s `rightSlotBar`), and
+ * the Studio's own toolbar in the right slot (`Studio.tsx`) — renders THIS, in THIS fixed order,
+ * so a reader never has to relearn where a control lives from one panel to the next:
+ *
+ *   [full screen, only where offered] → [minimize, ALWAYS] → [gear, only with something to say]
+ *
+ * FULL SCREEN IS NEVER A MENU ROW ANY MORE. It used to be a row inside the same "⋯"/gear menu that
+ * also offered move and close, which is what let a reader miss it entirely under two clicks for a
+ * control the owner wanted reachable in one. `fullscreen` is `undefined` wherever a panel/slot pair
+ * genuinely has nowhere to send it (never present and refusing) — see `fullscreenModeFor` in
+ * `lib/panelMenu.ts` for which panels can and cannot.
+ *
+ * MINIMIZE IS ALWAYS THE SAME CHEVRON, ALWAYS THE ACCENT ORANGE — never the neutral secondary-text
+ * colour every other icon in this file uses, and never buried in the gear. `collapsed` decides only
+ * the ARROW'S DIRECTION (down to collapse, up to reopen); it does NOT decide whether the control is
+ * drawn — a panel that can only ever be told to go away (the four right-slot panels that close
+ * outright, `panelMenu.ts`'s own `close-right`) simply never reads `collapsed: true`, since there
+ * is nothing left on screen to reopen it from once it has gone. `onMinimize` is OPTIONAL for
+ * exactly ONE caller (`Studio.tsx`'s own toolbar, bottom-docked): `StudioBand`'s own outer bar
+ * ALREADY draws this exact control there (`panelMenu.ts`'s `collapse-bottom`), so a second one here
+ * would be the same duplication this whole feature exists to remove — see that call site's own
+ * comment. Every other caller always provides it.
+ *
+ * THE GEAR HOLDS WHATEVER IS LEFT — move, close, panel-specific settings — and is ABSENT, never a
+ * disabled trigger, when `gearEntries` is empty (`BandOverflowMenu`'s own rule).
+ */
+export function PanelFixedControls({
+  lang, panelName, fullscreen, collapsed = false, onMinimize, minimizeLabel, gearLabel, gearEntries,
+  isMobile = false,
+}: {
+  lang: 'pt' | 'en'
+  /** The panel's own display name — folded into every button's accessible name/tooltip so two
+   *  adjacent controls (e.g. Contents beside Hardware) never read as the same button twice over. */
+  panelName: string
+  /** Absent wherever this panel/slot pair has nowhere to send full screen. */
+  fullscreen?: { active: boolean; onToggle: () => void }
+  /** Is the panel this cluster belongs to CURRENTLY collapsed (still assigned, screen released) —
+   *  the bottom band's own reading. `false` (the default) for a panel that closes outright instead
+   *  of collapsing in place, which never has a "currently collapsed" state to report. */
+  collapsed?: boolean
+  /** Absent for exactly one caller — see this component's own header. */
+  onMinimize?: () => void
+  minimizeLabel?: string
+  gearLabel: string
+  gearEntries: readonly BandOverflowEntry[]
+  isMobile?: boolean
+}) {
+  const pt = lang === 'pt'
+  // The 44px mobile touch target is PROJECTED by `.ag-tap-icon` (`index.css`'s invisible-hitbox
+  // rule), never painted here — a literal `width/height: isMobile ? 44` on an icon button is the
+  // exact shape `touchTarget.lint.test.ts` refuses, the same rule `BandOverflowMenu`'s own trigger
+  // and `SessionsPage.tsx`'s own `rightSlotIconBtn` already follow.
+  const iconBtn: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+    width: BAND_CONTROL_H, height: BAND_CONTROL_H, padding: 0,
+    borderRadius: 6, border: 'none', background: 'transparent', cursor: 'pointer',
+  }
+  return (
+    <>
+      {fullscreen && (
+        <button
+          className="ag-tap-icon"
+          type="button"
+          onClick={e => { e.stopPropagation(); fullscreen.onToggle() }}
+          title={fullscreen.active
+            ? (pt ? `Sair da tela cheia — ${panelName}` : `Exit full screen — ${panelName}`)
+            : (pt ? `${panelName} em tela cheia` : `${panelName} full screen`)}
+          aria-label={fullscreen.active
+            ? (pt ? `Sair da tela cheia — ${panelName}` : `Exit full screen — ${panelName}`)
+            : (pt ? `${panelName} em tela cheia` : `${panelName} full screen`)}
+          style={{ ...iconBtn, color: 'var(--text-secondary)' }}
+        >{fullscreen.active ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
+      )}
+      {onMinimize && (
+        <button
+          className="ag-tap-icon"
+          type="button"
+          onClick={e => { e.stopPropagation(); onMinimize() }}
+          title={minimizeLabel}
+          aria-label={minimizeLabel}
+          style={{ ...iconBtn, color: 'var(--anthropic-orange)' }}
+        >{collapsed ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
+      )}
+      <BandOverflowMenu label={gearLabel} icon={<Settings size={14} />} entries={gearEntries} isMobile={isMobile} />
+    </>
   )
 }

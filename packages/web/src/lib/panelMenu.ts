@@ -17,23 +17,25 @@
  * on a row that said "move to the right", because that icon means "expand FROM here", not "go
  * THERE". So: **every row's icon points at the DESTINATION, never at the panel's current position**,
  * and the convention is ARROWS (`ArrowRight`/`ArrowDown`), not the panel glyphs — an arrow's
- * direction cannot be misread the way a panel glyph's internal divider can. Full screen keeps its
- * own established pair (`Maximize2`/`Minimize2`, `iconId: 'maximize'|'minimize'`) — a DIFFERENT
- * question ("cover everything" vs "go back") with its own long-standing icons, not a placement move.
+ * direction cannot be misread the way a panel glyph's internal divider can.
  *
  * A ROW IS ABSENT, NEVER PRESENT AND REFUSING, WHEN IT HAS NOTHING TO ACT ON. `move-right`/
  * `move-bottom` are offered only when `allowed()` (`panelSlots.ts`) says the OTHER slot can host this
- * panel at all — `contents` and `hardware` can only ever be in the right slot, so neither one ever
- * carries a `move-bottom` row, in either slot's menu. `fullscreen`/`exit-fullscreen` is offered only
- * when the caller says there is somewhere for it to go (`fullscreenAvailable` — true today only for
- * the Studio, bottom-docked; see `Studio.tsx`'s own `onToggleFullscreen` for why it is absent
- * everywhere else).
+ * panel at all — as of 2026-09-19 every panel can reach both slots (see `panelSlots.ts`'s own header
+ * on that decision), so this is no longer a real restriction, but the check stays: a panel added
+ * later with a genuinely closed slot must not silently get a `move-*` row it cannot act on.
  *
- * MINIMIZE IS DELIBERATELY NOT A ROW HERE. It is the panel's own ALWAYS-VISIBLE icon (never buried
- * in a menu — owner: "sempre visível, não escondido em um menu"), rendered beside this menu's own
- * trigger rather than inside it; see `panelMinimizeAction` below for what it DOES per panel and slot,
- * and each caller (`StudioBand`/`ShellBand`'s own chevron, the new right-slot header) for where it is
- * drawn.
+ * FULL SCREEN IS NO LONGER A ROW HERE (owner, 2026-09-19: "botões que ficaram fixos pra qualquer aba
+ * que for aberta: tela cheia, minimizar... a engrenagem sera responsavel pelas configurações"). It
+ * used to be `fullscreen`/`exit-fullscreen`, offered only where the caller said there was somewhere
+ * to go — that gate is now `fullscreenModeFor` below, and the CONTROL is `bandControls.tsx`'s own
+ * `PanelFixedControls`, a fixed button beside this menu's own trigger, never inside it. A control the
+ * owner asked to be reachable in one click had been buried one click deeper, under move and close.
+ *
+ * MINIMIZE IS DELIBERATELY NOT A ROW HERE EITHER. It is the panel's own ALWAYS-VISIBLE, ALWAYS-ORANGE
+ * chevron (never buried in a menu — owner: "sempre visível, não escondido em um menu... mas ela deve
+ * ser laranja"), drawn by the same `PanelFixedControls`; see `panelMinimizeAction` below for what it
+ * DOES per panel and slot.
  *
  * CLOSE IS THE STUDIO'S OWN EXCEPTION, not a row every panel carries — see the one `if (panel ===
  * 'studio')` in this file for the full reasoning. In short: everywhere else, minimizing ALREADY
@@ -43,27 +45,27 @@
  * different picture. The Studio is the one panel where "close" means something a minimize does not:
  * in the right slot it does NOT already close on minimize (`collapse-right-park` — the buffers
  * survive), and at the bottom, removing it genuinely changes what is docked there.
+ *
+ * SO THIS MENU'S OWN ROWS, TODAY, ARE JUST: move (to whichever slot this panel is not currently in),
+ * the Studio's own tree options (folded in by `Studio.tsx`'s `studioGearEntries`, this module knows
+ * nothing about them), and the Studio's own close. Every panel now has AT LEAST a move row — which is
+ * what makes the gear trigger itself absent only for a panel with truly nothing to say, never for one
+ * that merely lacks a genuinely settings-worthy row.
  */
 
 import { allowed, type PanelId, type SlotId } from './panelSlots'
 
 /**
- * Every icon this menu (or the minimize control beside it) ever draws — resolved to a real lucide
- * component only at the JSX call site, never here, so this module stays render-free and every
- * caller resolves the SAME id to the SAME icon (`panelMenuIconFor` in `bandControls.tsx`).
- *
- * `chevron-right` is never returned by `panelMenuEntries` itself — it is the RIGHT SLOT's own
- * always-visible minimize icon (`SessionsPage.tsx`'s new right-slot header, for Contents/Hardware/
- * the CLI pane/the Shell pane), listed here so that control resolves through the SAME table as
- * every menu row rather than picking its own icon by hand. The BOTTOM band's own minimize is its
- * existing collapse chevron (`ChevronUp`/`ChevronDown`, a genuine toggle between two states) and is
- * drawn directly by `StudioBand`/`ShellBand` — it was never part of this vocabulary and does not
- * need to be, since nothing else in the product ever needs to resolve "collapse the bottom band" by
- * an id.
+ * Every icon this menu ever draws — resolved to a real lucide component only at the JSX call site,
+ * never here, so this module stays render-free and every caller resolves the SAME id to the SAME
+ * icon (`panelMenuIconFor` in `bandControls.tsx`). `maximize`/`minimize` are kept here even though
+ * `panelMenuEntries` itself no longer returns a row using them — `PanelFixedControls`' own fixed
+ * full-screen button still resolves through this same table, so a maximize/minimize glyph is
+ * decided in exactly one place whether it is reached through a menu row or a fixed button.
  */
-export type PanelMenuIconId = 'arrow-right' | 'arrow-down' | 'maximize' | 'minimize' | 'chevron-right' | 'x'
+export type PanelMenuIconId = 'arrow-right' | 'arrow-down' | 'maximize' | 'minimize' | 'x'
 
-export type PanelMenuEntryId = 'move-right' | 'move-bottom' | 'fullscreen' | 'exit-fullscreen' | 'close'
+export type PanelMenuEntryId = 'move-right' | 'move-bottom' | 'close'
 
 export interface PanelMenuEntry {
   id: PanelMenuEntryId
@@ -81,19 +83,16 @@ export interface PanelMenuInput {
    *  or a harness-named CLI pane would read as "Move Claude Code" in one build and something else in
    *  another for no reason this file could ever know about. */
   panelName: string
-  /** Absent wherever full screen has nowhere to apply — see this module's own header. */
-  fullscreenAvailable: boolean
-  fullscreen: boolean
 }
 
 /**
- * THE SHARED BUILDER. One pure function, taking the panel id, its current slot and the gates —
- * every caller (`StudioBand`'s "Mais ações", `ShellBand`'s own overflow, `Studio.tsx`'s own gear,
- * and the new right-slot headers for Contents/Hardware) asks THIS for what to offer and draws
- * exactly what comes back, so five menus cannot say five different things about one decision.
+ * THE SHARED BUILDER. One pure function, taking the panel id and its current slot — every caller
+ * (`ShellBand`'s own gear, `Studio.tsx`'s own gear, the right-slot headers for every panel) asks
+ * THIS for what to offer and draws exactly what comes back, so five menus cannot say five different
+ * things about one decision.
  */
 export function panelMenuEntries({
-  panel, slot, lang, panelName, fullscreenAvailable, fullscreen,
+  panel, slot, lang, panelName,
 }: PanelMenuInput): PanelMenuEntry[] {
   const pt = lang === 'pt'
   const entries: PanelMenuEntry[] = []
@@ -112,11 +111,6 @@ export function panelMenuEntries({
         label: pt ? `Mover ${panelName} para baixo` : `Move ${panelName} to the bottom`,
         iconId: 'arrow-down',
       })
-  }
-  if (fullscreenAvailable) {
-    entries.push(fullscreen
-      ? { id: 'exit-fullscreen', label: pt ? 'Sair da tela cheia' : 'Exit full screen', iconId: 'minimize' }
-      : { id: 'fullscreen', label: pt ? 'Tela cheia' : 'Full screen', iconId: 'maximize' })
   }
   // CLOSE IS OFFERED ONLY WHERE IT MEANS SOMETHING DIFFERENT FROM THE ALWAYS-VISIBLE MINIMIZE ICON
   // — never a second control doing the exact same thing with a different picture. In the right
@@ -141,6 +135,36 @@ export function panelMenuEntries({
     })
   }
   return entries
+}
+
+// ---------------------------------------------------------------------------------------------
+// The always-visible FULL SCREEN control (owner, 2026-09-19) — a fixed button, never a row above.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * WHAT PRESSING "FULL SCREEN" ON THIS PANEL ACTUALLY DOES — every panel now offers the fixed
+ * button (`bandControls.tsx`'s `PanelFixedControls`), in BOTH slots, but not all of them mean the
+ * same thing by it, and neither meaning is a shortcut:
+ *
+ *  - **`'navigate'`** — `cli`/`shell`. Their full screen was always "go to the dedicated screen"
+ *    (`ShellBand`'s own `onOpenFullscreen`, a real ROUTE — `/sessions/:id/terminal` — that survives
+ *    a reload and can be shared), never an in-place overlay: a live terminal already has its OWN
+ *    screen a click away, built and hardened before this pass, and duplicating it as a second
+ *    "cover everything in place" mechanism would be two full-screen implementations answering one
+ *    question. This mode was previously offered ONLY while bottom-docked (`fullscreenAvailable:
+ *    false` for the right slot's own `rightSlotBar`); it now applies in EITHER slot, since the
+ *    dedicated screen does not care which slot the pane was showing in when it was pressed.
+ *  - **`'overlay'`** — `studio`/`contents`/`hardware`. None of the three has a dedicated screen of
+ *    its own, so full screen means covering the whole viewport IN PLACE — the Studio's own
+ *    long-standing bottom-band mechanism (`SessionPanel.tsx`'s `STUDIO_FULLSCREEN_Z`), now reached
+ *    from EITHER slot and, as of this pass, from Contents/Hardware too.
+ *
+ * There is no third answer and no `null`: every panel can now be put full screen somehow, which is
+ * exactly what closes the gap the owner reported ("o hardware nao ta com a opcao... e nem o
+ * Conteúdo" — read broadly, neither had ANY of the fixed controls, full screen included).
+ */
+export function fullscreenModeFor(panel: PanelId): 'overlay' | 'navigate' {
+  return panel === 'cli' || panel === 'shell' ? 'navigate' : 'overlay'
 }
 
 // ---------------------------------------------------------------------------------------------

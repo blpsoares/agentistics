@@ -41,7 +41,7 @@
 
 import { Suspense, lazy, useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import {
-  ChevronDown, ChevronUp, ChevronLeft, Loader2, Maximize2,
+  ChevronLeft, Loader2,
   RotateCcw, TerminalSquare, Trash2,
 } from 'lucide-react'
 import { useDocumentVisible } from '../../hooks/useDocumentVisible'
@@ -75,7 +75,7 @@ import { bandSegmentEntries } from '../../lib/bandSegment'
 import { bandBarCompact, type PanelBarEntry, type PanelBarId } from '../../lib/panelBar'
 import { panelMenuEntries } from '../../lib/panelMenu'
 import {
-  BAND_CONTROL_H, BandOverflowMenu, BandSegment, BandSegmentTab, PanelBar, panelMenuIconFor,
+  BAND_CONTROL_H, BandSegment, BandSegmentTab, PanelBar, PanelFixedControls, panelMenuIconFor,
   type BandOverflowEntry,
 } from './bandControls'
 
@@ -791,42 +791,44 @@ export function ShellBand({
     />
   )
   /**
-   * THE OVERFLOW MENU (design item 7) — Move/Full screen/End shell, each keeping its full label
-   * INSIDE the menu (only the TRIGGER is compact).
+   * THE GEAR — Move/End shell, each keeping its full label inside the menu (only the TRIGGER is
+   * compact). Full screen moved OUT of this menu (2026-09-19) into `PanelFixedControls`' own fixed
+   * button, below — see that component's header for why.
    *
    * "MOVE" GOES THROUGH THE ONE SHARED BUILDER (`lib/panelMenu.ts`) — the same function
-   * `StudioBand`'s own gear and `Studio.tsx`'s internal one use, so "Mover Claude Code para a
-   * direita" / "Mover Shell para a direita" can never disagree with what those menus say for the
-   * SAME gesture elsewhere. Fullscreen and "End shell" stay THIS component's own concerns —
-   * fullscreen here means "navigate to the dedicated screen" (`onOpenFullscreen`), a different
-   * question from the Studio's in-place overlay and one the shared builder therefore leaves absent
-   * (`fullscreenAvailable: false`) — and ending the shell is a destructive action about the actual
-   * process, unrelated to placement, which is why it was never part of that builder's vocabulary
-   * (see `panelMenu.ts`'s own header on why `close` is the Studio's one exception).
+   * `Studio.tsx`'s own gear uses, so "Mover Claude Code para a direita" / "Mover Shell para a
+   * direita" can never disagree with what that menu says for the SAME gesture elsewhere. "End
+   * shell" stays THIS component's own concern — a destructive action about the actual process,
+   * unrelated to placement, which is why it was never part of that builder's vocabulary (see
+   * `panelMenu.ts`'s own header on why `close` is the Studio's one exception).
+   *
+   * ALL OF THIS IS GATED ON `prefs.open` — collapsed, there is nothing visible for any of these
+   * three to act on, so the gear itself goes ABSENT (`BandOverflowMenu`'s own empty-entries rule)
+   * rather than opening onto rows about a pane the reader cannot currently see.
    */
   const moveEntry = panelMenuEntries({
     panel: target, slot: 'bottom', lang, panelName: targetLabel(target, harness, lang),
-    fullscreenAvailable: false, fullscreen: false,
   }).find(e => e.id === 'move-right')
-  const overflowEntries: BandOverflowEntry[] = [
+  const gearEntries: BandOverflowEntry[] = [
     ...(prefs.open && onMoveToRight && moveEntry ? [{
       id: moveEntry.id, label: moveEntry.label, icon: panelMenuIconFor(moveEntry.iconId),
       onSelect: () => onMoveToRight(target),
-    }] : []),
-    // The LABEL names whichever pane THIS band is actually showing (`target`) — never a fixed
-    // "shell" sentence, which is what sent a reader pressing this while reading the Claude Code
-    // pane to the shell's own screen instead. See `paneForTarget`'s own header.
-    ...(prefs.open && streamId && onOpenFullscreen ? [{
-      id: 'fullscreen',
-      label: lang === 'pt'
-        ? `Abrir ${targetLabel(target, harness, lang)} em tela cheia`
-        : `Open ${targetLabel(target, harness, lang)} full screen`,
-      icon: <Maximize2 size={14} />, onSelect: () => onOpenFullscreen(target),
     }] : []),
     ...(prefs.open && shell && target === 'shell' ? [{
       id: 'end', label: t.close, icon: <Trash2 size={14} />, onSelect: () => { void close() },
     }] : []),
   ]
+  /**
+   * THE FIXED FULL-SCREEN BUTTON — "navigate to the dedicated screen" (`onOpenFullscreen`), a
+   * different question from the Studio's in-place overlay (`fullscreenModeFor(target) ===
+   * 'navigate'`, `lib/panelMenu.ts`). The LABEL names whichever pane THIS band is actually showing
+   * (`target`) — never a fixed "shell" sentence, which is what sent a reader pressing this while
+   * reading the Claude Code pane to the shell's own screen instead. See `paneForTarget`'s own
+   * header. Absent while collapsed, same reasoning as the gear above.
+   */
+  const fullscreenControl = prefs.open && streamId && onOpenFullscreen
+    ? { active: false, onToggle: () => onOpenFullscreen(target) }
+    : undefined
 
   const where = shellWhere(cwd)
 
@@ -1193,58 +1195,39 @@ export function ShellBand({
         ><ResizeGrip orientation="horizontal" /></div>
       )}
       {/* THE COMPACT BAR (design item 7): task control · panel segment (icon+label, collapsing to
-          icons below ~1100px) · spacer · ONE "⋯" overflow menu · the collapse chevron as a plain
-          icon button with a tooltip. Everything that used to widen this row on its own — the
-          leading terminal icon, the uppercase target name, the `where` path, and Move/Full
-          screen/End shell as their own labelled buttons — is gone or moved into the menu: the
-          target name and the `where` path are redundant with the segment's own lit tab (which
-          already names Claude Code/Shell), and the three actions keep their labels inside the menu
-          instead of spending width on the row.
+          icons below ~1100px) · spacer · the FIXED trio (full screen, minimize, gear). Everything
+          that used to widen this row on its own — the leading terminal icon, the uppercase target
+          name, the `where` path, and Move/Full screen/End shell as their own labelled buttons — is
+          gone or moved into the fixed controls: the target name and the `where` path are redundant
+          with the segment's own lit tab (which already names Claude Code/Shell), and the actions
+          the gear still carries keep their labels inside it instead of spending width on the row.
 
-          THE WHOLE BAR IS STILL THE TOGGLE (its own long-standing reasoning, unchanged): a 26px
-          chevron at the far right of a full-width strip is a target you have to aim at, and the
-          strip beside it did nothing at all. `role="button"` rather than a real one: it contains
-          buttons, and nesting them is invalid HTML. The controls inside it stop propagation, or
-          picking a tab / opening the menu / ending a shell would also collapse the band. */}
+          THE BAR NO LONGER TOGGLES ON ITS OWN CLICK (owner, 2026-09-19: "remove o clique na barra
+          pra minimizar e reabrir... vamos manter no botão"). It used to be `role="button"` over the
+          whole strip — a wide, easy target, but also a click a reader could land on by accident
+          while reaching for the segment or the task control beside it. The dedicated chevron inside
+          `PanelFixedControls` is now the ONLY way to collapse or reopen this band. */}
       <div
         ref={barWidthRef}
-        role="button"
-        tabIndex={0}
-        aria-expanded={prefs.open}
-        aria-label={t.toggleBar}
         {...(where ? { title: where } : {})}
-        onClick={() => setBand({ open: !prefs.open })}
-        onKeyDown={e => {
-          if (e.key !== 'Enter' && e.key !== ' ') return
-          e.preventDefault()
-          setBand({ open: !prefs.open })
-        }}
         style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', minHeight: 32,
-          cursor: 'pointer', userSelect: 'none',
         }}
       >
         {taskControl}
         {panelBar}
         {busy && <Loader2 size={13} className="ag-spin" style={{ color: 'var(--text-tertiary)' }} />}
         <span style={{ flex: 1 }} />
-        <BandOverflowMenu
-          label={lang === 'pt' ? 'Mais ações' : 'More actions'}
-          entries={overflowEntries}
+        <PanelFixedControls
+          lang={lang}
+          panelName={targetLabel(target, harness, lang)}
+          {...(fullscreenControl ? { fullscreen: fullscreenControl } : {})}
+          collapsed={!prefs.open}
+          onMinimize={() => setBand({ open: !prefs.open })}
+          minimizeLabel={prefs.open ? t.collapse : t.expand}
+          gearLabel={lang === 'pt' ? 'Mais ações' : 'More actions'}
+          gearEntries={gearEntries}
         />
-        <button
-          className="ag-tap-icon"
-          type="button"
-          title={prefs.open ? t.collapse : t.expand}
-          aria-label={prefs.open ? t.collapse : t.expand}
-          onClick={e => { e.stopPropagation(); setBand({ open: !prefs.open }) }}
-          style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-            width: BAND_CONTROL_H, height: BAND_CONTROL_H, padding: 0,
-            border: 'none', borderRadius: 6, background: 'transparent',
-            color: 'var(--text-secondary)', cursor: 'pointer',
-          }}
-        >{prefs.open ? <ChevronDown size={14} /> : <ChevronUp size={14} />}</button>
       </div>
       {prefs.open && (
         <div style={{

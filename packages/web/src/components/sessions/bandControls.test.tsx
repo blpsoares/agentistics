@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { panelBarEntries } from '../../lib/panelBar'
 import {
   BAND_CONTROL_H, BandLabeledButton, BandOverflowMenu, BandSegment, BandSegmentTab, PanelBar,
+  PanelFixedControls,
 } from './bandControls'
 
 /**
@@ -333,5 +334,122 @@ describe('BandOverflowMenu', () => {
     )
     expect(withGear).toContain('data-gear-marker="1"')
     expect(withDefault).not.toContain('data-gear-marker="1"')
+  })
+})
+
+/**
+ * PanelFixedControls — the ONE cluster every panel's own bar now renders (owner, 2026-09-19:
+ * "botões que ficaram fixos... tela cheia, minimizar... a engrenagem"). Order, presence and colour
+ * are asserted structurally (titles, button count, inline style strings) since this package has no
+ * jsdom to click through — the same approach every other test in this file already takes.
+ */
+describe('PanelFixedControls — full screen, minimize, gear, in that order', () => {
+  const gearEntries = [{ id: 'move-right', label: 'Move Hardware to the right', icon: <span />, onSelect: () => {} }]
+
+  test('the full trio renders, in order — full screen, then minimize, then the gear', () => {
+    const html = renderToStaticMarkup(
+      <PanelFixedControls
+        lang="en" panelName="Hardware"
+        fullscreen={{ active: false, onToggle: () => {} }}
+        onMinimize={() => {}} minimizeLabel="Minimize Hardware"
+        gearLabel="Hardware options" gearEntries={gearEntries}
+      />,
+    )
+    const fullscreenAt = html.indexOf('Hardware full screen')
+    const minimizeAt = html.indexOf('Minimize Hardware')
+    const gearAt = html.indexOf('Hardware options')
+    expect(fullscreenAt).toBeGreaterThan(-1)
+    expect(minimizeAt).toBeGreaterThan(-1)
+    expect(gearAt).toBeGreaterThan(-1)
+    expect(fullscreenAt).toBeLessThan(minimizeAt)
+    expect(minimizeAt).toBeLessThan(gearAt)
+  })
+
+  test('full screen is ABSENT — never present and refusing — when the caller offers nowhere to send it', () => {
+    const html = renderToStaticMarkup(
+      <PanelFixedControls
+        lang="en" panelName="Hardware"
+        onMinimize={() => {}} minimizeLabel="Minimize Hardware"
+        gearLabel="Hardware options" gearEntries={gearEntries}
+      />,
+    )
+    expect(html).not.toContain('full screen')
+    expect(html).toContain('Minimize Hardware')
+  })
+
+  test(
+    'minimize is ABSENT for exactly one caller — Studio\'s own bottom-docked toolbar, which relies ' +
+    'on StudioBand\'s own outer chevron instead',
+    () => {
+      const html = renderToStaticMarkup(
+        <PanelFixedControls
+          lang="en" panelName="Studio"
+          fullscreen={{ active: false, onToggle: () => {} }}
+          gearLabel="Studio options" gearEntries={gearEntries}
+        />,
+      )
+      expect(html).not.toContain('Minimize')
+      expect(html).toContain('Studio full screen')
+      expect(html).toContain('Studio options')
+    },
+  )
+
+  test('the minimize button is ALWAYS the accent orange — never the neutral secondary colour every other icon here uses', () => {
+    const html = renderToStaticMarkup(
+      <PanelFixedControls
+        lang="en" panelName="Hardware"
+        onMinimize={() => {}} minimizeLabel="Minimize Hardware"
+        gearLabel="Hardware options" gearEntries={gearEntries}
+      />,
+    )
+    expect(html).toContain('color:var(--anthropic-orange)')
+  })
+
+  test('full screen toggles its own label between "X full screen" and "Exit full screen — X"', () => {
+    const off = renderToStaticMarkup(
+      <PanelFixedControls
+        lang="en" panelName="Hardware"
+        fullscreen={{ active: false, onToggle: () => {} }}
+        onMinimize={() => {}} minimizeLabel="Minimize Hardware"
+        gearLabel="Hardware options" gearEntries={gearEntries}
+      />,
+    )
+    expect(off).toContain('Hardware full screen')
+    expect(off).not.toContain('Exit full screen')
+    const on = renderToStaticMarkup(
+      <PanelFixedControls
+        lang="en" panelName="Hardware"
+        fullscreen={{ active: true, onToggle: () => {} }}
+        onMinimize={() => {}} minimizeLabel="Minimize Hardware"
+        gearLabel="Hardware options" gearEntries={gearEntries}
+      />,
+    )
+    expect(on).toContain('Exit full screen — Hardware')
+  })
+
+  test('the gear is ABSENT — never a trigger opening onto nothing — when there is nothing to offer', () => {
+    const html = renderToStaticMarkup(
+      <PanelFixedControls
+        lang="en" panelName="Hardware"
+        onMinimize={() => {}} minimizeLabel="Minimize Hardware"
+        gearLabel="Hardware options" gearEntries={[]}
+      />,
+    )
+    expect(html).not.toContain('Hardware options')
+    expect(html).toContain('Minimize Hardware')
+  })
+
+  test('the panel name appears in every button\'s own label — two adjacent panels never read as the same control', () => {
+    const html = renderToStaticMarkup(
+      <PanelFixedControls
+        lang="en" panelName="Contents"
+        fullscreen={{ active: false, onToggle: () => {} }}
+        onMinimize={() => {}} minimizeLabel="Minimize Contents"
+        gearLabel="Contents options" gearEntries={gearEntries}
+      />,
+    )
+    expect(html).toContain('Contents full screen')
+    expect(html).toContain('Minimize Contents')
+    expect(html).toContain('Contents options')
   })
 })

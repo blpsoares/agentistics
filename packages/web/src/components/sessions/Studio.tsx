@@ -96,7 +96,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
   AlertTriangle, ArrowLeft, ArrowLeftRight, Check, ChevronDown, ChevronLeft, ChevronRight, FilePlus,
-  FolderPlus, Loader, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings,
+  FolderPlus, Loader, PanelLeftClose, PanelLeftOpen, Plus, Search,
   Undo2, X,
 } from 'lucide-react'
 import {
@@ -114,6 +114,7 @@ import { liveEvents, type LiveEvent, type LiveTurn } from '../../lib/artifactTab
 import { clearUnsaved, reportUnsaved } from '../../lib/unsavedBuffers'
 import { useStudioSearchRequest } from '../../lib/studioSearchRequest'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { useElementWidth } from '../../hooks/useElementWidth'
 import { ConfirmModal } from '../../pages/settings/primitives'
 import { BetaTag } from '../BetaTag'
 import { ResizeGrip } from '../ResizeGrip'
@@ -123,7 +124,7 @@ import { RepoSearchView } from './RepoSearchView'
 import { RepoTreeView, toggleDirectory, treeViewState, type TreeOps } from './RepoTreeView'
 import { RepoNote } from './repoNote'
 import { insertMention } from '../../lib/mentionInsert'
-import { BandOverflowMenu, panelMenuIconFor, type BandOverflowEntry } from './bandControls'
+import { PanelFixedControls, panelMenuIconFor, type BandOverflowEntry } from './bandControls'
 import { panelMenuEntries, type PanelMenuEntryId, type PanelMenuIconId } from '../../lib/panelMenu'
 import type { HarnessId } from '@agentistics/core'
 
@@ -166,19 +167,19 @@ export interface StudioProps {
    */
   onMention?: (result: { text: string; needsSwitch: boolean }) => void
   /**
-   * IS THE STUDIO'S BAND CURRENTLY TRUE FULL SCREEN — the whole viewport, not merely "fills the
-   * centre column". Owned by whoever mounts this component (`SessionsPage`, through `StudioHost`),
-   * because the band that actually draws the full-screen BOX is a sibling of this one, reached a
-   * different way (`StudioBand`, `SessionPanel.tsx`) — this component only reads the flag to draw
-   * its own gear menu's "current value" and to answer Esc, never to size anything itself.
+   * IS THE STUDIO CURRENTLY TRUE FULL SCREEN — the whole viewport, not merely "fills the centre
+   * column". Owned by whoever mounts this component (`SessionsPage`), because the box that actually
+   * draws the full-screen COVER is a SIBLING of this one, reached a different way depending on the
+   * slot (`StudioBand` in `SessionPanel.tsx` at the bottom; `SessionsPage`'s own `rightSlotContent`
+   * wrapper on the right, added 2026-09-19) — this component only reads the flag to draw its own
+   * fixed button's "current value" and to answer Esc, never to size anything itself.
    */
   fullscreen?: boolean
   /**
-   * Absent wherever full screen has nowhere to apply — the Studio is not bottom-docked (it sits in
-   * the right slot, which has no drag handle and no giant-band gesture to escalate from). The gear
-   * menu's full-screen row is then ABSENT too, the same "offered only where there is somewhere to
-   * go" rule `ShellBand`'s own fullscreen control already follows for its `aside`/`dedicated`
-   * placements — never present and refusing.
+   * OFFERED IN EITHER SLOT as of 2026-09-19 (`fullscreenModeFor`'s own `'overlay'` mode in
+   * `lib/panelMenu.ts`) — it used to be absent while the Studio sat in the right slot, back when
+   * full screen there had nowhere to go; `SessionsPage`'s own right-slot wrapper is that missing
+   * piece. Still optional in the type, defensively, though every real caller now provides it.
    */
   onToggleFullscreen?: () => void
   /**
@@ -549,6 +550,185 @@ function storeTreeSide(side: TreeSide): void {
   try { localStorage.setItem(TREE_SIDE_KEY, side) } catch { /* private mode */ }
 }
 
+// --- the toolbar's own fit (owner, 2026-09-19, follow-up) -----------------------------------------
+
+/**
+ * WHICH OF THE TOOLBAR'S OPTIONAL ITEMS SURVIVE AT THIS WIDTH — the fix for a bug this very feature
+ * introduced: with a file open, the tree column can narrow to `TREE_MIN` (150px), and this row's
+ * trailing content (the BETA tag, the fixed trio) was pushed past the column's own edge and CLIPPED
+ * by the tree pane's `overflow: hidden` — present in the DOM, invisible, unreachable by mouse. A
+ * control the reader cannot click is the dead control this whole feature exists to remove, so a
+ * clipped one is a bug in this change, not a pre-existing one to route around.
+ *
+ * THE RULE, STATED ONCE: **`PanelFixedControls` (full screen, minimize, gear) is NEVER negotiable.**
+ * It is reserved first (`FIXED_TRIO_W`) and every other item on this row is added back only if
+ * there is still room, most-important-first — the same "give up the least important cell first"
+ * shape `fitColumns`/`fitKpis` already use for the TUI's own tables (`packages/tui/src/components/
+ * Primitives.tsx`, `packages/tui/src/screens/Overview.tsx`), applied here to a row of BUTTONS
+ * instead of a row of DATA. Nothing about this feature's own point (the fixed trio, present and
+ * reachable on every open panel) is ever traded away for a search icon or a beta badge.
+ *
+ * EVERY DROPPABLE ITEM HAS A ROUTE THAT DOES NOT NEED THIS ROW, so dropping it loses convenience,
+ * never capability:
+ *  - Search — global `Ctrl+Shift+F` / `Cmd+Shift+F` (`useStudioSearchRequest`) opens the exact same
+ *    whole-tree content search view from anywhere, key or no key visible here.
+ *  - New file / New folder — any row's own "⋯" menu (`RepoTreeView.tsx`'s `handleMenuAction`) offers
+ *    both `new-file`/`new-folder`, created beside that row rather than at the root.
+ *  - The working dot and the BETA badge are both purely informational (no `onClick`), so hiding them
+ *    costs a reader nothing to click through — only something to read.
+ *
+ * ADDED BACK IN THIS ORDER (most useful first, so the first thing lost as the column narrows is the
+ * least useful): the three tree actions, icon-only — Search, then New file, then New folder, since
+ * losing all three at once would be the worst reading and Search is asked for most; the working dot;
+ * the BETA badge, as its existing `compact` dot; labels on the tree actions, ALL AT ONCE — half the
+ * row labelled and half not reads as broken, the same reasoning `PanelBar`'s own `compact` flag
+ * already applies uniformly rather than per-tab; the BETA badge's full word, last, because a beta
+ * caveat is worth a wider screen but never worth crowding the very controls being fixed here.
+ *
+ * `width <= 0` (not measured yet) reads as the WIDEST state, the same convention `useElementWidth`'s
+ * own header documents for every other caller — a first frame that assumed narrow would flash
+ * compact-then-wide on every mount instead of the other way around.
+ *
+ * THIS IS A STRICT PREFIX, NOT AN INDEPENDENT PER-ITEM CHECK — the first item on the priority list
+ * that does not fit STOPS the whole list there, exactly the shape `fitKpis` already uses for its own
+ * KPI row (`packages/tui/src/screens/Overview.tsx`) rather than skipping a large item to try a
+ * smaller one behind it. That is not only fidelity to the existing convention: a "skip and keep
+ * trying" reading is not MONOTONIC in width. A first version of this function tried every item
+ * independently, and widening the toolbar by a single pixel could let a higher-priority item start
+ * fitting, spend the room a LOWER-priority item was already sitting in, and make that one disappear
+ * again — a control flickering in and out as a reader drags the tree wider. A strict prefix cannot:
+ * widening the toolbar only ever EXTENDS how far down this list gets, never retracts it (pinned by
+ * this file's own `studioToolbarFit — ... monotonic` test).
+ *
+ * THE COSTS BELOW ARE TAKEN FROM THE REAL RENDERED DOM, NOT GUESSED — and the first version of this
+ * function guessed, which is exactly what let the bug this whole feature exists to fix reappear
+ * inside its own repair. A live check at 390×844 (mobile) found the trio pushed to `x≈417` on a
+ * 390px-wide screen — clipped by an ancestor and unreachable by touch, invisible in a screenshot,
+ * exactly the defect item 1 describes, just reached through mobile's full-width row instead of
+ * desktop's narrow tree column. The cause: the first version charged one flat, invented width for
+ * "a labelled tree-action button" (46px) and one flat gap (6px) for every step alike. Measured off a
+ * live `BarButton` (a detached clone, same font/padding/border, both languages): the labelled
+ * buttons are 86–125px each — "Novo arquivo" alone is 124px, not 46 — and the row spends TWO
+ * different gaps, not one: `Toolbar`'s own row (`gap: 6`) between Search/New file/New folder and the
+ * trailing span, and a SEPARATE `gap: 8` inside that trailing span, between the working dot, the
+ * BETA tag and `PanelFixedControls` itself. Charging every step the row's 6px hid that the working
+ * dot and the BETA tag actually cost 8, and the flat 46px-per-button label estimate was less than a
+ * third of what "New file"/"Novo arquivo" actually spends — so the function told the row it could
+ * afford full labels at a width the row could not, and the trio was pushed off the end of a
+ * container that clips instead of scrolling. Every constant below is now the MEASURED figure (the
+ * wider of the English and Portuguese label, rounded up), so the function is wrong only in the safe
+ * direction: it may give up an item the real row still had a pixel or two of room for, it must never
+ * claim room the real row does not have. See `Studio.test.tsx`'s own
+ * `studioToolbarFit — measured against the DOM` block for the values themselves, cross-checked
+ * against a live clone of the exact buttons.
+ *
+ * `width` IS ALREADY NET OF THE ROW'S OWN PADDING — do not reserve it a second time. This is the
+ * THIRD thing measurement caught, at the true `TREE_MIN` (150px) itself: a live probe (a debug attr
+ * echoing the exact `toolbarWidth` this function receives) read `134`, not `150`, at a tree column
+ * whose own `getBoundingClientRect().width` was genuinely `150`. `useElementWidth`'s ref callback
+ * measures the FIRST frame with `getBoundingClientRect()` (border box, padding included) but every
+ * frame after a resize with `ResizeObserver`'s `contentRect` (content box, padding already
+ * subtracted) — the two disagree by exactly this row's own `16px` of horizontal padding, and every
+ * width this function is ever asked about in practice has been through at least one resize by the
+ * time a reader can act on it. Reserving `STUDIO_TOOLBAR_ROW_PADDING` on top of an already-padding-
+ * exclusive number double-spent those 16px and hid `Search` outright at the real `TREE_MIN` — the
+ * DOM had room for it (122 needed, 134 available) and the function claimed it did not (138 needed
+ * against the same 134, since the padding was subtracted twice). There is nothing to reserve for the
+ * row's padding here for exactly that reason: `useElementWidth` already spent it before this
+ * function ever sees the number.
+ *
+ * TWO KINDS OF STEP, not one — this is the second thing the first version got wrong.
+ * A step that adds a NEW element (an icon-only tree action, the working dot, the compact BETA dot)
+ * pays its own gap on top of its own width — that gap did not exist on the row before it. A step
+ * that only WIDENS an element already on the row (labels appearing on the three tree actions, the
+ * BETA tag growing from its dot to the word) pays no gap at all — nothing new joined the row, an
+ * existing flex item simply grew. Charging every step a gap, as the first version did, overcounted
+ * the two upgrade steps and undercounted nothing, which is a safe direction to be wrong in — it is
+ * fixed here anyway because it produced a wrong THRESHOLD the labels test below had to special-case.
+ */
+export interface StudioToolbarFit {
+  showSearch: boolean
+  showNewFile: boolean
+  showNewFolder: boolean
+  showWorking: boolean
+  beta: 'full' | 'compact' | 'hidden'
+  /** All three tree actions gain their visible word together, or none do. */
+  treeLabels: boolean
+}
+
+/** `PanelFixedControls`' own three 26px buttons (`BAND_CONTROL_H`) plus the two 8px gaps its own
+ *  parent flex span uses between them — measured, unchanged from the first version (it was already
+ *  right: 94px on a live DOM, exactly `26*3+8*2`). Reserved before anything else on this row is even
+ *  considered. THE ROW'S OWN `padding: '6px 8px'` / `'5px 8px'` (8px each side) IS DELIBERATELY NOT
+ *  reserved here on top of it — `width` already has it subtracted before this function ever sees it
+ *  (`useElementWidth`'s `contentRect`, the block comment above), and reserving it twice hid `Search`
+ *  outright at the real `TREE_MIN`. */
+const STUDIO_TOOLBAR_FIXED_W = 26 * 3 + 8 * 2
+/** One tree-action `BarButton`, icon only. `BarButton` sizes it `22px` on mobile and `20px` on
+ *  desktop — this function takes no `isMobile` parameter, so it uses the larger, safe figure for
+ *  both; on desktop that undercounts the real room by up to 2px per icon, never overcounts it. */
+const STUDIO_TOOLBAR_ICON_BTN_W = 22
+/** The row's own `gap` — between Search / New file / New folder and the trailing span. Paid once per
+ *  NEW tree-action icon added; see the block comment above on why this differs from the gap below. */
+const STUDIO_TOOLBAR_ROW_GAP = 6
+/** The trailing span's OWN `gap` (`Toolbar`'s inner `<span style={{ gap: 8, marginLeft: 'auto' }}>`)
+ *  — between the working dot, the BETA tag and `PanelFixedControls`. Paid once per NEW item added
+ *  inside that span (the working dot, the compact BETA dot); never for the two upgrade-only steps
+ *  below, which grow an item already inside it rather than adding one. */
+const STUDIO_TOOLBAR_INNER_GAP = 8
+const STUDIO_TOOLBAR_WORKING_DOT_W = 7
+const STUDIO_TOOLBAR_BETA_COMPACT_W = 5
+/** `BetaTag`'s full "BETA" word, measured off a live clone (`8.5px`/`700`/uppercase/its own
+ *  border+padding): ≈36.8px, rounded up. The first version guessed a flat +30px delta over the dot;
+ *  this is the real word's width, and the delta the function actually spends is computed below. */
+const STUDIO_TOOLBAR_BETA_FULL_W = 37
+const STUDIO_TOOLBAR_BETA_FULL_DELTA = STUDIO_TOOLBAR_BETA_FULL_W - STUDIO_TOOLBAR_BETA_COMPACT_W
+/** Icon → labelled deltas for each of the three tree actions, taken individually rather than as one
+ *  flat number — "Search"/"Buscar" (≈87px full width), "New file"/"Novo arquivo" (≈125px — the
+ *  longest of the six strings, and the one the first version's flat 46px-per-button guess was least
+ *  right about) and "New folder"/"Nova pasta" (≈113px), each measured in BOTH languages and rounded
+ *  up to the wider one, each minus the icon-only width above. They are still spent TOGETHER, in one
+ *  step — see `treeLabels`'s own doc comment on why the three change as one or not at all — but
+ *  charging their real, unequal costs is what makes the total add up to the row's real DOM width
+ *  instead of a fraction of it. */
+const STUDIO_TOOLBAR_SEARCH_LABEL_DELTA = 65
+const STUDIO_TOOLBAR_NEWFILE_LABEL_DELTA = 103
+const STUDIO_TOOLBAR_NEWFOLDER_LABEL_DELTA = 91
+const STUDIO_TOOLBAR_LABEL_UPGRADE_W =
+  STUDIO_TOOLBAR_SEARCH_LABEL_DELTA + STUDIO_TOOLBAR_NEWFILE_LABEL_DELTA + STUDIO_TOOLBAR_NEWFOLDER_LABEL_DELTA
+
+export function studioToolbarFit(width: number): StudioToolbarFit {
+  const widest: StudioToolbarFit = {
+    showSearch: true, showNewFile: true, showNewFolder: true, showWorking: true,
+    beta: 'full', treeLabels: true,
+  }
+  if (width <= 0) return widest
+  const fit: StudioToolbarFit = {
+    showSearch: false, showNewFile: false, showNewFolder: false, showWorking: false,
+    beta: 'hidden', treeLabels: false,
+  }
+  let used = STUDIO_TOOLBAR_FIXED_W
+  // Each step is either a NEW element (pays its own gap) or an UPGRADE of one already on the row
+  // (pays only its width delta) — see the block comment above on why the two must not share one
+  // shape. Strict prefix: the first step that does not fit stops every step after it, which is what
+  // keeps this monotonic in width (its own test below).
+  const steps: ReadonlyArray<{ cost: number; apply: () => void }> = [
+    { cost: STUDIO_TOOLBAR_ROW_GAP + STUDIO_TOOLBAR_ICON_BTN_W, apply: () => { fit.showSearch = true } },
+    { cost: STUDIO_TOOLBAR_ROW_GAP + STUDIO_TOOLBAR_ICON_BTN_W, apply: () => { fit.showNewFile = true } },
+    { cost: STUDIO_TOOLBAR_ROW_GAP + STUDIO_TOOLBAR_ICON_BTN_W, apply: () => { fit.showNewFolder = true } },
+    { cost: STUDIO_TOOLBAR_INNER_GAP + STUDIO_TOOLBAR_WORKING_DOT_W, apply: () => { fit.showWorking = true } },
+    { cost: STUDIO_TOOLBAR_INNER_GAP + STUDIO_TOOLBAR_BETA_COMPACT_W, apply: () => { fit.beta = 'compact' } },
+    { cost: STUDIO_TOOLBAR_LABEL_UPGRADE_W, apply: () => { fit.treeLabels = true } },
+    { cost: STUDIO_TOOLBAR_BETA_FULL_DELTA, apply: () => { fit.beta = 'full' } },
+  ]
+  for (const step of steps) {
+    if (used + step.cost > width) break
+    used += step.cost
+    step.apply()
+  }
+  return fit
+}
+
 // --- the gear menu (§2: replacing the header row) -------------------------------------------------
 
 export type StudioGearItemId = 'tree-toggle' | 'tree-side' | PanelMenuEntryId
@@ -570,8 +750,9 @@ export interface StudioGearItem { id: StudioGearItemId; label: string; iconId?: 
  * ORDER is stable and deliberate: the tree's own two rows first — what this menu REPLACED
  * (`StudioBar`'s former "Ocultar árvore"/"Árvore à direita") stay adjacent to each other, exactly
  * as they were two separate buttons side by side — MOVE next (the panel's own placement, from the
- * ONE shared builder, `lib/panelMenu.ts`), full screen after that, close LAST (the one row whose
- * effect is leaving the panel).
+ * ONE shared builder, `lib/panelMenu.ts`), close LAST (the one row whose effect is leaving the
+ * panel). FULL SCREEN IS NO LONGER IN THIS LIST (2026-09-19) — it is `PanelFixedControls`' own
+ * fixed button now, beside this very menu's trigger; see this file's own render for where it lives.
  *
  * THIS IS NOW THE ONE MENU THE STUDIO CARRIES WHEREVER IT IS (owner, 2026-09-19). It used to have
  * TWO: this one, and `StudioBand`'s own separate "Mais ações" when bottom-docked — two menus that
@@ -579,25 +760,21 @@ export interface StudioGearItem { id: StudioGearItemId; label: string; iconId?: 
  * only THIS one travels with the component. `StudioBand`'s overflow is gone; its two rows (move,
  * close) are exactly the shared builder's own `move-right`/`close` rows, merged in here instead.
  *
- * A row is ABSENT rather than present-and-refusing when it has nothing to act on:
- * `treeCollapsible` (the exact gate `StudioBar` used to read for both tree rows), `move-*` (via the
- * builder's own `allowed()` check — always present for the Studio, since it can always reach the
- * other slot) and `fullscreenAvailable` (whether the caller even offered `onToggleFullscreen` —
- * absent wherever the Studio is not bottom-docked, see `SessionsPage`'s own comment on why). "Close"
- * has no gate: it is the one row this menu always carries, the reason `onExit` stays a REQUIRED
- * prop on `Studio` itself (see this file's header on why an exit that can be absent is a reader
- * trapped in a panel).
+ * A row is ABSENT rather than present-and-refusing when it has nothing to act on: `treeCollapsible`
+ * (the exact gate `StudioBar` used to read for both tree rows) and `move-*` (via the builder's own
+ * `allowed()` check — always present for the Studio, since it can always reach the other slot).
+ * "Close" has no gate: it is the one row this menu always carries, the reason `onExit` stays a
+ * REQUIRED prop on `Studio` itself (see this file's header on why an exit that can be absent is a
+ * reader trapped in a panel).
  */
 export function studioGearEntries({
-  lang, treeCollapsible: canToggleTree, treeCollapsed, treeSide, slot, fullscreenAvailable, fullscreen,
+  lang, treeCollapsible: canToggleTree, treeCollapsed, treeSide, slot,
 }: {
   lang: 'pt' | 'en'
   treeCollapsible: boolean
   treeCollapsed: boolean
   treeSide: TreeSide
   slot: 'right' | 'bottom'
-  fullscreenAvailable: boolean
-  fullscreen: boolean
 }): StudioGearItem[] {
   const pt = lang === 'pt'
   const items: StudioGearItem[] = []
@@ -613,9 +790,7 @@ export function studioGearEntries({
         : (pt ? 'Mover árvore para a esquerda' : 'Move tree to the left'),
     })
   }
-  for (const entry of panelMenuEntries({
-    panel: 'studio', slot, lang, panelName: 'Studio', fullscreenAvailable, fullscreen,
-  })) {
+  for (const entry of panelMenuEntries({ panel: 'studio', slot, lang, panelName: 'Studio' })) {
     items.push({ id: entry.id, label: entry.label, iconId: entry.iconId })
   }
   return items
@@ -1071,13 +1246,9 @@ export function Studio({
    * either slot — see `studioGearEntries`'s own header). `studioGearEntries` decides WHAT is
    * offered and what each row SAYS; this only wires an icon and an action to each id, and only for
    * the ids that come back — a row this function did not return is a row with nothing to act on,
-   * never a disabled one. `BandOverflowMenu` is given its own `Settings` icon so it reads as a
-   * different menu from the band's plain "⋯" at a glance.
+   * never a disabled one.
    */
-  const gearIds = studioGearEntries({
-    lang, treeCollapsible: collapsible, treeCollapsed, treeSide, slot,
-    fullscreenAvailable: onToggleFullscreen !== undefined, fullscreen,
-  })
+  const gearIds = studioGearEntries({ lang, treeCollapsible: collapsible, treeCollapsed, treeSide, slot })
   const gearAction: Record<StudioGearItemId, { icon: ReactNode; onSelect: () => void }> = {
     'tree-toggle': {
       icon: treeCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />,
@@ -1092,43 +1263,49 @@ export function Studio({
     // icon is resolved, the ARROW convention `panelMenu.ts`'s own header states.
     'move-right': { icon: panelMenuIconFor('arrow-right'), onSelect: onMove },
     'move-bottom': { icon: panelMenuIconFor('arrow-down'), onSelect: onMove },
-    fullscreen: { icon: panelMenuIconFor('maximize'), onSelect: () => onToggleFullscreen?.() },
-    'exit-fullscreen': { icon: panelMenuIconFor('minimize'), onSelect: () => onToggleFullscreen?.() },
     close: { icon: panelMenuIconFor('x'), onSelect: onExit },
   }
   const gearEntries: BandOverflowEntry[] = gearIds.map(item => ({
     id: item.id, label: item.label, ...gearAction[item.id],
   }))
-  const gearMenu = (
-    <BandOverflowMenu
-      label={pt ? 'Opções do Studio' : 'Studio options'}
-      icon={<Settings size={14} />}
-      entries={gearEntries}
+  /**
+   * THE FIXED TRIO (owner, 2026-09-19: "botões que ficaram fixos... tela cheia, minimizar... a
+   * engrenagem sera responsavel pelas configurações") — `bandControls.tsx`'s own
+   * `PanelFixedControls`, the SAME cluster every other panel's own bar now renders, IN THE SAME
+   * ORDER: full screen, minimize, gear. Full screen is OFFERED IN EITHER SLOT as of this pass
+   * (`onToggleFullscreen` is no longer bottom-only — see `SessionsPage`'s own call site); minimize
+   * is present ONLY in the right slot — at the bottom, `StudioBand`'s own collapse chevron (drawn a
+   * few pixels above this toolbar, in the SAME band) already is this exact control
+   * (`panelMenu.ts`'s own `panelMinimizeAction`'s `collapse-bottom` case), so a second one here
+   * would be the very duplication this whole feature exists to remove.
+   */
+  /**
+   * THE TOOLBAR'S OWN MEASURED WIDTH (owner, 2026-09-19, follow-up: "the trio... unreachable by
+   * mouse" once a file narrows the tree). `studioToolbarFit` decides what survives; this is the
+   * ONE measurement both the toolbar's own tree actions AND the trailing BETA badge read, so the
+   * two can never disagree about how much room there actually is — see `Toolbar`'s own doc comment
+   * on why the fit is computed here rather than inside either of them.
+   */
+  const [toolbarRef, toolbarWidth] = useElementWidth()
+  const toolbarFit = studioToolbarFit(toolbarWidth)
+
+  const fixedControls = (
+    <PanelFixedControls
+      lang={lang}
+      panelName="Studio"
+      {...(onToggleFullscreen
+        ? { fullscreen: { active: fullscreen, onToggle: onToggleFullscreen } }
+        : {})}
+      {...(slot === 'right' && onMinimizeRight
+        ? {
+          onMinimize: onMinimizeRight,
+          minimizeLabel: pt ? 'Minimizar o Studio' : 'Minimize the Studio',
+        }
+        : {})}
+      gearLabel={pt ? 'Opções do Studio' : 'Studio options'}
+      gearEntries={gearEntries}
       isMobile={isMobile}
     />
-  )
-  /**
-   * THE ALWAYS-VISIBLE MINIMIZE ICON (owner, 2026-09-19: "sempre visível... beside the gear"),
-   * present only while the Studio sits in the RIGHT slot — at the bottom `StudioBand`'s own collapse
-   * chevron already is this control (see `Studio.onMinimizeRight`'s own doc comment). A CHEVRON,
-   * never `Minimize2` — that icon is full screen's own "go back", and reusing it here would read as
-   * the same action. Pointed at the edge it collapses TOWARD, the same "icon points at what happens"
-   * rule the move rows above follow.
-   */
-  const minimizeButton = onMinimizeRight && (
-    <button
-      className="ag-tap-icon"
-      type="button"
-      onClick={onMinimizeRight}
-      title={pt ? 'Minimizar o Studio' : 'Minimize the Studio'}
-      aria-label={pt ? 'Minimizar o Studio' : 'Minimize the Studio'}
-      style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-        width: 26, height: 26, padding: 0, borderRadius: 6,
-        border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
-        color: 'var(--text-secondary)', cursor: 'pointer',
-      }}
-    >{panelMenuIconFor('chevron-right', 14)}</button>
   )
 
   return (
@@ -1183,14 +1360,21 @@ export function Studio({
               lang={lang}
               onSearch={() => setView('search')}
               onNew={kind => setCreating({ parentPath: '', kind, name: '', busy: false, error: null })}
+              fit={toolbarFit}
+              rootRef={toolbarRef}
               trailing={<>
-                {/* Dropped on mobile for room (§2) — the gear itself still carries "Studio" nowhere
-                    special to say, and the panel bar / mobile session menu already name it. */}
-                {!isMobile && <BetaTag what={pt ? 'O Studio' : 'The Studio'} />}
-                {gearMenu}
-                {/* BESIDE THE GEAR (owner, 2026-09-19) — see `minimizeButton`'s own header for why
-                    it exists only here, in the right slot, and never at the bottom. */}
-                {minimizeButton}
+                {/* Dropped on mobile outright, exactly as before — the gear itself still carries
+                    "Studio" nowhere special to say, and the panel bar / mobile session menu already
+                    name it. On desktop, `toolbarFit.beta` narrows it further before it is ever
+                    dropped — a caveat is worth losing before the controls being fixed here are. */}
+                {!isMobile && toolbarFit.beta !== 'hidden' && (
+                  <BetaTag what={pt ? 'O Studio' : 'The Studio'} compact={toolbarFit.beta === 'compact'} />
+                )}
+                {/* THE FIXED TRIO — full screen, minimize (right slot only), gear — see
+                    `fixedControls`' own header for the order and for why minimize is absent here at
+                    the bottom. NEVER negotiated away by `toolbarFit` — see that function's own
+                    header for why. */}
+                {fixedControls}
               </>}
             />
           )}
@@ -1876,43 +2060,66 @@ export function Watermark() {
  * goes there (the badge, the gear) so this row stays reusable and stays ignorant of the gear menu's
  * own contract. It shares ONE `marginLeft: 'auto'` wrapper with the working dot rather than the dot
  * keeping its own — two independently-right-aligned items would sit apart instead of as a group.
+ *
+ * `fit` (`studioToolbarFit`, above) decides which of THIS component's own items survive at the
+ * measured width — `rootRef` is the hook the caller measures through (`useElementWidth`, the same
+ * "the bar's OWN measured width, never the window's" pattern `ShellBand`'s bar already uses), passed
+ * in rather than owned here because `trailing`'s own BETA badge needs the SAME `fit` to decide its
+ * mode, and a value two siblings both read is computed once by whoever renders both — `Studio.tsx`.
+ * `PanelFixedControls` (inside `trailing`) is NEVER part of this negotiation: `fit`'s own header
+ * states why, and this component enforces nothing about it — it only draws the three tree actions
+ * and the working dot the fit describes.
  */
-export function Toolbar({ working, isMobile, lang, onSearch, onNew, trailing }: {
+export function Toolbar({ working, isMobile, lang, onSearch, onNew, trailing, fit, rootRef }: {
   working: boolean
   isMobile: boolean
   lang: 'pt' | 'en'
   onSearch: () => void
   onNew: (kind: 'file' | 'dir') => void
   trailing?: ReactNode
+  fit: StudioToolbarFit
+  rootRef?: (el: HTMLDivElement | null) => void
 }) {
   const pt = lang === 'pt'
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, minWidth: 0,
-      boxSizing: 'border-box',
-      padding: isMobile ? '6px 8px' : '5px 8px',
-      borderBottom: '1px solid var(--border-subtle)',
-    }}>
-      <BarButton
-        label={pt ? 'Buscar' : 'Search'}
-        icon={<Search size={12} />}
-        isMobile={isMobile}
-        onClick={onSearch}
-      />
-      <BarButton
-        label={pt ? 'Novo arquivo' : 'New file'}
-        icon={<Plus size={12} />}
-        isMobile={isMobile}
-        onClick={() => onNew('file')}
-      />
-      <BarButton
-        label={pt ? 'Nova pasta' : 'New folder'}
-        icon={<FolderPlus size={12} />}
-        isMobile={isMobile}
-        onClick={() => onNew('dir')}
-      />
+    <div
+      ref={rootRef}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, minWidth: 0,
+        boxSizing: 'border-box',
+        padding: isMobile ? '6px 8px' : '5px 8px',
+        borderBottom: '1px solid var(--border-subtle)',
+      }}
+    >
+      {fit.showSearch && (
+        <BarButton
+          label={pt ? 'Buscar' : 'Search'}
+          icon={<Search size={12} />}
+          isMobile={isMobile}
+          showLabel={fit.treeLabels}
+          onClick={onSearch}
+        />
+      )}
+      {fit.showNewFile && (
+        <BarButton
+          label={pt ? 'Novo arquivo' : 'New file'}
+          icon={<Plus size={12} />}
+          isMobile={isMobile}
+          showLabel={fit.treeLabels}
+          onClick={() => onNew('file')}
+        />
+      )}
+      {fit.showNewFolder && (
+        <BarButton
+          label={pt ? 'Nova pasta' : 'New folder'}
+          icon={<FolderPlus size={12} />}
+          isMobile={isMobile}
+          showLabel={fit.treeLabels}
+          onClick={() => onNew('dir')}
+        />
+      )}
       <span style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto', flexShrink: 0 }}>
-        {working && (
+        {working && fit.showWorking && (
           <span
             role="img"
             aria-label={pt ? 'O agente está trabalhando nesta sessão' : 'The agent is working in this session'}
@@ -2451,37 +2658,54 @@ export function TabStrip({ tabs, activePath, agentHere, isMobile, lang, onSelect
   )
 }
 
-/** A labelled control in the toolbar: a word, so the label is what makes it wide enough for a finger. */
-function BarButton({ label, icon, isMobile, disabled, onClick }: {
+/**
+ * A control in the toolbar: a word, so the label is what makes it wide enough for a finger — unless
+ * `showLabel` is `false` (`studioToolbarFit`'s own `treeLabels`), in which case only the glyph
+ * paints and the label survives as `title`/`aria-label` instead — never dropped outright, since an
+ * icon with no accessible name is a control a screen reader cannot announce at all. On mobile an
+ * icon-only button still reads at 44px through `.ag-tap-icon`'s invisible box
+ * (`--ag-tap-grow`), the same technique `IconButton` below already uses, rather than a literally
+ * painted square.
+ */
+function BarButton({ label, icon, isMobile, disabled, showLabel = true, onClick }: {
   label: string
   icon: ReactNode
   isMobile: boolean
   /** A control that cannot act yet SAYS so rather than failing silently — `NewFileRow`'s confirm. */
   disabled?: boolean
+  showLabel?: boolean
   onClick: () => void
 }) {
   return (
     <button
       type="button"
+      className={showLabel ? undefined : 'ag-tap-icon'}
       disabled={disabled === true}
       onClick={onClick}
+      title={label}
+      aria-label={label}
       style={{
-        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        gap: showLabel ? 5 : 0,
         flexShrink: 0, boxSizing: 'border-box',
-        // 44px of HEIGHT only: this control carries a word, so it is already wider than a finger,
+        // 44px of HEIGHT only when labelled: the label is what makes it wide enough for a finger,
         // and a 44px box painted around a labelled control is what `touchTarget.lint.test.ts`
-        // refuses.
-        minHeight: isMobile ? 44 : undefined,
-        padding: isMobile ? '0 12px' : '3px 9px',
+        // refuses. Icon-only relies on `.ag-tap-icon`'s own invisible grow instead — the same rule
+        // `IconButton` already follows, so the touch target never depends on `showLabel`.
+        minHeight: showLabel && isMobile ? 44 : undefined,
+        width: showLabel ? undefined : (isMobile ? 22 : 20),
+        height: showLabel ? undefined : (isMobile ? 22 : 20),
+        padding: showLabel ? (isMobile ? '0 12px' : '3px 9px') : 0,
         borderRadius: 6, border: '1px solid var(--border-subtle)',
         background: 'transparent', fontFamily: 'inherit',
         fontSize: isMobile ? 13 : 11.5, color: 'var(--text-secondary)',
         cursor: disabled === true ? 'not-allowed' : 'pointer',
         opacity: disabled === true ? 0.45 : 1,
+        ...(showLabel ? {} : { ['--ag-tap-grow' as string]: '11px' }),
       }}
     >
       {icon}
-      {label}
+      {showLabel && label}
     </button>
   )
 }
@@ -2527,11 +2751,12 @@ function IconButton({ label, onClick, disabled, pressed, children }: {
   )
 }
 
-// The Studio's own header row is gone (§2) — the tree controls (collapse toggle, flip-side), full
-// screen and close it used to carry as separate bordered pills now render as ROWS of the gear menu
-// (`studioGearEntries`, above, plus the `gearAction` map in `Studio` itself), through
-// `BandOverflowMenu` (`bandControls.tsx`) — the SAME popover the bottom band's own "Mais ações"
-// renders, given its own `Settings` trigger icon so the two read as different menus. A local
-// `LabeledIconButton` used to live here before that, agreeing on height with the band's own
-// `labeledBtn` but not on border/background (a ghost button beside bordered pills) — see that
-// shared file's header for the fuller history.
+// The Studio's own header row is gone (§2) — the tree controls (collapse toggle, flip-side) and
+// close it used to carry as separate bordered pills now render as ROWS of the gear menu
+// (`studioGearEntries`, above, plus the `gearAction` map in `Studio` itself); full screen is a
+// FIXED BUTTON since 2026-09-19, not a row (see `fixedControls`). Both the gear and the fixed
+// button go through `bandControls.tsx`'s `PanelFixedControls` — the SAME cluster every other
+// panel's own bar now renders, so this reads as one control language across all five rather than
+// the Studio's own local one. A local `LabeledIconButton` used to live here before that, agreeing
+// on height with the band's own `labeledBtn` but not on border/background (a ghost button beside
+// bordered pills) — see that shared file's header for the fuller history.

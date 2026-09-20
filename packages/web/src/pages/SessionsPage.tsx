@@ -54,8 +54,8 @@ import { HideLensesButton } from '../components/a11y/HideLensesButton'
 import { ArtifactsAside } from '../components/sessions/ArtifactsAside'
 import { HardwarePanel } from '../components/sessions/HardwarePanel'
 import { UnsavedChangesGuard } from '../components/sessions/UnsavedChangesGuard'
-import { BandOverflowMenu, panelMenuIconFor } from '../components/sessions/bandControls'
-import { panelMenuEntries } from '../lib/panelMenu'
+import { PanelFixedControls, panelMenuIconFor } from '../components/sessions/bandControls'
+import { fullscreenModeFor, panelMenuEntries } from '../lib/panelMenu'
 import {
   artifactsPanelMax, ASIDE_ANIM_MS, ASIDE_EASE, edgeHint, PANEL_MIN_WIDTH, panelWidth,
   resolveArtifactLayout, type ArtifactLayout,
@@ -69,7 +69,7 @@ import type { SessionDrilldownProps } from '../components/SessionDrilldown'
 import type { Artifact } from '../lib/sessionArtifacts'
 import { liveEvents, type LiveTurn } from '../lib/artifactTabs'
 import { FiltersBar } from '../components/FiltersBar'
-import { SessionPanel, type SessionView } from '../components/sessions/SessionPanel'
+import { PANEL_FULLSCREEN_Z, SessionPanel, type SessionView } from '../components/sessions/SessionPanel'
 import { SessionsAside } from '../components/nav/SessionsAside'
 import { SessionActions } from '../components/sessions/SessionActions'
 import { filterFleet } from '../lib/fleetFilter'
@@ -103,10 +103,9 @@ export interface StudioHostMountParams {
   composerMounted: boolean
   /** Fired after either mention gesture queues a reference — see `Studio.tsx`'s own `onMention`. */
   onMention: (result: { text: string; needsSwitch: boolean }) => void
-  /** TRUE full screen for the Studio's bottom band — see `SessionsPage`'s own `studioFullscreen`. */
+  /** TRUE full screen for the Studio, in either slot — see `SessionsPage`'s own `studioFullscreen`. */
   fullscreen?: boolean
-  /** Absent (not merely a no-op) while the Studio is not bottom-docked — see the call site's own
-   *  comment on why the control is offered only where there is somewhere to go. */
+  /** Offered in EITHER slot as of 2026-09-19 — see the call site's own comment. */
   onToggleFullscreen?: () => void
   /** Where the Studio sits right now — see `Studio.tsx`'s own `slot` prop. */
   slot: 'right' | 'bottom'
@@ -631,7 +630,10 @@ export default function SessionsPage() {
   const rightIsCli = slotLayout.right === 'cli'
   const rightIsShell = slotLayout.right === 'shell'
   const rightIsHardware = slotLayout.right === 'hardware'
+  const rightIsContents = rightSlotShowing(slotLayout, art.open) === 'contents'
   const bottomIsStudio = slotLayout.bottom === 'studio'
+  const bottomIsContents = slotLayout.bottom === 'contents'
+  const bottomIsHardware = slotLayout.bottom === 'hardware'
   const [rightSlotEl, setRightSlotEl] = useState<HTMLDivElement | null>(null)
   const [bottomStudioEl, setBottomStudioEl] = useState<HTMLDivElement | null>(null)
   /** `null` PARKS the Studio — mounted, hidden, taking no space — which is also what a COLLAPSED
@@ -642,21 +644,44 @@ export default function SessionsPage() {
     ? rightSlotEl
     : bottomIsStudio && slotLayout.bottomOpen ? bottomStudioEl : null
   /**
-   * TRUE FULL SCREEN for the Studio's BOTTOM band — the whole viewport, not merely "fills the
-   * centre column" (`SessionPanel`'s own `heightPrefs.full`, untouched by this). Held HERE, not
-   * inside `StudioBand` itself, because `Studio.tsx`'s own gear menu (the deliberate, non-drag way
-   * to ask for the same thing, and the one place its own exit control lives) is a SIBLING mount
-   * reached through `StudioHost`'s portal below — the two can only ever agree on which state is
-   * current if something above both of them owns the one flag.
+   * TRUE FULL SCREEN for the Studio — the whole viewport, not merely "fills the centre column"
+   * (`SessionPanel`'s own `heightPrefs.full`, untouched by this). Held HERE, not inside `StudioBand`
+   * itself, because `Studio.tsx`'s own gear menu (the deliberate, non-drag way to ask for the same
+   * thing, and the one place its own exit control lives) is a SIBLING mount reached through
+   * `StudioHost`'s portal below — the two can only ever agree on which state is current if something
+   * above both of them owns the one flag.
    *
-   * RESET the moment the Studio is no longer bottom-docked (moved to the right, closed, displaced)
-   * — a lingering `true` would silently reopen full screen the next time the band merely expands,
-   * from a plain "Expandir" press nobody asked to mean that.
+   * OFFERED IN EITHER SLOT AS OF 2026-09-19 (`fullscreenModeFor`'s own `'overlay'` mode) — it used
+   * to be bottom-only, because the right slot had no wrapper that would cover the viewport for it;
+   * `rightSlotContent`'s own wrapper below is that missing piece. The SAME flag drives both, so
+   * moving the Studio between slots while full screen carries the state across rather than silently
+   * dropping it.
+   *
+   * RESET the moment the Studio is shown NOWHERE at all (closed, displaced by another panel in both
+   * slots at once — which cannot really happen, but the check costs nothing) — a lingering `true`
+   * would silently reopen full screen the next time it is shown again, from a plain "Expandir" press
+   * nobody asked to mean that.
    */
   const [studioFullscreen, setStudioFullscreen] = useState(false)
   useEffect(() => {
-    if (!bottomIsStudio) setStudioFullscreen(false)
-  }, [bottomIsStudio])
+    if (!rightIsStudio && !bottomIsStudio) setStudioFullscreen(false)
+  }, [rightIsStudio, bottomIsStudio])
+
+  /**
+   * TRUE FULL SCREEN for Contents/Hardware (owner, 2026-09-19 — same request as the Studio's own:
+   * "botões que ficaram fixos... tela cheia"). Neither panel has a dedicated screen of its own to
+   * navigate to (`fullscreenModeFor` — `'overlay'`), so this is the exact same in-place viewport
+   * overlay the Studio already uses, applied to whichever slot each of them currently occupies.
+   * Reset the moment the panel is shown nowhere, for the same reason `studioFullscreen` resets.
+   */
+  const [contentsFullscreen, setContentsFullscreen] = useState(false)
+  useEffect(() => {
+    if (!rightIsContents && !bottomIsContents) setContentsFullscreen(false)
+  }, [rightIsContents, bottomIsContents])
+  const [hardwareFullscreen, setHardwareFullscreen] = useState(false)
+  useEffect(() => {
+    if (!rightIsHardware && !bottomIsHardware) setHardwareFullscreen(false)
+  }, [rightIsHardware, bottomIsHardware])
   const onArtifacts = useCallback((a: { artifacts: Artifact[]; loading: boolean; unavailable?: string; older?: string; unlisted: boolean; turns: readonly LiveTurn[] }) => {
     setArtifacts(a.artifacts)
     setArtifactTurns(a.turns)
@@ -876,6 +901,14 @@ export default function SessionsPage() {
   )
 
   /**
+   * THE SAME `HardwarePanel` ELEMENT, reused for the BOTTOM band too (owner, 2026-09-19: "o hardware
+   * nao ta com a opcao de abrir no componente inferior"). One figure, one poll, one close action —
+   * never a second implementation forked for the band, exactly as `artifactsPane` above is shared
+   * between the right slot and (below) the bottom one.
+   */
+  const hardwarePaneEl = <HardwarePanel lang={pt ? 'pt' : 'en'} onClose={() => closeSlotPanel('hardware')} />
+
+  /**
    * THE RIGHT SLOT'S OWN SWITCHER (design §1.3) used to draw the picker tabs — `Conteúdo · Studio ·
    * Claude Code · Shell` — ABOVE this same box on EVERY viewport. Item 2 of the UX pass folds those
    * tabs into the FIXED HEADER on desktop instead (`App.tsx`'s `sessionTopBar`, which reads
@@ -952,16 +985,20 @@ export default function SessionsPage() {
   /**
    * DESKTOP HAS NO PANEL SWITCHER HERE — the ONE panel bar stays the bottom band's (owner feedback,
    * 2026-09-17: "there must be exactly ONE panel switcher on desktop"). What desktop DOES get, for
-   * the four right-slot panels that carry no toolbar of their own (owner, 2026-09-19), is this small
-   * bar: an always-visible MINIMIZE icon, never buried in a menu, plus — where the panel can reach
-   * the bottom at all — a "⋯" naming that ONE move, through the SAME shared builder
-   * (`lib/panelMenu.ts`) `StudioBand`'s own gear and `ShellBand`'s own overflow use, so this can
-   * never disagree with what those say about the identical gesture.
+   * the four right-slot panels that carry no toolbar of their own, is `PanelFixedControls` — the SAME
+   * fixed trio (full screen, minimize, gear) every panel now carries, in the SAME order, through the
+   * SAME shared builder (`lib/panelMenu.ts`) `ShellBand`'s own bar and the new bottom bands use, so
+   * this can never disagree with what those say about an identical gesture.
    *
-   * The STUDIO is deliberately absent from this list: it already carries this exact pair — its own
-   * gear (move + fullscreen + close) and, beside it, its own minimize icon — inside its OWN toolbar,
-   * because that toolbar is what stays visible across the tree/search/editor views this generic bar
-   * would otherwise sit above. Adding a second one here would be two bars for one panel.
+   * The STUDIO is deliberately absent from this list: it already carries this exact trio — its own
+   * gear (move + tree options + close), its own minimize icon, and now its own fixed full-screen
+   * button — inside its OWN toolbar, because that toolbar is what stays visible across the
+   * tree/search/editor views this generic bar would otherwise sit above. Adding a second one here
+   * would be two bars for one panel.
+   *
+   * FULL SCREEN (2026-09-19) is `fullscreenModeFor(panel)`-dependent: `cli`/`shell` NAVIGATE to
+   * their existing dedicated screen (never a toggle — there is nothing to read back as "active"
+   * from here), `contents`/`hardware` toggle the local in-place overlay this page now owns for them.
    *
    * Minimizing here is a genuine CLOSE (`panelMenu.ts`'s own `panelMinimizeAction` — `close-right`),
    * which is SAFE for exactly these four: none holds client-only state a remount could lose (see
@@ -972,40 +1009,61 @@ export default function SessionsPage() {
     panel: 'contents' | 'hardware' | 'cli' | 'shell', panelName: string, onMinimize: () => void,
   ) => {
     if (isMobile || !selected) return null
-    const moveEntries = panelMenuEntries({
+    const gearEntries = panelMenuEntries({
       panel, slot: 'right', lang: pt ? 'pt' : 'en', panelName,
-      fullscreenAvailable: false, fullscreen: false,
     }).filter(e => e.id === 'move-bottom').map(e => ({
       id: e.id, label: e.label, icon: panelMenuIconFor(e.iconId),
-      onSelect: () => openSlotPanel(panel, 'bottom'),
+      // `contents` FIRST calls `closeArtifacts()` when it is the one moving — it is tracked on the
+      // right through the legacy `artifactsStore` flag alone (`panelSlots.ts`'s own header), which
+      // `openSlotPanel` never touches, so skipping this would leave it lit as BOTH the right slot's
+      // occupant (via that flag) and the bottom's (via `panelSlots`) at once.
+      onSelect: () => { if (panel === 'contents') closeArtifacts(); openSlotPanel(panel, 'bottom') },
     }))
+    const fullscreen = fullscreenModeFor(panel) === 'navigate'
+      ? {
+        active: false,
+        onToggle: () => navigate(dedicatedTerminalPath(selected.id, panel === 'cli' ? 'assistant' : 'shell')),
+      }
+      : {
+        active: panel === 'contents' ? contentsFullscreen : hardwareFullscreen,
+        onToggle: () => (panel === 'contents' ? setContentsFullscreen : setHardwareFullscreen)(f => !f),
+      }
     return (
       <div style={{
         display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 4,
         padding: '6px 8px 0', flexShrink: 0,
       }}>
-        {moveEntries.length > 0 && (
-          <BandOverflowMenu label={pt ? 'Mais ações' : 'More actions'} entries={moveEntries} />
-        )}
-        <button
-          className="ag-tap-icon"
-          type="button"
-          onClick={onMinimize}
-          title={pt ? `Minimizar ${panelName}` : `Minimize ${panelName}`}
-          aria-label={pt ? `Minimizar ${panelName}` : `Minimize ${panelName}`}
-          style={rightSlotIconBtn}
-        >{panelMenuIconFor('chevron-right', 13)}</button>
+        <PanelFixedControls
+          lang={pt ? 'pt' : 'en'}
+          panelName={panelName}
+          fullscreen={fullscreen}
+          onMinimize={onMinimize}
+          minimizeLabel={pt ? `Minimizar ${panelName}` : `Minimize ${panelName}`}
+          gearLabel={pt ? `Opções — ${panelName}` : `${panelName} options`}
+          gearEntries={gearEntries}
+        />
       </div>
     )
   }
   const rightSlotHeader = isMobile ? rightSwitcherMobile : null
+
+  /**
+   * IS THE RIGHT SLOT'S OWN CONTENT CURRENTLY FULL SCREEN — `fullscreenModeFor`'s `'overlay'` mode
+   * (Studio/Contents/Hardware) applied to whichever of the three actually occupies the right slot
+   * right now. `cli`/`shell` are never included: their full screen NAVIGATES to a dedicated screen
+   * instead (`rightSlotBar`'s own `fullscreen` object), so there is no "currently overlaying" state
+   * for them to read here.
+   */
+  const rightSlotFullscreen =
+    (rightIsStudio && studioFullscreen) || (rightIsContents && contentsFullscreen)
+    || (rightIsHardware && hardwareFullscreen)
 
   /** What the right box actually shows: the Studio's own target (StudioHost re-parents its carrier
    *  into it) while `panelSlots` says so; `cli`/`shell` render their own `TerminalRegion`/`ShellBand`
    *  with `placement="aside"` (design §1.5) — ordinary mounts, no persistent carrier needed since
    *  neither holds a buffer that must survive the move; `hardware` its own `HardwarePanel` (design
    *  item 3, sharing its content with the modal); `ArtifactsAside` otherwise. */
-  const rightSlotContent = rightIsStudio ? (
+  const rightSlotContentRaw = rightIsStudio ? (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
       {rightSlotHeader}
       <div ref={setRightSlotEl} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }} />
@@ -1046,7 +1104,7 @@ export default function SessionsPage() {
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
       {rightSlotHeader}
       {rightSlotBar('hardware', pt ? 'Hardware' : 'Hardware', () => closeSlotPanel('hardware'))}
-      <HardwarePanel lang={pt ? 'pt' : 'en'} onClose={() => closeSlotPanel('hardware')} />
+      {hardwarePaneEl}
     </div>
   ) : (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
@@ -1055,6 +1113,23 @@ export default function SessionsPage() {
       {artifactsPane}
     </div>
   )
+
+  /**
+   * THE RIGHT SLOT'S OWN "COVER THE VIEWPORT" WRAPPER — the exact same technique `SessionPanel.tsx`'s
+   * `StudioBand` already uses for the bottom band (`PANEL_FULLSCREEN_Z`, `position: fixed; inset:
+   * 0`), applied here so Studio/Contents/Hardware can ALSO go full screen while sitting on the right
+   * (2026-09-19 — they never could before this). `background: var(--bg-surface)` because the raw
+   * content underneath assumes it is painted over the page's own surface, which a `position: fixed`
+   * escape hatch no longer guarantees on its own.
+   */
+  const rightSlotContent = rightSlotFullscreen ? (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: PANEL_FULLSCREEN_Z,
+      display: 'flex', flexDirection: 'column', background: 'var(--bg-surface)',
+    }}>
+      {rightSlotContentRaw}
+    </div>
+  ) : rightSlotContentRaw
 
   /**
    * THE QUESTION BEFORE A NAVIGATION DROPS THE STUDIO — asked at THIS level because this is where
@@ -1111,6 +1186,15 @@ export default function SessionsPage() {
       // TRUE full screen for the Studio's bottom band — see `studioFullscreen`'s own header above.
       studioFullscreen={studioFullscreen}
       onStudioFullscreenChange={setStudioFullscreen}
+      // Contents/Hardware, docked at the bottom (owner, 2026-09-19) — the SAME reused content
+      // elements the right slot renders, plus their own full-screen state (see those states' own
+      // header above `rightIsContents`/`rightIsHardware`).
+      contentsPane={artifactsPane}
+      contentsFullscreen={contentsFullscreen}
+      onContentsFullscreenChange={setContentsFullscreen}
+      hardwarePane={hardwarePaneEl}
+      hardwareFullscreen={hardwareFullscreen}
+      onHardwareFullscreenChange={setHardwareFullscreen}
       // The terminal's own screen. A route, so it survives a reload and can be sent to somebody.
       onOpenTerminal={() => navigate(dedicatedTerminalPath(selected.id))}
       // WHICHEVER PANE the band is showing right now (`target`) — never a fixed `'shell'`. See
@@ -2010,12 +2094,12 @@ export default function SessionsPage() {
         harness: selected.harness as HarnessId,
         composerMounted: sessionView === 'chat',
         onMention: onStudioMention,
-        // TRUE full screen — see `studioFullscreen`'s own header above. The TOGGLE is offered only
-        // while the Studio is actually BOTTOM-DOCKED (`bottomIsStudio`): the right slot has no drag
-        // handle and no giant-band gesture to escalate from, the same "offered only where there is
-        // somewhere to go" rule `ShellBand`'s own fullscreen control follows for `aside`/`dedicated`.
+        // TRUE full screen — see `studioFullscreen`'s own header above. OFFERED IN EITHER SLOT as
+        // of 2026-09-19 (`fullscreenModeFor`'s `'overlay'` mode): `SessionsPage`'s own
+        // `rightSlotContent` wrapper and `SessionPanel.tsx`'s `StudioBand` both read the SAME flag
+        // to draw the actual viewport-covering box, whichever of the two currently holds it.
         fullscreen: studioFullscreen,
-        onToggleFullscreen: bottomIsStudio ? () => setStudioFullscreen(f => !f) : undefined,
+        onToggleFullscreen: () => setStudioFullscreen(f => !f),
         // WHERE IT IS, AND HOW TO MOVE IT — the Studio's own ONE menu (`studioGearEntries`) reads
         // these to offer exactly the move the CURRENT slot allows, and nothing about a different
         // panel (owner, 2026-09-19). `rightIsStudio`/`bottomIsStudio` are already mutually
