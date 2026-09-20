@@ -293,12 +293,13 @@ describe('StudioHost is mounted once, through mountStudioHostPanel (I4)', () => 
 
     // LAST field, appended right before the closing `})}` — the shape the re-review found that the
     // occurrence-count test cannot see at all, because it never touches the fixed prefix string.
-    // `onToggleFullscreen:` is the literal's current last field (the full-screen wiring added
-    // `fullscreen`/`onToggleFullscreen` after `onMention`) — this must move whenever a field is
-    // added after it, or the plant silently stops matching anything and the test passes for the
-    // wrong reason (see the failure this exact drift caused when `target: studioTarget,`, then
-    // `onMention: onStudioMention,`, were each in turn assumed to be last).
-    const LAST_FIELD = 'onToggleFullscreen: bottomIsStudio ? () => setStudioFullscreen(f => !f) : undefined,'
+    // `onMinimizeRight:` is the literal's current last field (the placement-menu wiring added
+    // `slot`/`onMove`/`onMinimizeRight` after `onToggleFullscreen`) — this must move whenever a
+    // field is added after it, or the plant silently stops matching anything and the test passes
+    // for the wrong reason (see the failure this exact drift caused when `target: studioTarget,`,
+    // then `onMention: onStudioMention,`, then `onToggleFullscreen: …`, were each in turn assumed
+    // to be last).
+    const LAST_FIELD = 'onMinimizeRight: rightIsStudio ? () => setRightOpen(false) : undefined,'
     const last = SRC.replace(
       LAST_FIELD + CALL_CLOSE,
       `${LAST_FIELD}\n        key: rightIsStudio ? 'right' : 'bottom',` + CALL_CLOSE,

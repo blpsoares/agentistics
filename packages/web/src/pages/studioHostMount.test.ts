@@ -29,6 +29,8 @@ const BASE: StudioHostMountParams = {
   target: null,
   composerMounted: true,
   onMention: () => {},
+  slot: 'right',
+  onMove: () => {},
 }
 
 describe('mountStudioHostPanel — the real call site SessionsPage.tsx uses', () => {
@@ -45,6 +47,7 @@ describe('mountStudioHostPanel — the real call site SessionsPage.tsx uses', ()
       sessionId: 'session-1', lang: 'en', autosave: false, turns: [], onExit: BASE.onExit, target: null,
       harness: undefined, composerMounted: true, onMention: BASE.onMention,
       fullscreen: undefined, onToggleFullscreen: undefined,
+      slot: 'right', onMove: BASE.onMove, onMinimizeRight: undefined,
     })
   })
 
@@ -68,5 +71,19 @@ describe('mountStudioHostPanel — the real call site SessionsPage.tsx uses', ()
     const withStrayKey = { ...BASE, key: 'right' } as StudioHostMountParams & { key: string }
     const el = mountStudioHostPanel(withStrayKey)
     expect(el?.key).toBeNull()
+  })
+
+  // MINIMIZING (rightOpen: false, `SessionsPage`'s own `studioTarget` reading it) is a `target: null`
+  // read the EXACT same way a collapsed bottom band already is — `shown` never changes, so this is
+  // the SAME guarantee the MOVE test above pins, for the OTHER transition that must never remount:
+  // parking the Studio to preserve its unsaved buffers only works if `StudioHost` — and the Monaco
+  // models inside it — never unmounts when the reader presses the minimize icon.
+  test('minimizing (shown stays true, target becomes null) ALSO yields the same type and key as showing it — the buffer-preserving contract `panelMenu.ts`\'s own `collapse-right-park` promises', () => {
+    const holder = { current: null as unknown }
+    const shown = mountStudioHostPanel({ ...BASE, target: holder as unknown as HTMLElement })
+    const minimized = mountStudioHostPanel({ ...BASE, target: null })
+    expect(shown?.type).toBe(minimized?.type)
+    expect(shown?.key).toBe(minimized?.key)
+    expect(minimized?.key).toBeNull()
   })
 })

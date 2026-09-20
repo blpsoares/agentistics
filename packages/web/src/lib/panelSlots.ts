@@ -44,6 +44,24 @@ export interface SlotLayout {
   /** Is the bottom BAND expanded? Independent of which panel occupies it — collapsing never drops
    *  the panel, exactly as collapsing the shell band today never ends the shell. */
   bottomOpen: boolean
+  /**
+   * Is the RIGHT SLOT'S OWN CONTENT visible right now? Independent of which panel occupies it —
+   * the right slot's analogue of `bottomOpen`, added for the always-visible MINIMIZE control (owner,
+   * 2026-09-19): "o painel colapsa para sua entrada na barra... o conteúdo é liberado da tela,
+   * enquanto o que ele contém continua rodando". Unlike `bottomOpen`, it defaults to `true` — the
+   * right slot has never had a "closed while occupied" reading before this, every existing stored
+   * layout is one, and defaulting it to `false` would silently minimize a panel nobody ever asked to
+   * hide. It matters for exactly ONE panel today: the Studio, whose persistent host
+   * (`StudioHost.tsx`) stays MOUNTED (its Monaco buffers untouched) while `right === 'studio'` and
+   * `rightOpen === false` — `SessionsPage`'s own `studioTarget` reads it the same way it already
+   * reads `bottomOpen` to park the Studio's carrier rather than unmount it. Every OTHER right-slot
+   * panel minimizes by a genuine `closePanel` instead (`panelMenu.ts`'s own `panelMinimizeAction`
+   * explains why that is safe for them and not for the Studio), so this flag is read by nobody else
+   * — but it is still tracked here, for every panel, rather than only for the Studio, because a
+   * flag that exists for one occupant and not the others is a flag the NEXT occupant of the slot
+   * would have to specially reason about.
+   */
+  rightOpen: boolean
   /** Where each panel was last shown, so `openPanel(panel)` with no explicit slot has an answer. */
   lastSlot: Record<PanelId, SlotId>
 }
@@ -63,7 +81,7 @@ const RIGHT_PANELS: readonly PanelId[] = ['contents', 'studio', 'cli', 'shell', 
 const BOTTOM_PANELS: readonly PanelId[] = ['cli', 'shell', 'studio']
 
 export const EMPTY_SLOT_LAYOUT: SlotLayout = {
-  right: null, bottom: null, bottomOpen: false, lastSlot: { ...DEFAULT_LAST_SLOT },
+  right: null, bottom: null, bottomOpen: false, rightOpen: true, lastSlot: { ...DEFAULT_LAST_SLOT },
 }
 
 /** May this panel ever sit in this slot? `contents` is the one panel excluded from `bottom` — a
@@ -78,13 +96,20 @@ export function allowed(slot: SlotId, panel: PanelId): boolean {
  *  VACATING THE BOTTOM SLOT ALSO CLEARS `bottomOpen` — the same invariant `readLayout` already
  *  enforces on the way IN (`bottomOpen: bottom !== null && r.bottomOpen === true`). Without it,
  *  moving the Studio from the bottom to the right left `{ bottom: null, bottomOpen: true }` sitting
- *  in the live layout (and in storage) until the next full reload silently repaired it. */
+ *  in the live layout (and in storage) until the next full reload silently repaired it.
+ *
+ *  VACATING THE RIGHT SLOT RESETS `rightOpen` TO `true` — the OPPOSITE convention from
+ *  `bottomOpen`'s reset, and deliberately so: `rightOpen` defaults open (see its own doc comment),
+ *  so a slot a panel just left reads as "would be open" for whichever panel opens there next,
+ *  rather than carrying a stale "minimized" flag left behind by whatever used to occupy it. */
 function withoutPanel(layout: SlotLayout, panel: PanelId): SlotLayout {
   if (layout.right !== panel && layout.bottom !== panel) return layout
   const bottomCleared = layout.bottom === panel
+  const rightCleared = layout.right === panel
   return {
     ...layout,
-    right: layout.right === panel ? null : layout.right,
+    right: rightCleared ? null : layout.right,
+    rightOpen: rightCleared ? true : layout.rightOpen,
     bottom: bottomCleared ? null : layout.bottom,
     bottomOpen: bottomCleared ? false : layout.bottomOpen,
   }
@@ -102,7 +127,7 @@ export function openPanel(layout: SlotLayout, panel: PanelId, slot?: SlotId): Sl
   if (!allowed(target, panel)) return layout
   const cleared = withoutPanel(layout, panel)
   const placed: SlotLayout = target === 'right'
-    ? { ...cleared, right: panel }
+    ? { ...cleared, right: panel, rightOpen: true }
     : { ...cleared, bottom: panel, bottomOpen: true }
   return { ...placed, lastSlot: { ...placed.lastSlot, [panel]: target } }
 }
@@ -170,6 +195,12 @@ export function setBottomOpen(layout: SlotLayout, open: boolean): SlotLayout {
   return layout.bottomOpen === open ? layout : { ...layout, bottomOpen: open }
 }
 
+/** Minimize or restore the right slot's own content without touching which panel occupies it —
+ *  the right slot's analogue of `setBottomOpen`, see `SlotLayout.rightOpen`'s own doc comment. */
+export function setRightOpen(layout: SlotLayout, open: boolean): SlotLayout {
+  return layout.rightOpen === open ? layout : { ...layout, rightOpen: open }
+}
+
 /**
  * The layout as a PHONE reads it. A phone has no bottom slot and no side-by-side (`dockedAllowed`
  * in `terminalSurface.ts` already says the band cannot exist below the breakpoint), so a stored
@@ -178,7 +209,10 @@ export function setBottomOpen(layout: SlotLayout, open: boolean): SlotLayout {
  */
 export function resolveForViewport(layout: SlotLayout, isMobile: boolean): SlotLayout {
   if (!isMobile || layout.bottom !== 'studio') return layout
-  return { ...layout, right: 'studio', bottom: null }
+  // `rightOpen: true` explicitly — a phone has no minimize control of its own (the right slot is a
+  // fullscreen sheet there, design §1.6), so a `false` carried over from a desktop session would
+  // otherwise open this sheet already collapsed with no visible way to expand it.
+  return { ...layout, right: 'studio', bottom: null, rightOpen: true }
 }
 
 /**
@@ -227,8 +261,13 @@ export function resolveForGates(layout: SlotLayout, gates: PanelGates): SlotLayo
 
 const STORAGE_KEY = 'agentistics-panel-slots'
 
+// `hardware` belongs here too — it is a full `PanelId` (`PANEL_IDS`, `allowed('right', 'hardware')`)
+// and its absence meant a stored `right: 'hardware'` was silently dropped on every reload, the one
+// panel this function could never actually restore. `panelSlots.test.ts`'s own "round-trips every
+// PANEL_IDS member" test walks every one of them through this exact function, which is what caught
+// it — see "the storage guard — readLayout" below.
 function isPanelId(v: unknown): v is PanelId {
-  return v === 'contents' || v === 'studio' || v === 'cli' || v === 'shell'
+  return v === 'contents' || v === 'studio' || v === 'cli' || v === 'shell' || v === 'hardware'
 }
 
 function readLastSlot(v: unknown): Record<PanelId, SlotId> {
@@ -256,6 +295,9 @@ export function readLayout(storage?: Storage): SlotLayout {
     return {
       right, bottom,
       bottomOpen: bottom !== null && r.bottomOpen === true,
+      // ABSENT READS AS OPEN — the opposite convention from `bottomOpen` above, and deliberately
+      // so; see `SlotLayout.rightOpen`'s own doc comment for why.
+      rightOpen: r.rightOpen !== false,
       lastSlot: readLastSlot(r.lastSlot),
     }
   } catch {
@@ -329,6 +371,13 @@ export function setBandOpen(open: boolean): void {
   commit(setBottomOpen(state, open))
 }
 
+/** Minimize or restore the right slot's own content — see `setRightOpen`'s own pure doc comment.
+ *  Never asks: it never unmounts anything (the Studio's own host stays parked), so there is nothing
+ *  here for `holdIfUnsaved` to protect. */
+export function setSlotRightOpen(open: boolean): void {
+  commit(setRightOpen(state, open))
+}
+
 /** For tests: forget everything. */
 export function resetPanelSlots(): void {
   state = EMPTY_SLOT_LAYOUT
@@ -341,6 +390,7 @@ export interface PanelSlotsApi {
   closePanel: (panel: PanelId) => void
   movePanel: (panel: PanelId, to: SlotId) => void
   setBottomOpen: (open: boolean) => void
+  setRightOpen: (open: boolean) => void
 }
 
 /** The one hook every slot-aware component reads. Bound actions carry the same names as the pure
@@ -353,6 +403,7 @@ export function usePanelSlots(): PanelSlotsApi {
     closePanel: hidePanel,
     movePanel: relocatePanel,
     setBottomOpen: setBandOpen,
+    setRightOpen: setSlotRightOpen,
   }
 }
 

@@ -119,15 +119,51 @@ export function wantsFullscreen(wantedPx: number, columnHeight: number): boolean
 }
 
 /**
- * ONE CALL FOR THE WHOLE DRAG STEP — `resolveBandHeight`'s clamped `{height, full}` plus whether
- * this same want ALSO crosses into full screen, bundled so a band's move handler asks once rather
- * than reaching into two functions and risking they disagree about what `wantedPx` was measured
- * against. `height`/`full` never reflect the overshoot itself — they stay exactly what
- * `resolveBandHeight` would have answered alone (clamped at the column, sane) — which is what makes
- * leaving full screen able to fall back to THIS record rather than to the drag's own raw, possibly
- * enormous number: the band was never told to remember the overshoot in the first place.
+ * ONE CALL FOR THE WHOLE DRAG STEP, AND THE ONE STATE MACHINE BOTH BANDS DRIVE THEIR RESIZE
+ * THROUGH — `resolveBandHeight`'s clamped `{height, full}` plus whether this same want ALSO crosses
+ * into full screen, bundled so a band's move handler asks once rather than reaching into two
+ * functions and risking they disagree about what `wantedPx` was measured against. `height`/`full`
+ * never reflect the overshoot itself — they stay exactly what `resolveBandHeight` would have
+ * answered alone (clamped at the column, sane) — which is what makes leaving full screen able to
+ * fall back to THIS record rather than to the drag's own raw, possibly enormous number: the band was
+ * never told to remember the overshoot in the first place.
+ *
+ * **THE INVARIANT THIS FUNCTION EXISTS TO STATE: `full` and the band's ACTUAL ON-SCREEN HEIGHT MAY
+ * NEVER DISAGREE.** They did, for a release — not because this function was wrong (every number it
+ * returns was, and is, correct — see `shellBand.test.ts`) but because the CALLER rendered `full` as
+ * `flex: '1 1 auto'` on the band's own root, competing for space with the chat pane's OWN `flex: 1`
+ * sibling instead of taking an explicit pixel height. Two `flex-grow: 1` items with different
+ * `flex-basis` split the column by their CONTENT size, not by "give everything to the one that asked
+ * to fill it" — measured on the real layout, a 700px column gave the band 381px and the chat 315px.
+ * So a small incremental drag that reached the snap threshold made the band SHRINK on the very frame
+ * it was told to fill the column ("aos poucos pra cima e atinjo o topo, ele volta pro meio"), the
+ * next drag's own `startH` was read from `renderedHeight` (which correctly said "700", matching the
+ * STATE this function had already resolved) while the box on screen was really 381px — so the same
+ * finger movement that felt like a small further nudge computed as `startH + delta` against the
+ * WRONG starting point and blew straight through `BAND_FULLSCREEN_OVERSHOOT_PX`, and true full
+ * screen (a `position: fixed` overlay, immune to the flex competition) rendered correctly for the
+ * first time in the whole gesture ("se eu tento redimensionar ele fica fullscreen"). Leaving it
+ * (closing the band, which the header row's own click does) re-entered the SAME broken `full`
+ * rendering path on the next open, with `heightPrefs` untouched throughout ("clico na barra ele
+ * volta pro meio e fica bugado"). The fix is in the CALLER — `SessionPanel.tsx`'s `StudioBand` and
+ * this file's own `ShellBand.tsx` now give the root an EXPLICIT height (`Math.max(BAND_MIN_PX,
+ * renderedHeight)`, where `renderedHeight` already resolves to the column's own height while `full`)
+ * instead of delegating to outer flex distribution, and give ONLY the CONTENT box inside it
+ * `flex: '1 1 auto', minHeight: 0` to spend that height on. This function's own numbers were never
+ * the bug and needed no change — the invariant lives here, in words, so the next caller of `full`
+ * cannot reintroduce the mismatch by reaching for `flex-grow` again.
+ *
+ * THE SAME RESOLVER SERVES BOTH BANDS. `StudioBand` and `ShellBand` share one `BandPrefs` record
+ * (`readBandPrefs`/`writeBandPrefs`, the `agentistics-shell-band` key) and now share this one
+ * function for what a drag on either of their handles means — a second, hand-rolled copy in
+ * `ShellBand.tsx` is exactly the drift this repository's own CLAUDE.md exists to prevent. Where the
+ * two differ is only in WHAT "full screen" does once requested: `StudioBand` owns a `fullscreen`
+ * flag (`SessionsPage`'s `studioFullscreen`, a `position: fixed` overlay `Studio.tsx`'s own gear
+ * menu can also reach); `ShellBand` has no overlay of its own and instead navigates to the pane's
+ * DEDICATED screen (`onOpenFullscreen`) when one is offered — the same escalation, aimed at whichever
+ * "full screen" that band actually has.
  */
-export function resolveStudioBandDrag(
+export function resolveBandDrag(
   wantedPx: number, columnHeight: number,
 ): { height: number; full: boolean; fullscreen: boolean } {
   return { ...resolveBandHeight(wantedPx, columnHeight), fullscreen: wantsFullscreen(wantedPx, columnHeight) }

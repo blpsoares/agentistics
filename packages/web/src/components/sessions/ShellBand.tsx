@@ -41,7 +41,7 @@
 
 import { Suspense, lazy, useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import {
-  ChevronDown, ChevronUp, ChevronLeft, Loader2, Maximize2, PanelRightOpen,
+  ChevronDown, ChevronUp, ChevronLeft, Loader2, Maximize2,
   RotateCcw, TerminalSquare, Trash2,
 } from 'lucide-react'
 import { useDocumentVisible } from '../../hooks/useDocumentVisible'
@@ -61,7 +61,7 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { useTerminalStream } from '../../hooks/useTerminalStream'
 import { useTerminalWrite } from '../../hooks/useTerminalWrite'
 import {
-  BAND_MIN_PX, readBandPrefs, resolveBandHeight, shellApiUrl, shellErrorText, shellWatching,
+  BAND_MIN_PX, readBandPrefs, resolveBandDrag, resolveBandHeight, shellApiUrl, shellErrorText, shellWatching,
   bandGeometry, shellWhere, writeBandGeometry, writeBandPrefs, type BandPrefs,
 } from '../../lib/shellBand'
 import {
@@ -73,8 +73,10 @@ import { terminalStatus } from '../../lib/terminalStream'
 import { createPaneResizer } from '../../lib/paneResizeRequest'
 import { bandSegmentEntries } from '../../lib/bandSegment'
 import { bandBarCompact, type PanelBarEntry, type PanelBarId } from '../../lib/panelBar'
+import { panelMenuEntries } from '../../lib/panelMenu'
 import {
-  BAND_CONTROL_H, BandOverflowMenu, BandSegment, BandSegmentTab, PanelBar, type BandOverflowEntry,
+  BAND_CONTROL_H, BandOverflowMenu, BandSegment, BandSegmentTab, PanelBar, panelMenuIconFor,
+  type BandOverflowEntry,
 } from './bandControls'
 
 const SessionTerminal = lazy(() => import('../SessionTerminal'))
@@ -311,13 +313,6 @@ export interface ShellBandProps {
    * no room for a second control.
    */
   taskControl?: ReactNode
-  /**
-   * "Bring the Studio to the bottom" (owner feedback, 2026-09-17) — present exactly when the Studio
-   * sits in the right slot while THIS band is docked; see `SessionPanel`'s own `moveDownEntries`.
-   * Merged into this band's own overflow menu rather than a second control — `docked` only, the
-   * same reasoning as `onMoveToRight` below.
-   */
-  extraOverflowEntries?: readonly BandOverflowEntry[]
   /** Move whichever pane THIS band is currently showing to the right slot. Docked only — `aside` is
    *  already the right slot, and `dedicated` has no slot to move into. */
   onMoveToRight?: (target: TerminalTarget) => void
@@ -334,7 +329,7 @@ export function ShellBand({
   sessionId, cwd, lang, theme, harness, placement = 'docked', onOpenFullscreen,
   barEntries, onBarPick, studioSeen = true, bottomOccupant = null, shellEnabled = true,
   shellCapable = true, onShellEnabledChange, taskControl,
-  extraOverflowEntries, onMoveToRight, columnHeight = 0,
+  onMoveToRight, columnHeight = 0,
 }: ShellBandProps) {
   const t = TXT[lang]
   const isMobile = useIsMobile()
@@ -693,7 +688,21 @@ export function ShellBand({
       const d = dragRef.current
       if (!d) return
       // The band grows UPWARD: it is docked at the bottom, so dragging up must make it taller.
-      setBand(resolveBandHeight(d.startH + (d.startY - clientY), columnHeight))
+      // `resolveBandDrag` — the ONE resolver `StudioBand` also drives its own resize through, see
+      // that function's own header in `shellBand.ts`. Past the overshoot this band has no overlay
+      // of its own to switch into (unlike the Studio's `position: fixed` full screen), so the SAME
+      // gesture escalates to this pane's DEDICATED screen instead, when the caller offers one — the
+      // identical "past here, nothing short of the whole thing will do" reading, aimed at whichever
+      // full screen this band actually has.
+      const resolved = resolveBandDrag(d.startH + (d.startY - clientY), columnHeight)
+      setBand({ height: resolved.height, full: resolved.full })
+      if (resolved.fullscreen && onOpenFullscreen) {
+        onOpenFullscreen(target)
+        // The gesture is SPENT — see `StudioBand`'s own identical comment: once past the threshold
+        // there is nothing left a further pixel of movement could mean, and this band is about to
+        // navigate away regardless.
+        dragRef.current = null
+      }
     }
     const onMouse = (e: MouseEvent) => move(e.clientY)
     const onTouch = (e: TouchEvent) => { const p = e.touches[0]; if (p) move(p.clientY) }
@@ -708,7 +717,7 @@ export function ShellBand({
       window.removeEventListener('touchmove', onTouch)
       window.removeEventListener('touchend', end)
     }
-  }, [isMobile, setBand, columnHeight])
+  }, [isMobile, setBand, columnHeight, onOpenFullscreen, target])
 
   /**
    * THE ONE CONTROL THAT PICKS A TERMINAL. It replaced the header's `Conversa | Terminal` toggle —
@@ -750,17 +759,27 @@ export function ShellBand({
    * segment and never written back except on an explicit pick (see `target`'s own doc comment), so
    * picking the tab that is not currently showing must ALSO flip this band's local state and open it
    * if collapsed — the exact two things the old `dockedTargetSwitch` did by hand. A tab that IS
-   * already lit is left to the shared handler alone: if it is lit because it is the band's own
-   * occupant, that handler is a no-op (nothing to close from in here); if it is lit because it sits
-   * on the RIGHT instead, the handler closes it there, which needs no local state change.
+   * already lit is left to the shared handler alone: if it is lit because it sits on the RIGHT
+   * instead, the handler closes it there, which needs no local state change.
+   *
+   * RESTORING FROM A COLLAPSED BAND IS THIS SAME TAB'S OWN CLICK, never a second control — clicking
+   * the already-lit tab of THIS band's own occupant, while collapsed, re-expands it, the exact
+   * inverse of the collapse chevron and consistent with the Studio's own restore-from-minimized
+   * reading in `SessionPanel.tsx`'s `onPanelBarPick`.
    */
   const handleBarPick = useCallback((id: PanelBarId) => {
     if ((id === 'cli' || id === 'shell') && !barEntries?.find(e => e.id === id)?.on) {
       chooseTarget(id)
       if (!bandOpen) setBand({ open: true })
+      onBarPick?.(id)
+      return
+    }
+    if (id === target && bottomOccupant === id && !bandOpen) {
+      setBand({ open: true })
+      return
     }
     onBarPick?.(id)
-  }, [barEntries, onBarPick, chooseTarget, bandOpen, setBand])
+  }, [barEntries, onBarPick, chooseTarget, bandOpen, setBand, target, bottomOccupant])
   /** The bar's OWN measured width (design item 7), never the window's — see `useElementWidth`'s
    *  own header on why. */
   const [barWidthRef, barWidth] = useElementWidth()
@@ -773,19 +792,27 @@ export function ShellBand({
   )
   /**
    * THE OVERFLOW MENU (design item 7) — Move/Full screen/End shell, each keeping its full label
-   * INSIDE the menu (only the TRIGGER is compact). Exactly the three `BandLabeledButton`s this bar
-   * used to draw inline, same conditions, same actions — moved so the row they used to widen no
-   * longer has to hold them at all.
+   * INSIDE the menu (only the TRIGGER is compact).
+   *
+   * "MOVE" GOES THROUGH THE ONE SHARED BUILDER (`lib/panelMenu.ts`) — the same function
+   * `StudioBand`'s own gear and `Studio.tsx`'s internal one use, so "Mover Claude Code para a
+   * direita" / "Mover Shell para a direita" can never disagree with what those menus say for the
+   * SAME gesture elsewhere. Fullscreen and "End shell" stay THIS component's own concerns —
+   * fullscreen here means "navigate to the dedicated screen" (`onOpenFullscreen`), a different
+   * question from the Studio's in-place overlay and one the shared builder therefore leaves absent
+   * (`fullscreenAvailable: false`) — and ending the shell is a destructive action about the actual
+   * process, unrelated to placement, which is why it was never part of that builder's vocabulary
+   * (see `panelMenu.ts`'s own header on why `close` is the Studio's one exception).
    */
+  const moveEntry = panelMenuEntries({
+    panel: target, slot: 'bottom', lang, panelName: targetLabel(target, harness, lang),
+    fullscreenAvailable: false, fullscreen: false,
+  }).find(e => e.id === 'move-right')
   const overflowEntries: BandOverflowEntry[] = [
-    ...(prefs.open && onMoveToRight ? [{
-      id: 'move', label: lang === 'pt' ? 'Mover para a direita' : 'Move to the right',
-      icon: <PanelRightOpen size={14} />, onSelect: () => onMoveToRight(target),
+    ...(prefs.open && onMoveToRight && moveEntry ? [{
+      id: moveEntry.id, label: moveEntry.label, icon: panelMenuIconFor(moveEntry.iconId),
+      onSelect: () => onMoveToRight(target),
     }] : []),
-    // "Bring the Studio to the bottom" (owner feedback, 2026-09-17) — not gated on `prefs.open`
-    // like the entries above: it names what sits on the RIGHT, not what this band is doing, and a
-    // collapsed band is still a valid place to bring something into.
-    ...(extraOverflowEntries ?? []),
     // The LABEL names whichever pane THIS band is actually showing (`target`) — never a fixed
     // "shell" sentence, which is what sent a reader pressing this while reading the Claude Code
     // pane to the shell's own screen instead. See `paneForTarget`'s own header.
@@ -1135,11 +1162,15 @@ export function ShellBand({
   // ---- desktop: the last band of the panel, under the composer ---------------------------------
   return (
     <div style={{
-      // FULL (design item 7) flex-stretches this ROOT within `SessionPanel`'s own column, the same
-      // two-step `StudioBand` uses for the identical reason — see that component's own header on
-      // why a literal pixel figure equal to the whole measured column would overflow it by this
-      // bar's own height.
-      ...(prefs.full ? { flex: '1 1 auto', minHeight: 0 } : { flexShrink: 0 }),
+      // FULL (design item 7) is an EXPLICIT PIXEL HEIGHT, never `flex: '1 1 auto'` — see
+      // `resolveBandDrag`'s own header in `shellBand.ts` for the bug that shape was: two
+      // `flex-grow: 1` siblings (this root and the conversation's own `flex: 1` above it) split the
+      // column by CONTENT size rather than handing the whole thing to the one that asked to fill it,
+      // so the band silently rendered at roughly half the column instead of all of it. `renderedHeight`
+      // already resolves to the measured `columnHeight` while `prefs.full` is true, and the content
+      // box below spends it via its own `flex: '1 1 auto'` — never both on the same box. Gated on
+      // `prefs.open`: collapsed, this must stay auto-sized to its header row alone.
+      ...(prefs.open && prefs.full ? { height: renderedHeight, flexShrink: 0 } : { flexShrink: 0 }),
       display: 'flex', flexDirection: 'column',
       borderTop: '1px solid var(--border)', background: 'var(--bg-surface)',
     }}>
