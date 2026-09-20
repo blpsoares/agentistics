@@ -13,7 +13,7 @@ import { readRegistry } from './registry'
 import { createTaskStore, type TaskStore } from './task-store'
 import { migrateLegacyTasks, type TaskBook } from './task-model'
 import type { ManagedSession } from './types'
-import type { SessionMeta } from '@agentistics/core'
+import { planStatusMigration, type SessionMeta } from '@agentistics/core'
 
 export interface TaskWorld {
   store: TaskStore
@@ -56,6 +56,25 @@ async function ensureLegacyTasks(store: TaskStore, rows: readonly ManagedSession
 }
 
 /**
+ * Seed the status LIST the very first time this book is opened.
+ *
+ * `planStatusMigration` already refuses to do anything once a list exists, and `seedStatuses`
+ * re-checks the same thing under the lock — this function's own read is only what decides WHETHER
+ * to bother calling it, never the thing that makes the write safe. Idempotent the same way
+ * `ensureLegacyTasks` is: called on every load, a no-op on every call after the first.
+ */
+async function ensureStatusesSeeded(store: TaskStore): Promise<void> {
+  const book = await store.read()
+  if (book.statuses.length > 0) return
+  const usedStatusIds = [
+    ...book.tasks.map(t => t.status),
+    ...book.subtasks.map(s => s.status),
+  ]
+  const plan = planStatusMigration({ existing: book.statuses, usedStatusIds })
+  if (plan) await store.seedStatuses(plan)
+}
+
+/**
  * The board and the fleet, WITHOUT the consolidate store.
  *
  * The uploader runs on the central's cadence — as often as every few seconds — and already holds
@@ -67,6 +86,7 @@ export async function loadTaskBoard(): Promise<{ store: TaskStore; book: TaskBoo
   const store = createTaskStore(TASKS_FILE)
   const rows = await readRegistry()
   await ensureLegacyTasks(store, rows)
+  await ensureStatusesSeeded(store)
   return { store, book: await store.read(), rows }
 }
 
@@ -74,6 +94,7 @@ export async function loadTaskWorld(): Promise<TaskWorld> {
   const store = createTaskStore(TASKS_FILE)
   const rows = await readRegistry()
   await ensureLegacyTasks(store, rows)
+  await ensureStatusesSeeded(store)
   const [book, metas] = await Promise.all([
     store.read(),
     // The store is an enrichment, never a prerequisite: one that cannot be read costs the money
