@@ -54,6 +54,8 @@ import { HideLensesButton } from '../components/a11y/HideLensesButton'
 import { ArtifactsAside } from '../components/sessions/ArtifactsAside'
 import { HardwarePanel } from '../components/sessions/HardwarePanel'
 import { UnsavedChangesGuard } from '../components/sessions/UnsavedChangesGuard'
+import { BandOverflowMenu, panelMenuIconFor } from '../components/sessions/bandControls'
+import { panelMenuEntries } from '../lib/panelMenu'
 import {
   artifactsPanelMax, ASIDE_ANIM_MS, ASIDE_EASE, edgeHint, PANEL_MIN_WIDTH, panelWidth,
   resolveArtifactLayout, type ArtifactLayout,
@@ -106,6 +108,12 @@ export interface StudioHostMountParams {
   /** Absent (not merely a no-op) while the Studio is not bottom-docked — see the call site's own
    *  comment on why the control is offered only where there is somewhere to go. */
   onToggleFullscreen?: () => void
+  /** Where the Studio sits right now — see `Studio.tsx`'s own `slot` prop. */
+  slot: 'right' | 'bottom'
+  /** Move it to the other slot — see `Studio.tsx`'s own `onMove` prop. */
+  onMove: () => void
+  /** The always-visible minimize icon, right-slot only — see `Studio.tsx`'s own `onMinimizeRight`. */
+  onMinimizeRight?: () => void
   /**
    * NEVER A REAL FIELD (I4, fix wave 3) — declared `never` so a stray `key` on this params object is
    * a TYPE ERROR at every route a value can reach `mountStudioHostPanel` through, not only a literal
@@ -164,6 +172,9 @@ export function mountStudioHostPanel(params: StudioHostMountParams): ReactElemen
     onMention: params.onMention,
     fullscreen: params.fullscreen,
     onToggleFullscreen: params.onToggleFullscreen,
+    slot: params.slot,
+    onMove: params.onMove,
+    onMinimizeRight: params.onMinimizeRight,
   })
 }
 
@@ -611,7 +622,9 @@ export default function SessionsPage() {
    * a different, relayed session, reloading on a machine where the preference has changed. Neither
    * resolution rewrites storage; turning the gate back on restores the layout exactly as it was left.
    */
-  const { layout: rawSlotLayout, openPanel: openSlotPanel, closePanel: closeSlotPanel } = usePanelSlots()
+  const {
+    layout: rawSlotLayout, openPanel: openSlotPanel, closePanel: closeSlotPanel, setRightOpen,
+  } = usePanelSlots()
   const panelGates: PanelGates = { editorEnabled, shellEnabled, relayed }
   const slotLayout = resolveForGates(resolveForViewport(rawSlotLayout, isMobile), panelGates)
   const rightIsStudio = slotLayout.right === 'studio'
@@ -622,8 +635,10 @@ export default function SessionsPage() {
   const [rightSlotEl, setRightSlotEl] = useState<HTMLDivElement | null>(null)
   const [bottomStudioEl, setBottomStudioEl] = useState<HTMLDivElement | null>(null)
   /** `null` PARKS the Studio — mounted, hidden, taking no space — which is also what a COLLAPSED
-   *  bottom band holding it means: collapsing must not be a way to lose a buffer. */
-  const studioTarget: HTMLElement | null = rightIsStudio
+   *  bottom band, or a MINIMIZED right slot (`slotLayout.rightOpen`, the right slot's own analogue
+   *  of `bottomOpen` — see `panelSlots.ts`'s own doc comment), holding it means: collapsing or
+   *  minimizing must not be a way to lose a buffer. */
+  const studioTarget: HTMLElement | null = rightIsStudio && slotLayout.rightOpen
     ? rightSlotEl
     : bottomIsStudio && slotLayout.bottomOpen ? bottomStudioEl : null
   /**
@@ -678,7 +693,14 @@ export default function SessionsPage() {
     // live for `hardware` (design item 3): the header tab lit, `rightSlotContent` correctly chose
     // the `HardwarePanel` branch, and the aside stayed at ZERO width because nothing here had told
     // `resolveArtifactLayout` this was a reason to open it at all.
-    open: (art.open || rightIsStudio || rightIsCli || rightIsShell || rightIsHardware) && selected !== undefined,
+    //
+    // `rightPanelOpen` is the box's own MINIMIZE state (owner, 2026-09-19): only the Studio ever
+    // reads `false` here — Contents/Hardware/CLI/Shell minimize by a genuine `closePanel`
+    // (`panelMenu.ts`'s own `panelMinimizeAction`), which already reads as "not occupying the slot"
+    // through the flags above, so `slotLayout.rightOpen` only ever narrows the ONE case those flags
+    // cannot already see: the Studio still assigned to the slot, parked rather than shown.
+    open: (art.open || rightIsStudio || rightIsCli || rightIsShell || rightIsHardware)
+      && (!rightIsStudio || slotLayout.rightOpen) && selected !== undefined,
     width: typeof window === 'undefined' ? 1440 : window.innerWidth,
     isMobile,
     // Phase B ships without the reversal control; the split-rail default is what the plan measured.
@@ -928,22 +950,54 @@ export default function SessionsPage() {
   ) : null
 
   /**
-   * DESKTOP HAS NO TOOLBAR HERE ANY MORE (owner feedback, 2026-09-17: "there must be exactly ONE
-   * panel switcher on desktop … no tab row inside the right aside"). This used to be a "Move to the
-   * bottom" button (`rightSlotToolbar`) that called `moveSlotPanel` directly — a SECOND, DISCONNECTED
-   * control that could move a panel in `panelSlots.ts` without ShellBand ever learning the stream it
-   * should now be showing (`ShellBand`'s own `target` is a separate local preference,
-   * `chooseTarget`-driven — see that component's own header), which is exactly how pressing it read
-   * as "this just closes the right aside": the store moved the panel correctly, but the docked band
-   * kept showing whatever it last had a `target` for, or nothing.
+   * DESKTOP HAS NO PANEL SWITCHER HERE — the ONE panel bar stays the bottom band's (owner feedback,
+   * 2026-09-17: "there must be exactly ONE panel switcher on desktop"). What desktop DOES get, for
+   * the four right-slot panels that carry no toolbar of their own (owner, 2026-09-19), is this small
+   * bar: an always-visible MINIMIZE icon, never buried in a menu, plus — where the panel can reach
+   * the bottom at all — a "⋯" naming that ONE move, through the SAME shared builder
+   * (`lib/panelMenu.ts`) `StudioBand`'s own gear and `ShellBand`'s own overflow use, so this can
+   * never disagree with what those say about the identical gesture.
    *
-   * The move gesture now lives in the ONE panel bar's own overflow menu — computed once by
-   * `SessionPanel.tsx` (`moveDownEntries`, where the docked band's own `chooseTarget` is in scope to
-   * call) and rendered by whichever band is docked (`ShellBand`/`StudioBand`/`PanelBarBand`), so a
-   * move can never again land in the store without the screen that has to display it hearing about
-   * it. CLOSING a right-slot panel needs no replacement here: it was already reachable by clicking
-   * the same (lit) entry in that one bar (`onPanelBarPick`), never through this toolbar.
+   * The STUDIO is deliberately absent from this list: it already carries this exact pair — its own
+   * gear (move + fullscreen + close) and, beside it, its own minimize icon — inside its OWN toolbar,
+   * because that toolbar is what stays visible across the tree/search/editor views this generic bar
+   * would otherwise sit above. Adding a second one here would be two bars for one panel.
+   *
+   * Minimizing here is a genuine CLOSE (`panelMenu.ts`'s own `panelMinimizeAction` — `close-right`),
+   * which is SAFE for exactly these four: none holds client-only state a remount could lose (see
+   * that function's own header). The outcome a reader sees is identical to a soft minimize either
+   * way — released from view, restored with one click on the panel bar's own tab.
    */
+  const rightSlotBar = (
+    panel: 'contents' | 'hardware' | 'cli' | 'shell', panelName: string, onMinimize: () => void,
+  ) => {
+    if (isMobile || !selected) return null
+    const moveEntries = panelMenuEntries({
+      panel, slot: 'right', lang: pt ? 'pt' : 'en', panelName,
+      fullscreenAvailable: false, fullscreen: false,
+    }).filter(e => e.id === 'move-bottom').map(e => ({
+      id: e.id, label: e.label, icon: panelMenuIconFor(e.iconId),
+      onSelect: () => openSlotPanel(panel, 'bottom'),
+    }))
+    return (
+      <div style={{
+        display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 4,
+        padding: '6px 8px 0', flexShrink: 0,
+      }}>
+        {moveEntries.length > 0 && (
+          <BandOverflowMenu label={pt ? 'Mais ações' : 'More actions'} entries={moveEntries} />
+        )}
+        <button
+          className="ag-tap-icon"
+          type="button"
+          onClick={onMinimize}
+          title={pt ? `Minimizar ${panelName}` : `Minimize ${panelName}`}
+          aria-label={pt ? `Minimizar ${panelName}` : `Minimize ${panelName}`}
+          style={rightSlotIconBtn}
+        >{panelMenuIconFor('chevron-right', 13)}</button>
+      </div>
+    )
+  }
   const rightSlotHeader = isMobile ? rightSwitcherMobile : null
 
   /** What the right box actually shows: the Studio's own target (StudioHost re-parents its carrier
@@ -959,6 +1013,7 @@ export default function SessionsPage() {
   ) : rightIsCli && selected ? (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
       {rightSlotHeader}
+      {rightSlotBar('cli', targetLabel('cli', selected.harness, pt ? 'pt' : 'en'), () => closeSlotPanel('cli'))}
       <div style={{ flex: 1, minHeight: 0, padding: 10, display: 'flex', flexDirection: 'column' }}>
         <TerminalRegion
           placement="aside"
@@ -974,6 +1029,7 @@ export default function SessionsPage() {
   ) : rightIsShell && selected ? (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
       {rightSlotHeader}
+      {rightSlotBar('shell', targetLabel('shell', selected.harness, pt ? 'pt' : 'en'), () => closeSlotPanel('shell'))}
       <div style={{ flex: 1, minHeight: 0, padding: 10, display: 'flex', flexDirection: 'column' }}>
         <ShellBand
           key={`aside-${selected.id}`}
@@ -989,11 +1045,13 @@ export default function SessionsPage() {
   ) : rightIsHardware ? (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
       {rightSlotHeader}
+      {rightSlotBar('hardware', pt ? 'Hardware' : 'Hardware', () => closeSlotPanel('hardware'))}
       <HardwarePanel lang={pt ? 'pt' : 'en'} onClose={() => closeSlotPanel('hardware')} />
     </div>
   ) : (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
       {rightSlotHeader}
+      {rightSlotBar('contents', pt ? 'Conteúdo' : 'Contents', closeArtifacts)}
       {artifactsPane}
     </div>
   )
@@ -1958,6 +2016,15 @@ export default function SessionsPage() {
         // somewhere to go" rule `ShellBand`'s own fullscreen control follows for `aside`/`dedicated`.
         fullscreen: studioFullscreen,
         onToggleFullscreen: bottomIsStudio ? () => setStudioFullscreen(f => !f) : undefined,
+        // WHERE IT IS, AND HOW TO MOVE IT — the Studio's own ONE menu (`studioGearEntries`) reads
+        // these to offer exactly the move the CURRENT slot allows, and nothing about a different
+        // panel (owner, 2026-09-19). `rightIsStudio`/`bottomIsStudio` are already mutually
+        // exclusive wherever `shown` is true, the same fact `studioTarget` above rests on.
+        slot: rightIsStudio ? 'right' : 'bottom',
+        onMove: () => openSlotPanel('studio', rightIsStudio ? 'bottom' : 'right'),
+        // THE ALWAYS-VISIBLE MINIMIZE ICON — right-slot only; at the bottom `StudioBand`'s own
+        // collapse chevron already is this control (`panelMenu.ts`'s own `panelMinimizeAction`).
+        onMinimizeRight: rightIsStudio ? () => setRightOpen(false) : undefined,
       })}
       {/* Mobile-only chrome, and a slot that is always here so it can never shift the pane. */}
       {isMobile ? filtersSheet : null}

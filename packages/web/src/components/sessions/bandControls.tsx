@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Cpu, FileText, FolderTree, MoreHorizontal, TerminalSquare } from 'lucide-react'
+import {
+  ArrowDown, ArrowRight, ChevronRight, Cpu, FileText, FolderTree, Maximize2, Minimize2, MoreHorizontal,
+  TerminalSquare, X,
+} from 'lucide-react'
 import { studioLocationLabel, type PanelBarEntry, type PanelBarId } from '../../lib/panelBar'
+import type { PanelMenuIconId } from '../../lib/panelMenu'
 import { targetLabel } from '../../lib/terminalTarget'
+import { HarnessMark } from './HarnessMark'
 
 /**
  * bandControls.tsx — ONE height, ONE padding, ONE icon/label size for every control drawn on the
@@ -168,7 +173,28 @@ export function PanelBar({
         ? 'Agentistics Studio (beta) — os arquivos desta sessão em árvore, com busca e editor'
         : 'Agentistics Studio (beta) — this session’s files as a tree, with search and an editor',
     },
-    cli: { label: cliLabel, icon: <TerminalSquare size={14} />, title: cliLabel },
+    // THE CLI TAB CARRIES THE HARNESS'S OWN MARK (owner, 2026-09-19: "tem 2 icones de terminal
+    // repetidos... coloca a logo do harness invés do icone de terminal") — the same `HarnessMark`
+    // every chat bubble already uses, including its own monogram fallback for a harness with no
+    // file yet, so this never needs a second mapping. `TerminalSquare` only when `harness` itself is
+    // absent (a session `HarnessMark` could not even take a guess at). The SHELL tab keeps
+    // `TerminalSquare` — it is not any vendor's assistant, so a generic terminal glyph is the
+    // correct picture, and it is now the ONLY tab that draws one, which is the whole fix: two
+    // identical glyphs on one bar told two different panes apart by nothing.
+    //
+    // `aria-hidden` on the wrapper: `HarnessMark`'s own `<img alt>`/`aria-label` names the VENDOR
+    // ("Claude"), which is not this tab's own accessible name — the tab's `label` already carries
+    // that (`targetLabel`, "Claude Code"). Without this the two concatenate into "Claude Code Claude
+    // Code" for a screen reader; every other icon in this table is a decorative lucide glyph
+    // (`aria-hidden` by default) and this one is decorative for exactly the same reason — the label
+    // beside it, and the tab's own `title`, are what name it.
+    cli: {
+      label: cliLabel,
+      icon: harness
+        ? <span aria-hidden="true"><HarnessMark harness={harness} size={14} /></span>
+        : <TerminalSquare size={14} />,
+      title: cliLabel,
+    },
     shell: { label: shellLabel, icon: <TerminalSquare size={14} />, title: shellLabel },
     hardware: {
       label: pt ? 'Hardware' : 'Hardware',
@@ -239,6 +265,25 @@ export function BandSegmentTab({ on, onClick, icon, label, isMobile, title }: {
       {label}
     </button>
   )
+}
+
+/**
+ * THE ONE PLACE `lib/panelMenu.ts`'s ICON IDS BECOME REAL ICONS — every menu built from
+ * `panelMenuEntries` (`StudioBand`'s own gear, `ShellBand`'s overflow, the right slot's own move
+ * menu) resolves through this, so an id and its picture cannot disagree between callers the way
+ * `PanelRightOpen`'s inward-pointing chevron once disagreed with "Move to the right". See that
+ * module's own header for the convention this renders: arrows for a move, `Maximize2`/`Minimize2`
+ * for full screen, never reused for anything else.
+ */
+export function panelMenuIconFor(id: PanelMenuIconId, size = 14): ReactNode {
+  switch (id) {
+    case 'arrow-right': return <ArrowRight size={size} />
+    case 'arrow-down': return <ArrowDown size={size} />
+    case 'maximize': return <Maximize2 size={size} />
+    case 'minimize': return <Minimize2 size={size} />
+    case 'chevron-right': return <ChevronRight size={size} />
+    case 'x': return <X size={size} />
+  }
 }
 
 export interface BandOverflowEntry {

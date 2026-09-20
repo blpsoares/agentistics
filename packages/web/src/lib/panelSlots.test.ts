@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import {
   DEFAULT_LAST_SLOT, EMPTY_SLOT_LAYOUT, PANEL_IDS, allowed, closePanel, dockedShowsTarget,
   getPanelLayout, hidePanel, isPanelShown, movePanel, openPanel, readLayout, relocatePanel,
-  resetPanelSlots, resolveForGates, resolveForViewport, rightSlotShowing, setBottomOpen, showPanel,
-  subscribePanelLayout,
+  resetPanelSlots, resolveForGates, resolveForViewport, rightSlotShowing, setBottomOpen, setRightOpen,
+  setSlotRightOpen, showPanel, subscribePanelLayout,
   type PanelGates, type PanelId, type SlotId, type SlotLayout,
 } from './panelSlots'
 import { answerUnsaved, getUnsaved, reportUnsaved, resetUnsaved } from './unsavedBuffers'
@@ -265,6 +265,49 @@ describe('setBottomOpen', () => {
   })
 })
 
+describe('setRightOpen — the right slot\'s own minimize/restore, EMPTY_SLOT_LAYOUT.rightOpen defaults true', () => {
+  test('EMPTY_SLOT_LAYOUT reads open — absent is never a silently minimized panel', () => {
+    expect(EMPTY_SLOT_LAYOUT.rightOpen).toBe(true)
+  })
+
+  test('flips the flag without touching the occupant', () => {
+    const start: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'studio', rightOpen: true }
+    expect(setRightOpen(start, false)).toEqual({ ...start, rightOpen: false })
+  })
+
+  test('setting the same value is a no-op — same object', () => {
+    expect(setRightOpen(EMPTY_SLOT_LAYOUT, true)).toBe(EMPTY_SLOT_LAYOUT)
+  })
+
+  test('opening ANY panel at the right always starts open — a stale minimize never survives a fresh open', () => {
+    const minimized: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'studio', rightOpen: false }
+    // Opening the CLI pane there (displacing the Studio) must not inherit the Studio's own
+    // minimized state.
+    const next = openPanel(minimized, 'cli', 'right')
+    expect(next.right).toBe('cli')
+    expect(next.rightOpen).toBe(true)
+  })
+
+  test('re-opening the SAME panel at the same slot also clears a minimize — the click that restores it', () => {
+    const minimized: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'studio', rightOpen: false }
+    expect(openPanel(minimized, 'studio', 'right').rightOpen).toBe(true)
+  })
+
+  test('vacating the right slot resets rightOpen to true (M2\'s own rule, mirrored) — never a stale minimize left for the next occupant', () => {
+    const minimized: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'studio', rightOpen: false }
+    expect(closePanel(minimized, 'studio').rightOpen).toBe(true)
+    expect(movePanel(minimized, 'studio', 'bottom').rightOpen).toBe(true)
+  })
+
+  test('minimizing never touches the bottom slot, and vice versa', () => {
+    const both: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'studio', bottom: 'cli', bottomOpen: true }
+    expect(setRightOpen(both, false).bottom).toBe('cli')
+    expect(setRightOpen(both, false).bottomOpen).toBe(true)
+    expect(setBottomOpen(both, false).right).toBe('studio')
+    expect(setBottomOpen(both, false).rightOpen).toBe(true)
+  })
+})
+
 describe('resolveForViewport — the phone reading', () => {
   test('a stored bottom studio becomes the fullscreen right sheet on a phone', () => {
     const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, bottom: 'studio', bottomOpen: true }
@@ -384,6 +427,30 @@ describe('the storage guard — readLayout', () => {
     const layout = openPanel(openPanel(EMPTY_SLOT_LAYOUT, 'studio', 'right'), 'shell', 'bottom')
     s.setItem('agentistics-panel-slots', JSON.stringify(layout))
     expect(readLayout(s)).toEqual(layout)
+  })
+
+  // `hardware` was ABSENT from `isPanelId` — a full `PanelId` that `readLayout` silently dropped on
+  // every reload, the one panel this function could never actually restore. Walking every member of
+  // `PANEL_IDS` (rather than naming `hardware` alone) is what makes this the test that would have
+  // caught it AND catches the next such omission.
+  test('round-trips every PANEL_IDS member, individually, at the right slot', () => {
+    for (const panel of PANEL_IDS) {
+      const s = memory()
+      const layout = openPanel(EMPTY_SLOT_LAYOUT, panel, 'right')
+      s.setItem('agentistics-panel-slots', JSON.stringify(layout))
+      expect(readLayout(s).right).toBe(panel)
+    }
+  })
+
+  test('rightOpen round-trips both ways, and ABSENT reads as open (M2\'s own convention, mirrored)', () => {
+    const s = memory()
+    const minimized: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'studio', rightOpen: false }
+    s.setItem('agentistics-panel-slots', JSON.stringify(minimized))
+    expect(readLayout(s).rightOpen).toBe(false)
+
+    const s2 = memory()
+    s2.setItem('agentistics-panel-slots', JSON.stringify({ right: 'studio', bottom: null, bottomOpen: false }))
+    expect(readLayout(s2).rightOpen).toBe(true)
   })
 
   test('a storage that throws on read costs nothing', () => {
@@ -518,5 +585,16 @@ describe('the imperative store — showPanel / hidePanel / relocatePanel', () =>
     answerUnsaved(false)
     expect(ran).toBe(0)
     expect(isPanelShown(getPanelLayout(), 'studio')).toBe(true)
+  })
+
+  test('setSlotRightOpen minimizes/restores WITHOUT asking, even with unsaved buffers — it never unmounts anything', () => {
+    showPanel('studio', 'right')
+    reportUnsaved('studio', ['README.md'])
+    setSlotRightOpen(false)
+    expect(getPanelLayout().right).toBe('studio') // still assigned — parked, not closed
+    expect(getPanelLayout().rightOpen).toBe(false)
+    expect(getUnsaved().question).toBeNull() // never asked — nothing was dropped
+    setSlotRightOpen(true)
+    expect(getPanelLayout().rightOpen).toBe(true)
   })
 })

@@ -232,6 +232,72 @@ describe('PanelBar — compact mode collapses UNLIT labels to icons, never the l
 })
 
 /**
+ * THE ICON-ONLY BAR NO LONGER DRAWS TWO IDENTICAL TERMINAL GLYPHS (owner, 2026-09-19: "tem 2 icones
+ * de terminal repetidos... coloca a logo do harness invés do icone de terminal"). The `cli` tab now
+ * carries the session's own `HarnessMark` — the same mark every chat bubble already uses, monogram
+ * fallback included — while `shell` keeps the generic `TerminalSquare`, which is then the only tab
+ * drawing one.
+ */
+describe('PanelBar — the CLI tab carries the harness mark, never the generic terminal glyph', () => {
+  test('with a known harness, the CLI tab renders that harness\'s own mark asset, not TerminalSquare', () => {
+    // `claude` is a FILE mark (`HarnessMark`'s `MARK_FILE`) — its own `<img src="/harness/claude.svg">`
+    // is unambiguous markup no lucide icon could ever produce.
+    const html = switcher('studio', null, true) // switcher() always passes harness="claude"
+    expect(html).toContain('src="/harness/claude.svg"')
+  })
+
+  test('the SHELL tab is untouched — it still draws the generic terminal glyph', () => {
+    // `TerminalSquare`'s own lucide path data (`M6 16h12` — verified against the installed package)
+    // must still appear at least once, for the Shell tab, even once the CLI tab stopped drawing it.
+    const html = switcher('studio', null, true)
+    expect(html).toContain('d="m7 11 2-2-2-2"')
+  })
+
+  test(
+    'the mark is DECORATIVE — aria-hidden, so a screen reader is not told "Claude Code Claude ' +
+    'Code" (the mark\'s own vendor name, then the tab\'s own label, concatenated)',
+    () => {
+      const html = switcher('studio', null, true)
+      expect(html).toContain('aria-hidden="true"><img src="/harness/claude.svg"')
+    },
+  )
+
+  test('no `harness` at all — the CLI tab falls back to the generic terminal glyph, never a broken image', () => {
+    const html = renderToStaticMarkup(
+      <PanelBar
+        entries={panelBarEntries('studio', null, ALL_GATES)}
+        lang="en" studioSeen={true} onPick={() => {}}
+      />,
+    )
+    expect(html).not.toContain('<img')
+    // Both the CLI and Shell tabs now draw the SAME generic glyph — that is the one case this
+    // product accepts two identical icons in one bar: there is genuinely no harness to name yet.
+    expect(html.match(/d="m7 11 2-2-2-2"/g)?.length).toBe(2)
+  })
+
+  test('an UNKNOWN harness (no file, no mono, no colour) still resolves through HarnessMark\'s own monogram — never TerminalSquare and never a blank tab', () => {
+    const html = renderToStaticMarkup(
+      <PanelBar
+        entries={panelBarEntries('studio', null, ALL_GATES)}
+        lang="en" studioSeen={true} harness="a-future-harness-nobody-has-shipped-a-mark-for"
+        onPick={() => {}}
+      />,
+    )
+    // The CLI tab resolves to `HarnessMark`'s own monogram fallback (a letter, not an image or the
+    // generic glyph) — only the SHELL tab still draws `TerminalSquare`'s own path, exactly once.
+    expect(html).not.toContain('<img')
+    expect(html.match(/d="m7 11 2-2-2-2"/g)?.length).toBe(1)
+  })
+
+  test('the icon-only (compact) bar keeps the SAME distinction — this is exactly the width the ' +
+    'owner reported as ambiguous', () => {
+    const html = switcher('studio', null, true, { compact: true })
+    expect(html).toContain('src="/harness/claude.svg"')
+    expect(html.match(/d="m7 11 2-2-2-2"/g)?.length).toBe(1) // Shell alone, now
+  })
+})
+
+/**
  * BandOverflowMenu — the "⋯" that holds a bottom bar's secondary actions (design item 7). Closed by
  * default; absent entirely with no entries, rather than a trigger that opens onto nothing.
  */

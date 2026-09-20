@@ -22,7 +22,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { ChevronDown, ChevronUp, PanelBottomOpen, PanelRightOpen, X } from 'lucide-react'
+import { ChevronDown, ChevronUp } from 'lucide-react'
 import { getCentralMachine } from '../../lib/centralMachinePick'
 import { ResizeGrip } from '../ResizeGrip'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -33,7 +33,8 @@ import {
   bandBarCompact, bottomBandFor, gatedBottomOccupant, panelBarEntries,
   type PanelBarEntry, type PanelBarGates, type PanelBarId,
 } from '../../lib/panelBar'
-import { targetLabel, type TerminalTarget } from '../../lib/terminalTarget'
+import type { TerminalTarget } from '../../lib/terminalTarget'
+import { panelMenuEntries } from '../../lib/panelMenu'
 import { RelayedScreen } from './RelayedScreen'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import type { FleetActionId, FleetRow } from '../../lib/fleet'
@@ -43,9 +44,9 @@ import { SessionActions } from './SessionActions'
 import { SessionTitleFlag } from './SessionTitleFlag'
 import { ShellBand } from './ShellBand'
 import {
-  BAND_MIN_PX, readBandPrefs, resolveBandHeight, resolveStudioBandDrag, writeBandPrefs,
+  BAND_MIN_PX, readBandPrefs, resolveBandDrag, resolveBandHeight, writeBandPrefs,
 } from '../../lib/shellBand'
-import { BAND_CONTROL_H, BandOverflowMenu, PanelBar, type BandOverflowEntry } from './bandControls'
+import { BAND_CONTROL_H, BandOverflowMenu, PanelBar, panelMenuIconFor } from './bandControls'
 
 export type SessionView = 'chat' | 'terminal'
 
@@ -205,7 +206,7 @@ export function SessionPanel({
   const isMobile = useIsMobile()
   const {
     layout: rawSlotLayout, openPanel: openSlotPanel, closePanel: closeSlotPanel,
-    movePanel: moveSlotPanel, setBottomOpen,
+    movePanel: moveSlotPanel, setBottomOpen, setRightOpen,
   } = usePanelSlots()
   const slotLayout = resolveForViewport(rawSlotLayout, isMobile)
   const bottomIsStudio = !isMobile && editorEnabled === true && slotLayout.bottom === 'studio'
@@ -244,54 +245,44 @@ export function SessionPanel({
   // `target` is clamped the same way independently). See `gatedBottomOccupant`'s own doc comment.
   const bottomOccupant = gatedBottomOccupant(slotLayout.bottom, panelBarGates.shellEnabled)
   const barEntries = panelBarEntries(rightOccupant, bottomOccupant, panelBarGates)
+  /**
+   * ONE MENU NEVER NAMES A PANEL OTHER THAN ITS OWN (owner, 2026-09-19 — "movi o studio pra direita,
+   * mas ao clicar na engrenagem nao aparecem as opcoes corretas de mover"). Before this, whichever
+   * band happened to be docked at the bottom offered a `moveDownEntries` row NAMING WHATEVER PANEL
+   * SAT ON THE RIGHT — so a reader looking at the Shell's own "⋯" could find "Trazer o Studio para
+   * baixo" in it, a verb about a panel that menu had nothing to do with. That panel already has its
+   * OWN menu wherever it is actually drawn (the right slot's own header, below, or its own gear for
+   * the Studio) offering exactly this move through `panelMenuEntries` — there is nothing left for
+   * the CURRENTLY DOCKED band's menu to say about a DIFFERENT panel, so it says nothing.
+   *
+   * The tab click below is the OTHER half of "moving it from its own menu": for a panel that is
+   * ALREADY the lit occupant of a slot, clicking its own tab again TOGGLES open/minimized — the
+   * exact inverse of the always-visible minimize icon, never a full close (see `panelMenu.ts`'s own
+   * `panelMinimizeAction` for why the Studio is the one panel that needs this distinction at all).
+   */
   const onPanelBarPick = useCallback((id: PanelBarId) => {
     if (id === 'contents') {
       if (rightOccupant === 'contents') closeArtifacts(); else openArtifacts()
       return
     }
     if (id === 'studio') {
-      if (rightOccupant === 'studio' || bottomOccupant === 'studio') closeSlotPanel('studio')
-      else openSlotPanel('studio')
+      const atRight = rightOccupant === 'studio'
+      const atBottom = bottomOccupant === 'studio'
+      if (atRight && !slotLayout.rightOpen) { setRightOpen(true); return } // restore from minimized
+      if (atBottom && !slotLayout.bottomOpen) { setBottomOpen(true); return } // restore from collapsed
+      if (atRight || atBottom) { closeSlotPanel('studio'); return } // already open — the tab's old "close" reading, unchanged
+      openSlotPanel('studio')
       return
     }
     // hardware, cli, shell
     if (rightOccupant === id) { closeSlotPanel(id); return }
     if (bottomOccupant === id) return // already the band's own occupant — nothing to close from here
     openSlotPanel(id)
-  }, [rightOccupant, bottomOccupant, closeSlotPanel, openSlotPanel])
+  }, [
+    rightOccupant, bottomOccupant, slotLayout.rightOpen, slotLayout.bottomOpen,
+    closeSlotPanel, openSlotPanel, setRightOpen, setBottomOpen,
+  ])
 
-  /**
-   * "MOVE TO THE BOTTOM", FOR WHATEVER SITS ON THE RIGHT (owner feedback, 2026-09-17) — the reverse
-   * of `onMoveToRight` below, offered through the SAME docked band's own overflow menu rather than
-   * a second control living in the right aside. A panel sits in AT MOST one slot
-   * (`lib/panelSlots.ts`), so `rightOccupant` — when it names a panel this band family can ever
-   * dock (`studio`/`cli`/`shell`; `contents`/`hardware` are right-slot only) — is always the OTHER
-   * one from whatever is docked here, never a duplicate of it.
-   *
-   * `openSlotPanel(panel, 'bottom')` is the ONE write — deliberately not `moveSlotPanel` (the exact
-   * reason `onMoveToRight` below gives for the opposite direction: the panel is shown, so a `move`
-   * would behave the same, but `open` is the one call every trigger of this gesture in the codebase
-   * already agrees on). For `studio` that write is the whole of it (its target re-derives from
-   * `slotLayout` on every render, see `SessionsPage`'s `studioTarget`); for `cli`/`shell` the docked
-   * band's own `target` preference is a SEPARATE, local piece of state (`ShellBand`'s own header
-   * explains why) that this call does not touch directly — `ShellBand` follows `bottomOccupant`
-   * reactively instead (its own `useEffect`), so the move is visible to the one screen that has to
-   * display it however it was triggered, not only from that band's own bar. Before this,
-   * `SessionsPage.tsx`'s now-removed `rightSlotToolbar` called `movePanel` directly, from OUTSIDE
-   * this component and with no way to reach `ShellBand`'s `chooseTarget` at all — the store moved
-   * the panel correctly and the docked band kept showing whatever it last had a `target` for (or
-   * nothing), which read as "this button only closes the right aside".
-   */
-  const movableOnRight = rightOccupant === 'studio' || rightOccupant === 'cli' || rightOccupant === 'shell'
-    ? rightOccupant : null
-  const moveDownEntries: BandOverflowEntry[] = movableOnRight ? [{
-    id: 'move-down',
-    label: pt
-      ? `Trazer ${movableOnRight === 'studio' ? 'o Studio' : targetLabel(movableOnRight, session.harness, lang)} para baixo`
-      : `Bring ${movableOnRight === 'studio' ? 'the Studio' : targetLabel(movableOnRight, session.harness, lang)} to the bottom`,
-    icon: <PanelBottomOpen size={14} />,
-    onSelect: () => openSlotPanel(movableOnRight, 'bottom'),
-  }] : []
   const taskControl = (
     <SessionTitleFlag
       session={{
@@ -466,7 +457,6 @@ export function SessionPanel({
           onBarPick={onPanelBarPick}
           studioSeen={studioSeen}
           taskControl={taskControl}
-          extraOverflowEntries={moveDownEntries}
           fullscreen={studioFullscreen === true}
           onFullscreenChange={onStudioFullscreenChange ?? (() => {})}
           {...(onStudioBandRef ? { contentRef: onStudioBandRef } : {})}
@@ -497,7 +487,6 @@ export function SessionPanel({
           // as 'cli' by the time it got here.
           bottomOccupant={slotLayout.bottom === 'cli' || slotLayout.bottom === 'shell' ? slotLayout.bottom : null}
           taskControl={taskControl}
-          extraOverflowEntries={moveDownEntries}
           /*
            * `openSlotPanel`, deliberately NOT `moveSlotPanel` (C3's second half). The docked band's
            * own `cli`/`shell` preference (`shellBand.ts`'s `target`) is never written through
@@ -527,7 +516,6 @@ export function SessionPanel({
           onBarPick={onPanelBarPick}
           studioSeen={studioSeen}
           taskControl={taskControl}
-          extraOverflowEntries={moveDownEntries}
           reason="relayed"
         />
       )}
@@ -553,7 +541,7 @@ export function SessionPanel({
  */
 function StudioBand({
   lang, open, columnHeight, onToggleOpen, onMoveToRight, onClose, barEntries, onBarPick, studioSeen,
-  taskControl, extraOverflowEntries, contentRef, fullscreen, onFullscreenChange,
+  taskControl, contentRef, fullscreen, onFullscreenChange,
 }: {
   lang: 'pt' | 'en'
   open: boolean
@@ -584,10 +572,6 @@ function StudioBand({
   onBarPick: (id: PanelBarId) => void
   studioSeen: boolean
   taskControl: ReactNode
-  /** "Bring [cli/shell] to the bottom" (owner feedback, 2026-09-17) — present exactly when one of
-   *  them sits in the right slot while THIS band shows the Studio; see `SessionPanel`'s own
-   *  `moveDownEntries`. Absent otherwise, never a menu entry with nothing to do. */
-  extraOverflowEntries?: readonly BandOverflowEntry[]
   contentRef?: (el: HTMLDivElement | null) => void
 }) {
   const pt = lang === 'pt'
@@ -617,7 +601,7 @@ function StudioBand({
       if (!d) return
       // Grows UPWARD, exactly like `ShellBand`'s own handle: docked at the bottom, so dragging up
       // must make it taller.
-      const resolved = resolveStudioBandDrag(d.startH + (d.startY - clientY), columnHeight)
+      const resolved = resolveBandDrag(d.startH + (d.startY - clientY), columnHeight)
       // `height`/`full` are ALWAYS applied — never skipped in favour of only flipping `fullscreen`
       // — because they stay exactly what the ORDINARY snap would have answered (see
       // `resolveStudioBandDrag`'s own header): this is what leaves a SANE, column-filling record
@@ -659,15 +643,21 @@ function StudioBand({
       // TRUE FULL SCREEN covers the WHOLE VIEWPORT — the sticky header, the fleet aside, everything
       // — not merely the centre column `heightPrefs.full` already fills; `STUDIO_FULLSCREEN_Z` sits
       // comfortably below every modal (`ConfirmModal` is 2000) so a "close without saving" dialog
-      // still draws over it. FULL (design item 7, unaffected by this) makes the root flex-stretch
-      // within `SessionPanel`'s own column instead, competing with the chat area's own `flex: 1,
-      // minHeight: 0` for the same space — which is what lets the band reach the column's actual
-      // height without ever measuring a pixel figure that has to subtract the chat area's chrome by
-      // hand. Neither: sized by its own content (the bar plus whatever explicit height the content
-      // box below asks for), same as always.
+      // still draws over it.
+      //
+      // FULL (design item 7) is an EXPLICIT PIXEL HEIGHT, never `flex: '1 1 auto'` — see
+      // `resolveBandDrag`'s own header in `shellBand.ts` for the whole story of the bug that shape
+      // was. `renderedHeight` already resolves to the measured `columnHeight` while `heightPrefs.full`
+      // is true, so this is the SAME number the content box below spends via its own `flex: '1 1
+      // auto'` — the root states the total, the content box fills whatever the header/handle above it
+      // leave over, and the two can never add up to more or less than the column. Gated on `open`:
+      // a COLLAPSED band shows only its header row and must stay auto-sized to it, whatever `full`
+      // says — the bar's own click is what set `full`, not what asks to render it this frame.
       ...(fullscreen
         ? { position: 'fixed', inset: 0, zIndex: STUDIO_FULLSCREEN_Z }
-        : heightPrefs.full ? { flex: '1 1 auto', minHeight: 0 } : { flexShrink: 0 }),
+        : open && heightPrefs.full
+          ? { height: renderedHeight, flexShrink: 0 }
+          : { flexShrink: 0 }),
       display: 'flex', flexDirection: 'column',
       borderTop: '1px solid var(--border)', background: 'var(--bg-surface)',
     }}>
@@ -701,13 +691,20 @@ function StudioBand({
             simply reads `on` here, since this bar IS the Studio. */}
         <PanelBar entries={barEntries} lang={lang} studioSeen={studioSeen} onPick={onBarPick} compact={compact} />
         <span style={{ flex: 1 }} />
+        {/* THE ONE SHARED MENU BUILDER (`lib/panelMenu.ts`) — this bar's own "⋯" says exactly what it
+            says everywhere the Studio can be, and names only the Studio, never a different panel
+            sitting somewhere else (see this component's own module header on the bug that fixes). */}
         <BandOverflowMenu
           label={pt ? 'Mais ações' : 'More actions'}
-          entries={[
-            { id: 'move', label: pt ? 'Mover para a direita' : 'Move to the right', icon: <PanelRightOpen size={14} />, onSelect: onMoveToRight },
-            ...(extraOverflowEntries ?? []),
-            { id: 'close', label: pt ? 'Fechar o Studio' : 'Close the Studio', icon: <X size={14} />, onSelect: onClose },
-          ]}
+          entries={panelMenuEntries({
+            panel: 'studio', slot: 'bottom', lang, panelName: 'Studio',
+            fullscreenAvailable: true, fullscreen,
+          }).map(entry => ({
+            id: entry.id, label: entry.label, icon: panelMenuIconFor(entry.iconId),
+            onSelect: entry.id === 'move-right' ? onMoveToRight
+              : entry.id === 'fullscreen' || entry.id === 'exit-fullscreen' ? () => onFullscreenChange(!fullscreen)
+              : onClose,
+          }))}
         />
         <button
           className="ag-tap-icon"
@@ -801,7 +798,7 @@ function StudioBand({
  * explanation.
  */
 function PanelBarBand({
-  lang, open, onToggleOpen, barEntries, onBarPick, studioSeen, taskControl, extraOverflowEntries, reason,
+  lang, open, onToggleOpen, barEntries, onBarPick, studioSeen, taskControl, reason,
 }: {
   lang: 'pt' | 'en'
   open: boolean
@@ -810,9 +807,6 @@ function PanelBarBand({
   onBarPick: (id: PanelBarId) => void
   studioSeen: boolean
   taskControl: ReactNode
-  /** "Bring [Studio/cli] to the bottom" (owner feedback, 2026-09-17) — see `SessionPanel`'s own
-   *  `moveDownEntries`. `BandOverflowMenu` itself renders nothing when this is empty. */
-  extraOverflowEntries?: readonly BandOverflowEntry[]
   reason: 'relayed'
 }) {
   const pt = lang === 'pt'
@@ -845,11 +839,10 @@ function PanelBarBand({
         {taskControl}
         <PanelBar entries={barEntries} lang={lang} studioSeen={studioSeen} onPick={onBarPick} compact={compact} />
         <span style={{ flex: 1 }} />
-        {/* "Bring the Studio to the bottom" (owner feedback, 2026-09-17) — the ONE place this gesture
-            is offered when nothing is docked here yet: `BandOverflowMenu` itself renders nothing
-            when `extraOverflowEntries` is empty, so a session with nothing on the right adds no
-            empty "⋯" nobody asked for. */}
-        <BandOverflowMenu label={pt ? 'Mais ações' : 'More actions'} entries={extraOverflowEntries ?? []} />
+        {/* NO OVERFLOW MENU HERE — this band belongs to no panel of its own (a relayed session has
+            no `cli`/`shell` stream to dock), and there is nothing left to say about a panel sitting
+            elsewhere: see `SessionPanel`'s own module comment on why a menu never names a panel
+            other than the one it belongs to. */}
         <button
           className="ag-tap-icon"
           type="button"

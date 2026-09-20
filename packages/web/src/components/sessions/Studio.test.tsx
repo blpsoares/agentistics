@@ -604,7 +604,10 @@ describe('the watermark', () => {
 
 describe('Studio', () => {
   const render = (turns: LiveTurn[] = [], lang: 'pt' | 'en' = 'en') => renderToStaticMarkup(
-    <Studio sessionId="s1" lang={lang} autosave={false} turns={turns} onExit={() => {}} />,
+    <Studio
+      sessionId="s1" lang={lang} autosave={false} turns={turns} onExit={() => {}}
+      slot="right" onMove={() => {}}
+    />,
   )
 
   test('before the root listing arrives it SAYS it is reading — the tree draws nothing there', () => {
@@ -646,15 +649,26 @@ describe('Studio', () => {
 describe('studioGearEntries — the gear menu\'s own rows, as data', () => {
   const base = {
     lang: 'en' as const, treeCollapsible: false, treeCollapsed: false, treeSide: 'left' as const,
-    fullscreenAvailable: false, fullscreen: false,
+    slot: 'right' as const, fullscreenAvailable: false, fullscreen: false,
   }
 
-  test('with nothing else offered, the ONE row is always Close — the required exit', () => {
-    expect(studioGearEntries(base)).toEqual([{ id: 'close', label: 'Close Studio' }])
+  test('with nothing else offered, the Studio still always offers its OWN move and close — it can always reach the other slot', () => {
+    expect(studioGearEntries(base)).toEqual([
+      { id: 'move-bottom', label: 'Move Studio to the bottom', iconId: 'arrow-down' },
+      { id: 'close', label: 'Close Studio', iconId: 'x' },
+    ])
+  })
+
+  test('at the bottom, the move row points the other way', () => {
+    const ids = studioGearEntries({ ...base, slot: 'bottom' }).map(e => e.id)
+    expect(ids).toEqual(['move-right', 'close'])
   })
 
   test('and in Portuguese', () => {
-    expect(studioGearEntries({ ...base, lang: 'pt' })).toEqual([{ id: 'close', label: 'Fechar Studio' }])
+    expect(studioGearEntries({ ...base, lang: 'pt' })).toEqual([
+      { id: 'move-bottom', label: 'Mover Studio para baixo', iconId: 'arrow-down' },
+      { id: 'close', label: 'Fechar Studio', iconId: 'x' },
+    ])
   })
 
   test('the tree rows are ABSENT with no split — a row that does nothing is worse than none', () => {
@@ -697,27 +711,43 @@ describe('studioGearEntries — the gear menu\'s own rows, as data', () => {
     expect(ids).not.toContain('fullscreen')
   })
 
-  test('full screen states its CURRENT value, both directions', () => {
+  test('full screen states its CURRENT value, both directions, with its own dedicated icon pair', () => {
     const off = studioGearEntries({ ...base, fullscreenAvailable: true, fullscreen: false })
     expect(off.find(e => e.id === 'fullscreen')?.label).toBe('Full screen')
+    expect(off.find(e => e.id === 'fullscreen')?.iconId).toBe('maximize')
     const on = studioGearEntries({ ...base, fullscreenAvailable: true, fullscreen: true })
-    expect(on.find(e => e.id === 'fullscreen')?.label).toBe('Exit full screen')
+    expect(on.find(e => e.id === 'exit-fullscreen')?.label).toBe('Exit full screen')
+    expect(on.find(e => e.id === 'exit-fullscreen')?.iconId).toBe('minimize')
   })
 
   test('and in Portuguese', () => {
     const off = studioGearEntries({ ...base, lang: 'pt', fullscreenAvailable: true, fullscreen: false })
     expect(off.find(e => e.id === 'fullscreen')?.label).toBe('Tela cheia')
     const on = studioGearEntries({ ...base, lang: 'pt', fullscreenAvailable: true, fullscreen: true })
-    expect(on.find(e => e.id === 'fullscreen')?.label).toBe('Sair da tela cheia')
+    expect(on.find(e => e.id === 'exit-fullscreen')?.label).toBe('Sair da tela cheia')
   })
 
-  test('every row, in order — tree first (what StudioBar used to carry), full screen next, close LAST', () => {
+  test('every row, in order — tree first (what StudioBar used to carry), move next, full screen after, close LAST', () => {
     const everything = studioGearEntries({
       lang: 'en', treeCollapsible: true, treeCollapsed: false, treeSide: 'left',
-      fullscreenAvailable: true, fullscreen: false,
+      slot: 'bottom', fullscreenAvailable: true, fullscreen: false,
     })
-    expect(everything.map(e => e.id)).toEqual(['tree-toggle', 'tree-side', 'fullscreen', 'close'])
+    expect(everything.map(e => e.id)).toEqual(['tree-toggle', 'tree-side', 'move-right', 'fullscreen', 'close'])
   })
+
+  test(
+    'MOVE NAMES ONLY THE STUDIO — this menu is now the Studio\'s ONE menu wherever it is, so it ' +
+    'must never disagree with itself about where it would go (owner, 2026-09-19: "ao clicar na ' +
+    'engrenagem nao aparecem as opcoes corretas de mover")',
+    () => {
+      const atRight = studioGearEntries({ ...base, slot: 'right' })
+      expect(atRight.find(e => e.id === 'move-bottom')).toBeDefined()
+      expect(atRight.find(e => e.id === 'move-right')).toBeUndefined()
+      const atBottom = studioGearEntries({ ...base, slot: 'bottom' })
+      expect(atBottom.find(e => e.id === 'move-right')).toBeDefined()
+      expect(atBottom.find(e => e.id === 'move-bottom')).toBeUndefined()
+    },
+  )
 })
 
 /**
@@ -730,7 +760,10 @@ describe('studioGearEntries — the gear menu\'s own rows, as data', () => {
  */
 describe('the Studio draws its gear from the first frame', () => {
   const render = (lang: 'pt' | 'en' = 'en') => renderToStaticMarkup(
-    <Studio sessionId="s1" lang={lang} autosave={false} turns={[]} onExit={() => {}} />,
+    <Studio
+      sessionId="s1" lang={lang} autosave={false} turns={[]} onExit={() => {}}
+      slot="right" onMove={() => {}}
+    />,
   )
 
   test('before any listing has arrived, the gear trigger is already on screen', () => {

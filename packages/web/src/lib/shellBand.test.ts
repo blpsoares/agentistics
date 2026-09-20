@@ -1,7 +1,7 @@
 import { describe, expect, it, test } from 'bun:test'
 import {
   BAND_FULLSCREEN_OVERSHOOT_PX, BAND_MIN_PX, BAND_SNAP_THRESHOLD_PX, DEFAULT_BAND_PREFS,
-  clampBandHeight, readBandPrefs, resolveBandHeight, resolveStudioBandDrag, shellErrorText,
+  clampBandHeight, readBandPrefs, resolveBandDrag, resolveBandHeight, shellErrorText,
   wantsFullscreen,
   bandGeometry, shellApiUrl, shellWatching, shellWhere, writeBandGeometry, writeBandPrefs, type BandPrefs,
 } from './shellBand'
@@ -99,7 +99,7 @@ describe('resolveBandHeight — the free-resize snap (design item 7)', () => {
   })
 })
 
-describe('wantsFullscreen / resolveStudioBandDrag — the Studio full-screen threshold', () => {
+describe('wantsFullscreen / resolveBandDrag — the full-screen threshold, shared by both bands', () => {
   it('an ordinary height, well short of the column, never wants full screen', () => {
     expect(wantsFullscreen(400, 900)).toBe(false)
   })
@@ -125,9 +125,9 @@ describe('wantsFullscreen / resolveStudioBandDrag — the Studio full-screen thr
     expect(wantsFullscreen(10_000, Number.NaN)).toBe(false)
   })
 
-  it('resolveStudioBandDrag bundles the ordinary snap with the fullscreen want, in one call', () => {
-    expect(resolveStudioBandDrag(400, 900)).toEqual({ height: 400, full: false, fullscreen: false })
-    expect(resolveStudioBandDrag(900, 900)).toEqual({ height: 900, full: true, fullscreen: false })
+  it('resolveBandDrag bundles the ordinary snap with the fullscreen want, in one call', () => {
+    expect(resolveBandDrag(400, 900)).toEqual({ height: 400, full: false, fullscreen: false })
+    expect(resolveBandDrag(900, 900)).toEqual({ height: 900, full: true, fullscreen: false })
   })
 
   it('once past the overshoot, height/full stay exactly what the ORDINARY snap would have answered', () => {
@@ -135,9 +135,68 @@ describe('wantsFullscreen / resolveStudioBandDrag — the Studio full-screen thr
     // height — `height`/`full` here are identical to `resolveBandHeight(10_000, 900)` alone, so
     // leaving full screen can fall back to this record and land on a sane, column-filling band
     // rather than on whatever the drag's raw number happened to be.
-    const dragged = resolveStudioBandDrag(10_000, 900)
+    const dragged = resolveBandDrag(10_000, 900)
     expect(dragged).toEqual({ height: 900, full: true, fullscreen: true })
     expect({ height: dragged.height, full: dragged.full }).toEqual(resolveBandHeight(10_000, 900))
+  })
+
+  // THE REPORTED FREEZE, REPRODUCED AS A SEQUENCE OF SMALL DRAGS rather than one big jump — "aos
+  // poucos pra cima" (gradually, upward). Each `it` below is one mousedown→mousemove→mouseup cycle;
+  // `startH` for gesture N is `renderedHeight` from the END of gesture N-1, exactly as
+  // `StudioBand`/`ShellBand`'s own `onDragStart` reads it off their component state. This is the
+  // STATE MACHINE's contract: as long as every caller renders `full` as an EXPLICIT height (never
+  // `flex-grow`, see this module's own `resolveBandDrag` header), `renderedHeight` and the box on
+  // screen can never disagree, so this sequence can never desync the way the live bug did.
+  it('a run of small upward drags reaches full and STAYS there — no jump back on the next nudge', () => {
+    const columnHeight = 900
+    let height = 240
+    let full = false
+    const renderedHeight = () => (full && columnHeight > 0 ? columnHeight : height)
+    const drag = (deltaUpPx: number) => {
+      const startH = renderedHeight()
+      const wantedPx = startH + deltaUpPx // dragging UP grows the band, exactly like the real handle
+      const resolved = resolveBandDrag(wantedPx, columnHeight)
+      height = resolved.height
+      full = resolved.full
+      return resolved
+    }
+    // Five small nudges of 40px each: 240 -> 280 -> 320 -> 360 -> 400 -> 440, all ordinary.
+    for (let i = 0; i < 5; i++) {
+      const r = drag(40)
+      expect(r.full).toBe(false)
+      expect(r.fullscreen).toBe(false)
+    }
+    expect(renderedHeight()).toBe(440)
+    // Now nudge it the rest of the way, in more small steps, crossing the snap threshold.
+    for (let i = 0; i < 11; i++) drag(40) // 440 -> 880 (11 * 40), inside the snap threshold of 900
+    expect(full).toBe(true)
+    expect(renderedHeight()).toBe(columnHeight) // FILLS the column — never a smaller "middle" value
+    // THE REPORTED BUG: a further TINY nudge (well under `BAND_FULLSCREEN_OVERSHOOT_PX`) must stay
+    // exactly full — never an immediate, surprise jump into full screen from a movement that small.
+    // In the broken world this fired because `startH` for THIS gesture was read as "900" (what the
+    // STATE said) while the box on screen was really ~381px (what the flex competition rendered),
+    // so even a few pixels of real movement computed as a `wantedPx` already past the overshoot.
+    const tinyNudge = drag(5)
+    expect(tinyNudge.fullscreen).toBe(false)
+    expect(renderedHeight()).toBe(columnHeight) // still exactly full, never smaller and never larger
+    // A DELIBERATE further push, past the actual overshoot threshold, is the one thing that may
+    // still escalate — that is the feature, not the bug, and it is exercised on its own below.
+    const deliberate = drag(BAND_FULLSCREEN_OVERSHOOT_PX)
+    expect(deliberate.fullscreen).toBe(true)
+  })
+
+  it('past the overshoot from a TRUE full state, height/full never fall back to a smaller "middle" value', () => {
+    const columnHeight = 900
+    const filled = resolveBandDrag(columnHeight, columnHeight)
+    expect(filled).toEqual({ height: 900, full: true, fullscreen: false })
+    // Drag further, past BAND_FULLSCREEN_OVERSHOOT_PX, starting from the ALREADY-full height —
+    // exactly the second gesture in the reported sequence.
+    const escalated = resolveBandDrag(filled.height + BAND_FULLSCREEN_OVERSHOOT_PX, columnHeight)
+    expect(escalated.fullscreen).toBe(true)
+    // Full screen and the band height never disagree: the height/full pair underneath full screen
+    // is IDENTICAL to the ordinary "fills the column" state, so leaving full screen lands there
+    // rather than on some other, smaller value a caller might mistake for "the middle".
+    expect({ height: escalated.height, full: escalated.full }).toEqual({ height: filled.height, full: filled.full })
   })
 })
 
