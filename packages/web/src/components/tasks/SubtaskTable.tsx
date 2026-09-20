@@ -23,6 +23,19 @@
  * doc comment); `subtaskGroups.ts` holds the pure reads (`isGroupSubtask`/`isGroupMember`/`groupOf`/
  * candidate lists) that component and `TaskTable.tsx` share.
  *
+ * **The rows CLUSTER, they do not just carry a caption** (product feedback, 2026-09-19: a caption
+ * under a member row was the ONLY signal that it belonged to a group, which reads as a flat list
+ * with a label rather than one connected unit). `clusterSubtaskRows` (`subtaskGroups.ts`) reorders
+ * the DISPLAY only — never `p.subtasks` itself, never a write — so every member renders directly
+ * under its group regardless of creation order (the common case is grouping two subtasks that
+ * already exist, so the group's own row is usually the newest and would otherwise land at the
+ * bottom with its members scattered above it). A clustered row gets an inset left bar plus a shared
+ * background tint (`clusterBarStyle`/`clusterTintStyle`) running unbroken from the group's header
+ * through its last member, and a member's title cell is indented under it — the caption is dropped
+ * for a properly clustered member (the position and the bar already say it) and kept only for an
+ * ORPHANED one (`groupOf` returns `undefined`: its group is gone, so there is no cluster to place it
+ * in and the words are the only thing left saying where it came from).
+ *
  * The Cost/Tokens columns below read `p.subtaskRollups` through `subtaskRollupOf`, which resolves by
  * the subtask's OWN id, always (`rollupKeyOf` — the legacy `groupId`-based union §B once used is
  * superseded and inert) — and render them with the exact same formatters `TaskTable.tsx`'s own
@@ -50,7 +63,9 @@ import { DatePicker } from '../DatePicker'
 import { TaskProgressBar } from './TaskProgressBar'
 import { subtaskSessions } from './SubtaskSessions'
 import { SubtaskActionsMenu } from './SubtaskActionsMenu'
-import { groupOf, isGroupMember, isGroupSubtask } from './subtaskGroups'
+import {
+  clusterBarStyle, clusterSubtaskRows, clusterTintStyle, groupOf, isGroupMember, isGroupSubtask,
+} from './subtaskGroups'
 import { SessionRef } from './SessionRef'
 import { StagedSessionCompose } from './StagedSessionCompose'
 import { boardCopy, statusLabel, type Lang } from './copy'
@@ -255,7 +270,7 @@ export function SubtaskTable(p: SubtaskTableProps) {
               </td>
             </tr>
           )}
-          {p.subtasks.map(t => {
+          {clusterSubtaskRows(p.subtasks).map(({ subtask: t, depth, clustered }) => {
             // A GROUP MEMBER (§F.1) never carries a session of its own — refused server-side
             // (`subtask_in_group`) — so it has no rollup bucket at all (`subtaskViews` excludes it
             // outright). `r` is therefore `undefined` for it by construction, which already renders
@@ -267,13 +282,19 @@ export function SubtaskTable(p: SubtaskTableProps) {
             const cost = costCellFor(r)
             const tok = tokensCellFor(r)
             const view = p.subtaskRollups.find(v => v.id === t.id)
-            const parentGroup = isMember ? groupOf(t, p.subtasks) : undefined
+            // Only an ORPHANED member reaches this — a properly clustered one (`clustered === true`)
+            // is drawn directly under its group by `clusterSubtaskRows`, and the position plus the
+            // bar/tint below already say where it belongs; the caption would just repeat that.
+            const parentGroup = isMember && !clustered ? groupOf(t, p.subtasks) : undefined
+            const tint = clusterTintStyle(clustered)
             return (
             <tr key={t.id}>
               {/* ONE gear, leading the row — every action that used to be a scattered icon-only
                   button (blocked-by, group forming, staged-session compose/edit/fire, remove) lives
-                  in this single labeled popover now. See `SubtaskActionsMenu`'s own doc comment. */}
-              <td style={{ ...cell, width: 1 }}>
+                  in this single labeled popover now. See `SubtaskActionsMenu`'s own doc comment.
+                  The inset left bar (`clusterBarStyle`) lands here — the leading edge of every
+                  clustered row, header through last member, so it reads as one continuous stripe. */}
+              <td style={{ ...cell, width: 1, ...tint, ...clusterBarStyle(clustered) }}>
                 <SubtaskActionsMenu
                   subtask={t}
                   siblings={p.subtasks}
@@ -290,7 +311,9 @@ export function SubtaskTable(p: SubtaskTableProps) {
                   }}
                 />
               </td>
-              <td style={{ ...cell, minWidth: 180 }}>
+              {/* A MEMBER is indented one level under its group's header — the visual nesting that
+                  replaces the old "parte do grupo" caption for every properly clustered row. */}
+              <td style={{ ...cell, minWidth: 180, ...tint, ...(depth === 1 ? { paddingLeft: 30 } : {}) }}>
                 <input
                   defaultValue={t.title}
                   onBlur={e => { if (e.target.value.trim() !== t.title) void p.onPatch(t.id, { title: e.target.value }) }}
@@ -299,6 +322,10 @@ export function SubtaskTable(p: SubtaskTableProps) {
                     color: t.done ? 'var(--text-tertiary)' : 'var(--text-primary)',
                     textDecoration: t.done ? 'line-through' : 'none',
                     fontSize: 12.5,
+                    // A GROUP's header reads as a container's title, not another row — the bar and
+                    // tint carry most of it, but the weight is what makes it read as a HEADING when
+                    // the row is scanned rather than compared cell-by-cell against its neighbours.
+                    fontWeight: isGroup && clustered ? 700 : undefined,
                   }}
                 />
                 {/* A GROUP's own progress, from its members' `status` (§F.1's `groupProgress`) —
@@ -307,10 +334,10 @@ export function SubtaskTable(p: SubtaskTableProps) {
                 {isGroup && view?.groupProgress && (
                   <TaskProgressBar done={view.groupProgress.done} total={view.groupProgress.total} height={3} />
                 )}
-                {/* A MEMBER names which group it belongs to right on the row — the menu above
-                    repeats it, but this is the fact a reader should not have to open anything to
-                    see. */}
-                {isMember && (
+                {/* An ORPHANED member only (its group is gone from this list) — the one case with no
+                    cluster to place it in, so the words are the only thing left saying where it came
+                    from. A properly clustered member says nothing here; its position already does. */}
+                {isMember && !clustered && (
                   <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)', marginTop: 2 }}>
                     {p.lang === 'pt' ? 'parte do grupo: ' : 'part of group: '}
                     <span style={{ color: 'var(--text-secondary)' }}>
@@ -327,13 +354,13 @@ export function SubtaskTable(p: SubtaskTableProps) {
                   </div>
                 )}
               </td>
-              <td style={{ ...cell, minWidth: 90, whiteSpace: 'nowrap' }}>
+              <td style={{ ...cell, minWidth: 90, whiteSpace: 'nowrap', ...tint }}>
                 <StatusPick
                   value={t.status} lang={p.lang}
                   onPick={s => void pickStatus(t, s)}
                 />
               </td>
-              <td style={cell}>
+              <td style={{ ...cell, ...tint }}>
                 <input
                   defaultValue={t.assignee ?? ''} placeholder="—"
                   onBlur={e => { if (e.target.value !== (t.assignee ?? '')) void p.onPatch(t.id, { assignee: e.target.value }) }}
@@ -343,20 +370,20 @@ export function SubtaskTable(p: SubtaskTableProps) {
               {/* The dashboard's own picker, not `<input type="date">`: one calendar in the app,
                   and a control that fits the column instead of overflowing it. The label is empty
                   because the column heading above already says which date this is. */}
-              <td style={cell}>
+              <td style={{ ...cell, ...tint }}>
                 <DatePicker
                   value={t.startDate ?? ''} label="" placeholder="—" lang={p.lang}
                   onChange={v => void p.onPatch(t.id, { startDate: v })}
                 />
               </td>
-              <td style={cell}>
+              <td style={{ ...cell, ...tint }}>
                 <DatePicker
                   value={t.dueDate ?? ''} label="" placeholder="—" lang={p.lang}
                   min={t.startDate || undefined}
                   onChange={v => void p.onPatch(t.id, { dueDate: v })}
                 />
               </td>
-              <td style={{ ...cell, minWidth: 190 }}>
+              <td style={{ ...cell, minWidth: 190, ...tint }}>
                 {/* A MEMBER can never hold a session (`subtask_in_group`, refused server-side) —
                     so it gets no filing control at all, not a control that always refuses. Its
                     own chips are moot for the same reason: it has none, and never a UNION of its
@@ -379,10 +406,10 @@ export function SubtaskTable(p: SubtaskTableProps) {
                   bucket, but nobody has filed a session here yet) both render as a fully EMPTY
                   cell — no field at all, not even "N/A" — via `CostCellView`/`TokensCellView`'s
                   `isUntracked` check. */}
-              <td style={{ ...cell, textAlign: 'right' }}>
+              <td style={{ ...cell, textAlign: 'right', ...tint }}>
                 <CostCellView r={r} cost={cost} money={money} />
               </td>
-              <td style={{ ...cell, textAlign: 'right' }}>
+              <td style={{ ...cell, textAlign: 'right', ...tint }}>
                 <TokensCellView tok={tok} />
               </td>
             </tr>
