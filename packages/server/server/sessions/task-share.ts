@@ -89,16 +89,22 @@ export interface ShareInputs {
 export function toSharedTask(task: Task, o: ShareInputs): SharedTask {
   const mine = o.rowsOf(task, o.rows)
   const sessionIds: string[] = []
-  let withheld = 0
+  // A SET, like `sessionIds` beside it: `mine` is registry ROWS and a conversation reopened N times
+  // is N rows, so counting per row reported one withheld conversation as N withheld sessions — the
+  // count the central prints as "measured short by N". Only the identity of the conversation
+  // matters here, never which of its rows is asked (that is `distinctConversations`' question, for
+  // the surfaces that read a row's filing).
+  const withheldIds = new Set<string>()
   for (const r of mine) {
     const id = r.conversationId
     if (!id) continue
     if (o.sharedIds.has(id)) {
       if (!sessionIds.includes(id)) sessionIds.push(id)
     } else if (o.knownIds.has(id)) {
-      withheld++
+      withheldIds.add(id)
     }
   }
+  const withheld = withheldIds.size
   return {
     task: shareRecord(task),
     comments: o.comments.filter(c => c.taskId === task.id).map(shareComment),

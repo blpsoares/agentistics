@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'bun:test'
 import type { SessionMeta } from '@agentistics/core'
-import { subtaskStats, taskStats } from './task-stats'
+import { scopedTaskStats, subtaskStats, taskStats } from './task-stats'
 import type { ManagedSession } from './types'
 
 const row = (over: Partial<ManagedSession> = {}): ManagedSession => ({
@@ -145,5 +145,30 @@ describe('subtaskStats', () => {
     expect(result).not.toBeNull()
     expect(result!.models.map(b => b.key).sort()).toEqual(['claude-sonnet-5', 'gpt-5'])
     expect(result!.harnesses.map(b => b.key).sort()).toEqual(['claude', 'codex'])
+  })
+})
+
+describe('one conversation, several rows — counted once, and bucketed by its NEWEST row', () => {
+  // A filing is a MOVE and every reopen mints a new row, so one conversation can hold a row on the
+  // task, one on s1 and a running one on s2. Its files/lines/commits are ONE measurement.
+  const rows = [
+    row({ id: 'old', conversationId: 'c1', createdAt: '2026-09-10T10:00:00.000Z' }), // direct
+    row({ id: 'mid', conversationId: 'c1', subtaskId: 's1', createdAt: '2026-09-11T10:00:00.000Z' }),
+    row({ id: 'live', conversationId: 'c1', subtaskId: 's2', createdAt: '2026-09-12T10:00:00.000Z' }),
+  ]
+  const metas = metasOf(meta({ session_id: 'c1', files_modified: 3, git_commits: 1 }))
+  const createdAt = '2026-09-05T10:00:00.000Z'
+
+  it('scopedTaskStats does not multiply the evidence by the number of rows', () => {
+    const s = scopedTaskStats({ rows, metas, createdAt })!
+    expect(s.filesModified).toBe(3)
+    expect(s.commits).toBe(1)
+    expect(s.harnesses).toEqual([{ key: 'claude', sessions: 1, tokens: 1000 }])
+  })
+
+  it('subtaskStats finds the conversation ONLY under the subtask it is filed on now', () => {
+    expect(subtaskStats({ subtaskId: 's2', rows, metas, createdAt })!.filesModified).toBe(3)
+    expect(subtaskStats({ subtaskId: 's1', rows, metas, createdAt })).toBeNull()
+    expect(subtaskStats({ subtaskId: null, rows, metas, createdAt })).toBeNull()
   })
 })

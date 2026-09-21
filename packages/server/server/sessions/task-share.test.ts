@@ -70,6 +70,22 @@ describe('toSharedTask', () => {
     expect(out.sessionsWithheld).toBe(1)
   })
 
+  it('counts a withheld CONVERSATION once, however many rows a reopening left behind', () => {
+    // `sessionsWithheld` is a count of SESSIONS: the central prints it as "measured short by N".
+    // Four rows of one withheld conversation are one withheld session, not four.
+    const out = toSharedTask(task({ shared: true }), inputs({
+      rows: [
+        row({ id: 'r1', conversationId: 'c1' }),
+        row({ id: 'r2', conversationId: 'c1' }),
+        row({ id: 'r3', conversationId: 'c1' }),
+        row({ id: 'r4', conversationId: 'c2' }),
+      ],
+      sharedIds: new Set(),
+      knownIds: new Set(['c1', 'c2']),
+    }))
+    expect(out.sessionsWithheld).toBe(2)
+  })
+
   it('ships each shared session once, and never a row with no conversation', () => {
     const out = toSharedTask(task({ shared: true }), inputs({
       rows: [
