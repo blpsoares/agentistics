@@ -3648,6 +3648,12 @@ export default function AppLayout() {
                  `lib/sessionTaskLink.ts`, which is why this costs no id lookup. */
               {...(selectedFleetSession.task ? { task: selectedFleetSession.task } : {})}
               onOpenTask={ref => navigate(`/tasks/${encodeURIComponent(ref)}`)}
+              /* THE LIVE REFERENCE — the aside's Live tab, on the step that is running when there is
+                 one. What is running is read by the card itself from `artifactsStore` under this
+                 row's id (`SessionsPage` publishes it), so this component does not subscribe. The
+                 aside always has a Live tab while a session is selected. */
+              rowId={selectedFleetSession.id}
+              onOpenLive={ref => openArtifacts('live', ref)}
             />
           </div>
         </div>
