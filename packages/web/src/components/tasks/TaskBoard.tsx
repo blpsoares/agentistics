@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Activity, Bot, CalendarClock, CircleCheck, ListChecks, MessageSquare, Paperclip, Terminal } from 'lucide-react'
-import { sortRows, type SortSpec, type TaskStatusDef } from '@agentistics/core'
+import { canReorderBy, DEFAULT_SORT, sortRows, type SortSpec, type TaskStatusDef } from '@agentistics/core'
 import {
   PRIORITY, cardStyle, claimLeft, fmtInt, fmtTokens, liveStatusOrder, microLabel,
   numeric, pill, statusStyle, surface, type BoardStatus,
@@ -18,7 +18,13 @@ import {
 import type { LaneKey } from './boardPrefs'
 import { TaskProgressBar } from './TaskProgressBar'
 import { HarnessBadges } from './HarnessBadges'
-import { statusLabel } from './copy'
+import { boardCopy, statusLabel } from './copy'
+import { BOARD_SORT_KEYS } from './BoardArrange'
+import { ColumnSortMenu } from './ColumnSortMenu'
+import {
+  clearColumnSort, effectiveSort, hasOverride, pickColumnSort, withColumnSort, type ColumnSorts,
+} from './columnSort'
+import { useIsMobile } from '../../hooks/useIsMobile'
 import { useMoney } from './money'
 import type { TaskListRow } from '../../lib/tasks'
 
@@ -227,7 +233,11 @@ export interface BoardViewProps {
   /** The live fleet, so a card can say which session is on it. Matched by task NAME, which is what
    *  `/api/fleet` carries; a row filed under no task simply never matches. */
   sessions?: readonly { id: string; state: string; harness: string; title: string; task?: string }[]
+  /** The board's own order — the default for every column nobody has sorted by its title. */
   sort: SortSpec
+  /** A column's OWN order, set by clicking its title (`ColumnSortMenu`), by status id. */
+  columnSort: ColumnSorts
+  onColumnSort: (next: ColumnSorts) => void
   lanes: LaneKey
   /** Per-status card limits. A column over its limit SAYS so; nothing is ever blocked. */
   wip: Record<string, number>
@@ -250,7 +260,20 @@ function laneOf(row: TaskListRow, key: LaneKey): string {
 
 export function BoardView(p: BoardViewProps) {
   const { rows, onOpen } = p
+  const isMobile = useIsMobile()
+  const L = boardCopy(p.lang ?? 'en').list
   const [drag, setDrag] = useState<string | null>(null)
+  /**
+   * A drop that was REFUSED because the column is not in hand order. It stays on screen (the column
+   * says why, in words, with the way out beside it) until the next drag starts or a few seconds
+   * pass — a refusal that flashes and vanishes is indistinguishable from a drop that did nothing.
+   */
+  const [refused, setRefused] = useState<{ lane: string; status: BoardStatus } | null>(null)
+  useEffect(() => {
+    if (!refused) return
+    const t = setTimeout(() => setRefused(null), 6000)
+    return () => clearTimeout(t)
+  }, [refused])
   const [over, setOver] = useState<{ lane: string; status: BoardStatus; index: number } | null>(null)
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {
@@ -285,11 +308,16 @@ export function BoardView(p: BoardViewProps) {
         rows: sortRows(
           rows.filter(r => (r.task.status as BoardStatus) === status
             && (p.lanes === 'none' || laneOf(r, p.lanes) === name)),
-          p.sort,
+          effectiveSort(p.sort, p.columnSort, status),
+          { statusOrder: liveStatusOrder(p.statuses) },
         ),
       })),
     }))
-  }, [rows, p.lanes, p.sort, p.columns, p.statuses])
+  }, [rows, p.lanes, p.sort, p.columnSort, p.columns, p.statuses])
+
+  /** May a card be moved to a new POSITION in this column? Only under hand order — see `canReorderBy`. */
+  const reorderable = (status: BoardStatus) =>
+    canReorderBy(effectiveSort(p.sort, p.columnSort, status))
 
   const drop = (lane: string, status: BoardStatus, index: number) => {
     const id = drag
@@ -302,7 +330,12 @@ export function BoardView(p: BoardViewProps) {
     // one gesture would write two facts and leave a card in a column its status does not name if
     // the second failed.
     if ((row.task.status as BoardStatus) !== status) p.onStatus?.(id, status)
-    else p.onMove?.(id, index)
+    // A rank is only meaningful under the order that reads it: a drop under any other sort would
+    // land the card somewhere other than where it was put. REFUSED IN WORDS (the column's note),
+    // never a drop that silently does nothing — and never a silent switch of the column's order
+    // behind the reader's back.
+    else if (reorderable(status)) p.onMove?.(id, index)
+    else setRefused({ lane, status })
   }
 
   return (
@@ -342,6 +375,16 @@ export function BoardView(p: BoardViewProps) {
               const limit = p.wip[col.status]
               const over_ = limit !== undefined && col.rows.length > limit
               const isOverCol = over?.lane === lane.name && over.status === col.status
+              const colSort = effectiveSort(p.sort, p.columnSort, col.status)
+              const canMove = reorderable(col.status)
+              const dragged = drag ? rows.find(r => r.task.id === drag) : undefined
+              // The note is for a card that WOULD reorder here: one coming from another column is a
+              // status change, which a sorted column accepts like any other.
+              const reordering = dragged !== undefined && (dragged.task.status as BoardStatus) === col.status
+              const showRefusal = !canMove && (
+                (isOverCol && reordering)
+                || (refused?.lane === lane.name && refused.status === col.status)
+              )
               return (
                 <section
                   key={col.status}
@@ -358,7 +401,8 @@ export function BoardView(p: BoardViewProps) {
                     // a phone.
                     flex: '0 0 clamp(240px, 78vw, 288px)',
                     scrollSnapAlign: 'start',
-                    outline: isOverCol ? '1px dashed var(--anthropic-orange)' : 'none',
+                    outline: isOverCol && !(reordering && !canMove)
+                      ? '1px dashed var(--anthropic-orange)' : 'none',
                     outlineOffset: 4, borderRadius: 'var(--radius-md)',
                   }}
                 >
@@ -366,10 +410,20 @@ export function BoardView(p: BoardViewProps) {
                     ...surface, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8,
                     borderTop: `2px solid ${s.color}`, position: 'sticky', top: 0, zIndex: 1,
                   }}>
-                    {/* The same word the table's band and every chip print. */}
-                    <span style={{ fontSize: 12, fontWeight: 600, color: s.color }}>
-                      {statusLabel(col.status, p.lang ?? 'en', p.statuses)}
-                    </span>
+                    {/* The same word the table's band and every chip print — and the control that
+                        orders THIS column: pressing the title opens the keys the board offers. */}
+                    <ColumnSortMenu
+                      title={statusLabel(col.status, p.lang ?? 'en', p.statuses)}
+                      color={s.color}
+                      sort={colSort}
+                      overridden={hasOverride(p.columnSort, col.status)}
+                      options={BOARD_SORT_KEYS.map(key => ({ key, label: L.keys[key] ?? key }))}
+                      onPick={key => p.onColumnSort(pickColumnSort(p.sort, p.columnSort, col.status, key))}
+                      onClear={() => p.onColumnSort(clearColumnSort(p.columnSort, col.status))}
+                      tooltip={L.columnSortTitle}
+                      followLabel={L.sortDefault}
+                      isMobile={isMobile}
+                    />
                     <span style={{ ...microLabel, fontSize: 11 }}>
                       {col.rows.length}{limit !== undefined ? ` / ${limit}` : ''}
                     </span>
@@ -383,6 +437,33 @@ export function BoardView(p: BoardViewProps) {
                       >over WIP</span>
                     )}
                   </header>
+                  {showRefusal && (
+                    <div
+                      role="status"
+                      style={{
+                        ...surface, padding: '8px 10px', display: 'grid', gap: 6,
+                        border: '1px dashed var(--anthropic-orange)',
+                        fontSize: 11.5, lineHeight: 1.45, color: 'var(--text-secondary)',
+                      }}
+                    >
+                      <span>{L.columnReorderOff.replace('{key}', L.keys[colSort.key] ?? colSort.key)}</span>
+                      <button
+                        type="button"
+                        // Drops the column back on HAND ORDER (an explicit override when the board's
+                        // own order is something else) — the reader's own click, never a side effect
+                        // of the drag.
+                        onClick={() => {
+                          p.onColumnSort(withColumnSort(p.sort, p.columnSort, col.status, DEFAULT_SORT))
+                          setRefused(null)
+                        }}
+                        style={{
+                          justifySelf: 'start', background: 'none', border: 'none', padding: 0,
+                          cursor: 'pointer', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
+                          color: 'var(--anthropic-orange)', minHeight: isMobile ? 44 : undefined,
+                        }}
+                      >{L.columnUseHand}</button>
+                    </div>
+                  )}
                   {col.rows.length === 0
                     ? (
                       // Short and quiet. An empty column still has to be VISIBLE — a status that
@@ -400,7 +481,7 @@ export function BoardView(p: BoardViewProps) {
                       <div
                         key={r.task.id}
                         draggable
-                        onDragStart={() => setDrag(r.task.id)}
+                        onDragStart={() => { setDrag(r.task.id); setRefused(null) }}
                         onDragEnd={() => { setDrag(null); setOver(null) }}
                         onDragOver={e => {
                           if (!drag) return
@@ -410,7 +491,13 @@ export function BoardView(p: BoardViewProps) {
                           // position is.
                           const box = e.currentTarget.getBoundingClientRect()
                           const after = e.clientY > box.top + box.height / 2
-                          setOver({ lane: lane.name, status: col.status, index: after ? i + 1 : i })
+                          // `-1` = "over this column, but there is no position to offer": a card
+                          // moved within a column that is not in hand order gets no drop line (a
+                          // line would promise a place the drop cannot give it).
+                          setOver({
+                            lane: lane.name, status: col.status,
+                            index: reordering && !canMove ? -1 : after ? i + 1 : i,
+                          })
                         }}
                         style={{
                           borderTop: isOverCol && over?.index === i

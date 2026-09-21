@@ -20,6 +20,7 @@ import {
 } from './board'
 import { PickerMenu } from './PickerMenu'
 import { LANE_KEYS, type LaneKey } from './boardPrefs'
+import type { ColumnSorts } from './columnSort'
 
 /**
  * The orders a KANBAN offers, which are deliberately fewer than the table's.
@@ -38,6 +39,9 @@ const BOARD_SORTS: Array<{ key: SortKey; label: string }> = [
   { key: 'title', label: 'Title' },
 ]
 
+/** The keys alone, for a surface that words them itself (the column titles' sort menu). */
+export const BOARD_SORT_KEYS: readonly SortKey[] = BOARD_SORTS.map(s => s.key)
+
 const LANE_LABEL: Record<LaneKey, string> = {
   none: 'No swimlanes',
   repo: 'Repository',
@@ -49,6 +53,11 @@ const LANE_LABEL: Record<LaneKey, string> = {
 export interface BoardArrangeProps {
   sort: SortSpec
   onSort: (s: SortSpec) => void
+  /** Columns that have been given an order of their own by clicking their title — see
+   *  `ColumnSortMenu`. Only the RESET reads them: it must put those back too, or "Reset" leaves a
+   *  board that is still not the plain one. */
+  columnSorts?: ColumnSorts
+  onColumnSorts?: (next: ColumnSorts) => void
   lanes: LaneKey
   onLanes: (l: LaneKey) => void
   wip: Record<string, number>
@@ -266,10 +275,12 @@ export function BoardArrange(p: BoardArrangeProps) {
 
       <span style={{ flex: 1 }} />
       {(p.sort.key !== 'manual' || p.lanes !== 'none' || limited > 0
-        || p.columns.length !== statusOrder.length) && (
+        || p.columns.length !== statusOrder.length
+        || Object.keys(p.columnSorts ?? {}).length > 0) && (
         <button
           onClick={() => {
             p.onSort({ key: 'manual', dir: 'asc' })
+            p.onColumnSorts?.({})
             p.onLanes('none')
             p.onWip({})
             p.onColumns([...statusOrder])

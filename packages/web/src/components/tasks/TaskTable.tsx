@@ -24,7 +24,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 import {
-  ArrowDown, ArrowUp, Bot, ChevronDown, ChevronRight, Columns3, MessageSquare, Paperclip, Plus,
+  Bot, CheckSquare, ChevronDown, ChevronRight, Columns3, MessageSquare, Paperclip, Plus,
   Rows3, SquareArrowOutUpRight, Trash2, X,
 } from 'lucide-react'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -34,10 +34,17 @@ import {
 } from './board'
 import { useMoney, type Money } from './money'
 import {
-  DEFAULT_SORT, nextSort, PRIORITY_ORDER, sortRows,
-  type SortKey, type SortSpec, type TaskPriorityId, type TaskStatusDef,
+  cycleSort, DEFAULT_SORT, nextSort, PRIORITY_ORDER, sortRows,
+  type SortKey, type SortSpec, type SubtaskSortKey, type SubtaskSortSpec, type TaskPriorityId,
+  type TaskStatusDef,
 } from '@agentistics/core'
 import { readBoardPrefs, writeBoardPrefs } from './boardPrefs'
+import { SortTh } from './SortHeader'
+import {
+  clearTicks, escapeLeavesMode, groupCheck, leaveMode, NO_SELECTION, selectedVisible, setRows,
+  toggleMode, toggleRow, type Selection,
+} from './selection'
+import { orderedSubtasks } from './subtaskSortView'
 import { ConfirmModal } from '../../pages/settings/primitives'
 import { SessionPicker } from './SessionPicker'
 import { DatePicker } from '../DatePicker'
@@ -63,7 +70,8 @@ const SORT_LABEL: Record<string, string> = {
   manual: 'the board order', priority: 'priority', title: 'title', status: 'status',
   created: 'created', updated: 'updated', due: 'due date', assignee: 'owner', cost: 'cost',
   tokens: 'tokens', rounds: 'rounds', sessions: 'sessions', attempts: 'attempts',
-  comments: 'comments', subtasks: 'subtasks', harnesses: 'harnesses',
+  comments: 'comments', subtasks: 'subtasks', progress: 'progress', harnesses: 'harnesses',
+  delivered: 'delivered',
 }
 
 // ---------------------------------------------------------------------------- columns
@@ -88,11 +96,14 @@ export interface ColumnDef {
  * anything. The rest are one click away in the `+` menu.
  */
 export const COLUMNS: ColumnDef[] = [
-  { id: 'status', label: 'Status', width: 116, sort: 'status' },
+  // No `sort` on Status, deliberately: this table is GROUPED by status, so every row inside a band
+  // has the same one and a sort by it would reorder nothing while its arrow lit up — a control that
+  // looks like it works and does not. The order of the bands themselves is the Groups picker's.
+  { id: 'status', label: 'Status', width: 116 },
   { id: 'priority', label: 'Priority', width: 96, sort: 'priority' },
   { id: 'assignee', label: 'Owner', width: 110, sort: 'assignee' },
   { id: 'claim', label: 'Working on it', width: 132 },
-  { id: 'progress', label: 'Progress', width: 132, sort: 'subtasks' },
+  { id: 'progress', label: 'Progress', width: 132, sort: 'progress' },
   { id: 'due', label: 'Due', width: 96, sort: 'due' },
   { id: 'sessions', label: 'Sessions', numeric: true, width: 84, sort: 'sessions' },
   { id: 'rounds', label: 'Your prompts', numeric: true, width: 108, sort: 'rounds' },
@@ -277,9 +288,13 @@ function cellFor(
  * in the other is two different records as far as the reader is concerned — and the shorter one
  * teaches people the fields do not exist. One list of columns, stated here and mirrored there.
  */
-export const subtaskColumns = (lang: Lang): string[] => {
+export const subtaskColumns = (lang: Lang): Array<{ label: string; key: SubtaskSortKey }> => {
   const c = boardCopy(lang)
-  return [c.subtasks, 'Status', c.owner, c.start, c.due, c.sessions, '']
+  return [
+    { label: c.subtasks, key: 'title' }, { label: 'Status', key: 'status' },
+    { label: c.owner, key: 'assignee' }, { label: c.start, key: 'start' },
+    { label: c.due, key: 'due' }, { label: c.sessions, key: 'sessions' },
+  ]
 }
 
 function SubtaskRows({
@@ -312,7 +327,9 @@ function SubtaskRows({
     color: 'var(--text-secondary)', fontSize: 12, fontFamily: 'inherit',
     minHeight: isMobile ? 44 : undefined,
   }
-  // 1 (checkbox) + 6 named cells + filler + 1 (remove) must equal cols + 3.
+  // 1 (leading) + 6 named cells + filler must equal cols + 2 — the task row above is
+  // [leading][title][cols…], and the leading column is there in BOTH modes (Select only adds the
+  // checkbox INSIDE it), so this arithmetic does not depend on whether rows are being picked.
   const filler = Math.max(0, cols - 5)
   // See `SubtaskTable`'s own doc comment for the full §F.1 clustering reasoning — this mirrors it
   // exactly, over the same `subtasks` pool (already scoped to one delivery): a member renders
@@ -337,7 +354,7 @@ function SubtaskRows({
               same component simply omits what it was not given. The inset left bar
               (`clusterBarStyle`) lands here — the leading edge of every clustered row, header
               through last member, so it reads as one continuous stripe. */}
-          <td style={{ padding: cellPad, ...tint, ...clusterBarStyle(clustered) }}>
+          <td style={{ padding: cellPad, whiteSpace: 'nowrap', ...tint, ...clusterBarStyle(clustered) }}>
             <SubtaskActionsMenu
               subtask={t}
               siblings={subtasks}
@@ -424,10 +441,6 @@ function SubtaskRows({
             })}
           </td>
           {filler > 0 && <td colSpan={filler} style={tint} />}
-          {/* The trailing "remove" slot stays, empty, so this row keeps the same td COUNT the
-              group's header expects (see the `filler` comment above) — the action itself moved
-              into the gear menu, leading the row, above. */}
-          <td style={{ padding: cellPad, ...tint }} />
         </tr>
         )
       })}
@@ -436,6 +449,33 @@ function SubtaskRows({
 }
 
 // ------------------------------------------------------------------------------- table
+
+/** A group's header checkbox: ticked, half-ticked (`indeterminate`) or clear. */
+function GroupCheck({ state, label, mobile, onChange }: {
+  state: 'all' | 'some' | 'none'
+  label: string
+  mobile: boolean
+  onChange: (checked: boolean) => void
+}) {
+  return (
+    <label
+      title={label}
+      style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+        ...tap(mobile),
+      }}
+    >
+      <input
+        type="checkbox"
+        aria-label={label}
+        checked={state === 'all'}
+        ref={el => { if (el) el.indeterminate = state === 'some' }}
+        onChange={e => onChange(e.target.checked)}
+        style={{ width: mobile ? 20 : 14, height: mobile ? 20 : 14, accentColor: 'var(--anthropic-orange)' }}
+      />
+    </label>
+  )
+}
 
 export interface TaskTableProps {
   rows: TaskListRow[]
@@ -499,7 +539,12 @@ export function TaskTable(p: TaskTableProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set(stored.collapsed))
   const [menu, setMenu] = useState<'columns' | 'groups' | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const [selected, setSelected] = useState<Set<string>>(new Set())
+  // SELECT MODE (selection.ts): the checkboxes are behind it, it starts off, and leaving it clears
+  // the ticks — a batch verb must never act on rows nobody can see are armed.
+  const [sel, setSel] = useState<Selection>(NO_SELECTION)
+  /** Each expanded task's subitem grid is ordered on its own — clicking one grid's header must not
+   *  reshuffle another open grid the reader is not looking at. `null` = creation order. */
+  const [subSort, setSubSort] = useState<Record<string, SubtaskSortSpec | null>>({})
   const [adding, setAdding] = useState<TaskStatus | null>(null)
   const [draft, setDraft] = useState('')
   const [subDraft, setSubDraft] = useState<Record<string, string>>({})
@@ -507,6 +552,7 @@ export function TaskTable(p: TaskTableProps) {
   const [linkingSub, setLinkingSub] = useState<{ task: string; sub: string } | null>(null)
   // The board's own dialog, never `window.confirm` — see the note on the detail page's delete.
   const [confirmBatch, setConfirmBatch] = useState(false)
+  const L = boardCopy(p.lang ?? 'en').list
 
   const cols = useMemo(
     () => COLUMNS.filter(c => shown.includes(c.id)).sort(
@@ -538,6 +584,22 @@ export function TaskTable(p: TaskTableProps) {
     apply(next)
   }
 
+  // Escape leaves Select mode — unless it was meant for something else (a text field, an open
+  // dialog): `escapeLeavesMode` is the one place that decides.
+  useEffect(() => {
+    if (!sel.on || confirmBatch) return
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      if (escapeLeavesMode(sel, {
+        key: e.key, defaultPrevented: e.defaultPrevented,
+        targetTag: t?.tagName, targetType: (t as HTMLInputElement | null)?.type,
+        targetEditable: t?.isContentEditable,
+      })) setSel(leaveMode())
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [sel, confirmBatch])
+
   const th: React.CSSProperties = {
     ...microLabel, textAlign: 'left', padding: '7px 10px', fontWeight: 600,
     borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap',
@@ -557,6 +619,19 @@ export function TaskTable(p: TaskTableProps) {
   const visible = groupsShown
     .map(st => groups.find(g => g.status === st))
     .filter((g): g is typeof groups[number] => g !== undefined)
+
+  // The selection that ACTS is the one on screen: a row in a hidden or folded group, filtered out by
+  // the search box or deleted since, is not something the bar's count or a batch verb reaches.
+  const selected = selectedVisible(
+    sel,
+    visible.filter(g => !collapsed.has(g.status)).flatMap(g => g.rows.map(r => r.task.id)),
+  )
+
+  const openBtn: React.CSSProperties = {
+    background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+    minWidth: 24, minHeight: 24, ...tap(isMobile),
+  }
 
   return (
     <div style={{ display: 'grid', gap: 12 }}>
@@ -619,6 +694,21 @@ export function TaskTable(p: TaskTableProps) {
         >
           <Columns3 size={13} /> Columns
         </PickerMenu>
+        <button
+          type="button"
+          onClick={() => setSel(toggleMode)}
+          aria-pressed={sel.on}
+          title={L.selectTitle}
+          style={{
+            ...button(isMobile), height: isMobile ? 44 : 28,
+            ...(sel.on ? {
+              color: 'var(--anthropic-orange)', border: '1px solid var(--anthropic-orange)',
+              background: 'var(--anthropic-orange-dim)',
+            } : {}),
+          }}
+        >
+          <CheckSquare size={13} /> {L.select}{sel.on && selected.length > 0 ? ` · ${selected.length}` : ''}
+        </button>
       </div>
 
       {visible.length === 0 && (
@@ -660,47 +750,34 @@ export function TaskTable(p: TaskTableProps) {
                   {g.rows.length > 0 && (
                     <thead>
                       <tr>
-                        <th style={{ ...th, width: 34 }} />
-                        <th style={{ ...th, minWidth: 240 }}>
-                          <button
-                            onClick={() => setSort(nextSort(sort, 'title'))} title="Sort by title"
-                            style={{
-                              ...microLabel, fontWeight: 600, background: 'none', border: 'none',
-                              cursor: 'pointer', padding: 0, display: 'inline-flex',
-                              alignItems: 'center', gap: 3, minHeight: isMobile ? 44 : undefined,
-                              color: sort.key === 'title' ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-                            }}
-                          >
-                            Task
-                            {sort.key === 'title' && (
-                              sort.dir === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} />
-                            )}
-                          </button>
+                        {/* The leading column holds [checkbox — Select mode only][open][chevron].
+                            In Select mode its header carries the group's own select-all. */}
+                        <th style={{ ...th, width: 1 }}>
+                          {sel.on && (
+                            <GroupCheck
+                              state={groupCheck(sel, g.rows.map(r => r.task.id))}
+                              label={L.selectAllInGroup}
+                              mobile={isMobile}
+                              onChange={checked => setSel(cur => setRows(cur, g.rows.map(r => r.task.id), checked))}
+                            />
+                          )}
                         </th>
+                        <SortTh
+                          label="Task" sortKey="title" current={sort} mobile={isMobile}
+                          onSort={k => setSort(nextSort(sort, k))}
+                          title={L.sortByColumn.replace('{column}', L.keys.title!)}
+                          style={{ ...th, minWidth: 240 }}
+                        />
                         {cols.map(c => (
-                          <th key={c.id} style={{ ...th, width: c.width, textAlign: c.numeric ? 'right' : 'left' }}>
-                            {/* A column with no `sort` carries NO affordance — a header that looks
-                                clickable and does nothing is worse than a plain one. */}
-                            {c.sort ? (
-                              <button
-                                onClick={() => setSort(nextSort(sort, c.sort!))}
-                                title={`Sort by ${c.label}`}
-                                style={{
-                                  ...microLabel, fontWeight: 600, background: 'none', border: 'none',
-                                  cursor: 'pointer', padding: 0, display: 'inline-flex',
-                                  alignItems: 'center', gap: 3, minHeight: isMobile ? 44 : undefined,
-                                  color: sort.key === c.sort ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-                                }}
-                              >
-                                {c.label}
-                                {sort.key === c.sort && (
-                                  sort.dir === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} />
-                                )}
-                              </button>
-                            ) : c.label}
-                          </th>
+                          // A column with no `sort` carries NO affordance — a header that looks
+                          // clickable and does nothing is worse than a plain one.
+                          <SortTh
+                            key={c.id} label={c.label} sortKey={c.sort} current={sort} mobile={isMobile}
+                            onSort={k => setSort(nextSort(sort, k))}
+                            title={L.sortByColumn.replace('{column}', c.label)}
+                            style={{ ...th, width: c.width, textAlign: c.numeric ? 'right' : 'left' }}
+                          />
                         ))}
-                        <th style={{ ...th, width: 40 }} />
                       </tr>
                     </thead>
                   )}
@@ -716,48 +793,77 @@ export function TaskTable(p: TaskTableProps) {
                             onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-card-hover)' }}
                             onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
                           >
-                            <td style={{ padding: cellPad }}>
-                              <input
-                                type="checkbox" checked={selected.has(row.task.id)}
-                                onChange={() => toggleIn(selected, row.task.id, setSelected)}
-                                style={{
-                                  width: isMobile ? 20 : 14, height: isMobile ? 20 : 14,
-                                  accentColor: 'var(--anthropic-orange)',
-                                }}
-                              />
-                            </td>
                             {/*
-                              * The NAME opens the subitems; a button opens the task.
+                              * The LEADING cell, left to right: [checkbox — Select mode only]
+                              * [open the task][chevron that lists the subtasks in place].
                               *
-                              * The row used to navigate away on any click, which made the title the
-                              * one thing you could not press to look INSIDE the row — and made
-                              * every stray click on a cell leave the board. Monday's rule, and the
-                              * right one: the name belongs to the row, the arrow leaves it.
+                              * The open button used to be the last cell of the row, a full table
+                              * width away from the name it opens; it sits beside the chevron now and
+                              * the trailing cell is gone (two controls for one act in one row is a
+                              * question of which to press). The row keeps ONE width for this cell
+                              * whether or not the task has subtasks — the chevron is always there,
+                              * because expanding is also how a first subtask gets added — so the
+                              * columns never shift between rows.
                               */}
+                            <td style={{ padding: cellPad, whiteSpace: 'nowrap' }}>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: isMobile ? 0 : 4 }}>
+                                {sel.on && (
+                                  <label
+                                    title={L.selectRow}
+                                    style={{
+                                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                      cursor: 'pointer', ...tap(isMobile),
+                                    }}
+                                  >
+                                    <input
+                                      type="checkbox" checked={sel.ids.has(row.task.id)}
+                                      aria-label={`${L.selectRow}: ${row.task.title}`}
+                                      onChange={() => setSel(cur => toggleRow(cur, row.task.id))}
+                                      style={{
+                                        width: isMobile ? 20 : 14, height: isMobile ? 20 : 14,
+                                        accentColor: 'var(--anthropic-orange)',
+                                      }}
+                                    />
+                                  </label>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={e => { e.stopPropagation(); p.onOpen(row.task.id) }}
+                                  title={L.openTask} aria-label={`${L.openTask}: ${row.task.title}`}
+                                  style={openBtn}
+                                ><SquareArrowOutUpRight size={13} /></button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    toggleIn(expanded, row.task.id, setExpanded)
+                                    if (!open) p.onExpand(row.task.id)
+                                  }}
+                                  aria-expanded={open}
+                                  title={open ? L.hideSubtasks : L.showSubtasks}
+                                  aria-label={`${open ? L.hideSubtasks : L.showSubtasks}: ${row.task.title}`}
+                                  style={openBtn}
+                                >{open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</button>
+                              </span>
+                            </td>
+                            {/* The NAME still opens the subitems, as it always did — the row's name
+                                belongs to the row, and pressing it never leaves the board. It is a
+                                pointer convenience over the chevron's button, not a second tab stop. */}
                             <td style={{ padding: cellPad }}>
-                              <button
+                              <span
+                                role="presentation"
                                 onClick={() => {
                                   toggleIn(expanded, row.task.id, setExpanded)
                                   if (!open) p.onExpand(row.task.id)
                                 }}
-                                title={open ? 'Hide the subtasks' : 'Show the subtasks'}
                                 style={{
-                                  display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0,
-                                  background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-                                  textAlign: 'left', width: '100%',
-                                  ...tap(isMobile),
-                                }}
-                              >
-                                <span style={{ color: 'var(--text-tertiary)', display: 'inline-flex', flexShrink: 0 }}>
-                                  {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                                </span>
-                                <span style={{
+                                  display: 'block', cursor: 'pointer', minWidth: 0, textAlign: 'left',
                                   fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)',
                                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                                }}>
-                                  {row.task.title}
-                                </span>
-                              </button>
+                                  ...(isMobile ? { minHeight: 44, lineHeight: '44px' } : {}),
+                                }}
+                              >
+                                {row.task.title}
+                              </span>
                             </td>
                             {cols.map(c => (
                               <td
@@ -775,16 +881,6 @@ export function TaskTable(p: TaskTableProps) {
                                 )}
                               </td>
                             ))}
-                            <td style={{ padding: cellPad, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                              <button
-                                onClick={() => p.onOpen(row.task.id)} title="Open this task"
-                                style={{
-                                  background: 'none', border: 'none', color: 'var(--text-tertiary)',
-                                  cursor: 'pointer', display: 'inline-flex', alignItems: 'center',
-                                  ...tap(isMobile),
-                                }}
-                              ><SquareArrowOutUpRight size={13} /></button>
-                            </td>
                           </tr>
 
                           {open && (
@@ -792,14 +888,27 @@ export function TaskTable(p: TaskTableProps) {
                               <tr style={{ background: 'var(--bg-surface)' }}>
                                 <td style={{ padding: '5px 10px' }} />
                                 {subtaskColumns(p.lang ?? 'en').map((h, i) => (
-                                  <td key={i} style={{ ...microLabel, padding: '5px 10px', paddingLeft: i === 0 ? 34 : 10 }}>
-                                    {h}
-                                  </td>
+                                  // Sortable like every other header. The grid orders itself (`subSort`)
+                                  // without touching the list it was given: creation order is what
+                                  // "no sort" means, and clusters survive because the renderer rebuilds
+                                  // them from the sorted list (`subtaskSortView.ts`).
+                                  <SortTh
+                                    key={h.key} label={h.label} sortKey={h.key}
+                                    current={subSort[row.task.id] ?? null} mobile={isMobile}
+                                    onSort={k => setSubSort(m => ({ ...m, [row.task.id]: cycleSort(m[row.task.id] ?? null, k) }))}
+                                    title={L.sortByColumn.replace('{column}', h.label)}
+                                    style={{ ...microLabel, fontWeight: 600, textAlign: 'left', padding: '5px 10px', paddingLeft: i === 0 ? 34 : 10 }}
+                                  />
                                 ))}
                                 {cols.length > 5 && <td colSpan={cols.length - 5} />}
                               </tr>
                               <SubtaskRows
-                                subtasks={subs} subtaskRollups={detail?.subtaskRollups ?? []}
+                                subtasks={orderedSubtasks(subs, subSort[row.task.id] ?? null, {
+                                  views: detail?.subtaskRollups ?? [],
+                                  sessions: detail?.sessions ?? [],
+                                  statusOrder: liveStatusOrder(p.statuses),
+                                })}
+                                subtaskRollups={detail?.subtaskRollups ?? []}
                                 indent={34} cols={cols.length}
                                 sessions={detail?.sessions ?? []}
                                 lang={p.lang ?? 'en'}
@@ -813,7 +922,7 @@ export function TaskTable(p: TaskTableProps) {
                               />
                               <tr style={{ background: 'var(--bg-surface)' }}>
                                 <td style={{ padding: '5px 10px' }} />
-                                <td colSpan={cols.length + 2} style={{ padding: '5px 10px', paddingLeft: 34 }}>
+                                <td colSpan={cols.length + 1} style={{ padding: '5px 10px', paddingLeft: 34 }}>
                                   <input
                                     value={subDraft[row.task.id] ?? ''}
                                     placeholder="+ Add subtask"
@@ -842,7 +951,7 @@ export function TaskTable(p: TaskTableProps) {
 
                     <tr style={{ borderTop: '1px solid var(--border)' }}>
                       <td style={{ padding: cellPad }} />
-                      <td colSpan={cols.length + 2} style={{ padding: cellPad }}>
+                      <td colSpan={cols.length + 1} style={{ padding: cellPad }}>
                         {adding === g.status ? (
                           <input
                             autoFocus value={draft} placeholder="Task name, then Enter"
@@ -884,19 +993,19 @@ export function TaskTable(p: TaskTableProps) {
 
       <ConfirmModal
         open={confirmBatch}
-        title={`Delete ${selected.size} task${selected.size === 1 ? '' : 's'}?`}
+        title={`Delete ${selected.length} task${selected.length === 1 ? '' : 's'}?`}
         message="Their comments, subtasks, files and links go with them. The SESSIONS filed under them are kept — deleting a board entry never deletes work."
-        confirmLabel={`Delete ${selected.size}`}
+        confirmLabel={`Delete ${selected.length}`}
         cancelLabel="Keep them"
         // Typing the count is the guard against a muscle-memory delete of a whole selection: the
         // one gesture on this board that can take many rows at once.
-        requireText={selected.size > 1 ? String(selected.size) : undefined}
-        requireTextHint={selected.size > 1 ? `Type ${selected.size} to confirm` : undefined}
+        requireText={selected.length > 1 ? String(selected.length) : undefined}
+        requireTextHint={selected.length > 1 ? `Type ${selected.length} to confirm` : undefined}
         onCancel={() => setConfirmBatch(false)}
         onConfirm={() => {
           setConfirmBatch(false)
           p.onBatchDelete([...selected])
-          setSelected(new Set())
+          setSel(clearTicks)
         }}
       />
 
@@ -911,7 +1020,7 @@ export function TaskTable(p: TaskTableProps) {
         />
       )}
 
-      {selected.size > 0 && (
+      {sel.on && selected.length > 0 && (
         // Monday's batch bar: it says how many, and it carries only the verbs that make sense on
         // many rows at once. Renaming many is not one of them.
         <div style={{
@@ -922,7 +1031,7 @@ export function TaskTable(p: TaskTableProps) {
           maxWidth: 'min(92vw, 620px)',
         }}>
           <span style={{ ...numeric, fontSize: 13, color: 'var(--text-primary)' }}>
-            {selected.size}
+            {selected.length}
           </span>
           <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>selected</span>
           <span style={{ width: 1, height: 18, background: 'var(--border)' }} />
@@ -939,7 +1048,7 @@ export function TaskTable(p: TaskTableProps) {
               onPick={v => {
                 if (v === '__none__') return
                 p.onBatchStatus([...selected], v as TaskStatus)
-                setSelected(new Set())
+                setSel(clearTicks)
               }}
             />
           </span>
@@ -948,8 +1057,12 @@ export function TaskTable(p: TaskTableProps) {
             style={{ ...button(isMobile), color: 'var(--accent-red)', height: isMobile ? 34 : 26 }}
           ><Trash2 size={13} /></button>
           <button
-            onClick={() => setSelected(new Set())}
-            style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', display: 'inline-flex' }}
+            onClick={() => setSel(clearTicks)}
+            aria-label="Clear the selection" title="Clear the selection"
+            style={{
+              background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer',
+              display: 'inline-flex', ...tap(isMobile),
+            }}
           ><X size={14} /></button>
         </div>
       )}

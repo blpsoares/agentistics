@@ -13,12 +13,19 @@
  * figure read as the whole bill.
  */
 
-import { useMemo, type CSSProperties } from 'react'
+import { useMemo, useState, type CSSProperties } from 'react'
 import { SquareArrowOutUpRight } from 'lucide-react'
-import { fmtCost, sortRows, type SortSpec, type TaskStatusDef } from '@agentistics/core'
+import {
+  cycleSort, fmtCost, sortRowsBy, type SortKey, type SortSpec, type SortableRow, type TaskStatusDef,
+} from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useTaskStatuses, type TaskListRow } from '../../lib/tasks'
-import { NA, PRIORITY, fmtInt, fmtTokens, microLabel, numeric, pill, statusStyle, surface } from './board'
+import {
+  NA, PRIORITY, fmtInt, fmtTokens, liveStatusOrder, microLabel, numeric, pill, statusStyle, surface,
+} from './board'
+import { SortTh } from './SortHeader'
+import { SortControl } from './SortControl'
+import { boardCopy } from './copy'
 import { TaskProgressBar } from './TaskProgressBar'
 import { HarnessBadges } from './HarnessBadges'
 
@@ -32,6 +39,17 @@ import { HarnessBadges } from './HarnessBadges'
  */
 const REPO_SORT: SortSpec = { key: 'updated', dir: 'desc' }
 
+/**
+ * What each column is ordered by — the number PRINTED in it.
+ *
+ * The Sessions column shows `sessionsLinked` (what this repository's view can actually see), while
+ * the shared comparator's `sessions` key reads `sessionsUsed`; ordering a column by a figure other
+ * than the one on screen is a table that looks shuffled. So the row is projected onto what the
+ * column means before it is compared.
+ */
+const asSortable = (r: TaskListRow): SortableRow => ({
+  ...r, rollup: { ...r.rollup, sessionsUsed: r.rollup.sessionsLinked },
+})
 export interface RepoTasksTabProps {
   /** Already narrowed to this repository by `tasksOfRepo`. */
   rows: TaskListRow[]
@@ -59,9 +77,27 @@ function StatusPill({ status, statuses }: { status: string; statuses: readonly T
 export function RepoTasksTab(p: RepoTasksTabProps) {
   const isMobile = useIsMobile()
   const pt = p.lang === 'pt'
-  const rows = useMemo(() => sortRows(p.rows, REPO_SORT), [p.rows])
   const { statuses } = useTaskStatuses()
+  // `null` is the tab's own order (most recently touched first) and the way back from any header.
+  const [sort, setSort] = useState<SortSpec | null>(null)
+  const L = boardCopy(p.lang).list
+  const rows = useMemo(
+    () => sortRowsBy(p.rows, sort ?? REPO_SORT, asSortable, { statusOrder: liveStatusOrder(statuses) }),
+    [p.rows, sort, statuses],
+  )
   const cost = (n: number | null) => (n === null ? NA : fmtCost(n, p.currency, p.brlRate))
+
+  const columns: Array<{ key: SortKey; label: string; numeric?: boolean }> = [
+    { key: 'title', label: pt ? 'Entrega' : 'Delivery' },
+    { key: 'status', label: 'Status' },
+    { key: 'progress', label: pt ? 'Progresso' : 'Progress' },
+    { key: 'sessions', label: pt ? 'Sessões' : 'Sessions', numeric: true },
+    { key: 'rounds', label: pt ? 'Seus prompts' : 'Your prompts', numeric: true },
+    { key: 'tokens', label: 'Tokens', numeric: true },
+    { key: 'cost', label: pt ? 'Custo' : 'Cost', numeric: true },
+    { key: 'harnesses', label: 'Harnesses' },
+    { key: 'delivered', label: pt ? 'Entregue em' : 'Delivered' },
+  ]
 
   if (rows.length === 0) {
     return (
@@ -77,6 +113,16 @@ export function RepoTasksTab(p: RepoTasksTabProps) {
   if (isMobile) {
     return (
       <div style={{ display: 'grid', gap: 8 }}>
+        {/* A phone has no column titles to press, so the same order is offered as a control. */}
+        <SortControl
+          label={L.sortBy}
+          options={columns.map(c => ({ key: c.key, label: c.label }))}
+          current={sort}
+          onPick={k => setSort(k === null ? null : { key: k, dir: 'asc' })}
+          onDir={() => setSort(cur => cur && { key: cur.key, dir: cur.dir === 'asc' ? 'desc' : 'asc' })}
+          defaultLabel={pt ? 'Última alteração' : 'Last touched'} ascLabel={L.sortAsc} descLabel={L.sortDesc}
+          mobile
+        />
         {rows.map(r => {
           const prio = PRIORITY[r.task.priority ?? 'none'] ?? PRIORITY.none!
           return (
@@ -128,15 +174,14 @@ export function RepoTasksTab(p: RepoTasksTabProps) {
       <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 780 }}>
         <thead>
           <tr>
-            <th style={th}>{pt ? 'Entrega' : 'Delivery'}</th>
-            <th style={th}>Status</th>
-            <th style={th}>{pt ? 'Progresso' : 'Progress'}</th>
-            <th style={{ ...th, textAlign: 'right' }}>{pt ? 'Sessões' : 'Sessions'}</th>
-            <th style={{ ...th, textAlign: 'right' }}>{pt ? 'Seus prompts' : 'Your prompts'}</th>
-            <th style={{ ...th, textAlign: 'right' }}>Tokens</th>
-            <th style={{ ...th, textAlign: 'right' }}>{pt ? 'Custo' : 'Cost'}</th>
-            <th style={th}>Harnesses</th>
-            <th style={th}>{pt ? 'Entregue em' : 'Delivered'}</th>
+            {columns.map(c => (
+              <SortTh
+                key={c.key} label={c.label} sortKey={c.key} current={sort} mobile={false}
+                onSort={k => setSort(cycleSort(sort, k))}
+                title={L.sortByColumn.replace('{column}', c.label)}
+                style={{ ...th, textAlign: c.numeric ? 'right' : 'left' }}
+              />
+            ))}
           </tr>
         </thead>
         <tbody>
