@@ -156,15 +156,17 @@ describe('the fullscreen overlay respects the artifacts aside (I2)', () => {
   })
 
   test('both bands compute their right inset through `fullscreenInsetRight`, respecting the rail too', () => {
-    // A third argument joined this call in the right-icon-rail pass (`RAIL_WIDTH_PX` on desktop, 0
-    // on a phone) — spec §2, "full screen respects the rail" — so both bands must ALSO stop short
-    // of the rail even when the aside itself shows nothing.
-    expect([...SRC.matchAll(/right: fullscreenInsetRight\(rightAsideEdge, viewportWidth, isMobile \? 0 : RAIL_WIDTH_PX\)/g)]).toHaveLength(2)
+    // A third argument joined this call in the right-icon-rail pass (the rail's own LIVE width on
+    // desktop, 0 on a phone — `useRailWidth()`, since the rail became resizable, owner 2026-09-21)
+    // — spec §2, "full screen respects the rail" — so both bands must ALSO stop short of the rail
+    // even when the aside itself shows nothing.
+    expect([...SRC.matchAll(/right: fullscreenInsetRight\(rightAsideEdge, viewportWidth, isMobile \? 0 : railWidth\)/g)]).toHaveLength(2)
   })
 
-  test('both bands read the aside\'s live edge, the viewport width, and whether the rail exists here, reactively', () => {
+  test('both bands read the aside\'s live edge, the viewport width, the rail\'s live width, and whether the rail exists here, reactively', () => {
     expect([...SRC.matchAll(/const rightAsideEdge = useRightAsideEdge\(\)/g)]).toHaveLength(2)
     expect([...SRC.matchAll(/const viewportWidth = useViewportWidth\(\)/g)]).toHaveLength(2)
+    expect([...SRC.matchAll(/const railWidth = useRailWidth\(\)/g)]).toHaveLength(2)
     // `StudioBand` reads `isMobile` once for itself; `SimpleDockedBand` does too — plus the one
     // `SessionPanel` itself already reads for `resolveForViewport`, three in total.
     expect([...SRC.matchAll(/const isMobile = useIsMobile\(\)/g)]).toHaveLength(3)
@@ -172,7 +174,7 @@ describe('the fullscreen overlay respects the artifacts aside (I2)', () => {
 
   test('the scan still sees `inset: 0` reintroduced on a fullscreen branch', () => {
     const planted = SRC.replace(
-      "position: 'fixed', top: 0, left: 0, bottom: 0,\n          right: fullscreenInsetRight(rightAsideEdge, viewportWidth, isMobile ? 0 : RAIL_WIDTH_PX),\n          zIndex: PANEL_FULLSCREEN_Z,",
+      "position: 'fixed', top: 0, left: leftAsideEdge, bottom: 0,\n          right: fullscreenInsetRight(rightAsideEdge, viewportWidth, isMobile ? 0 : railWidth),\n          zIndex: PANEL_FULLSCREEN_Z,",
       "position: 'fixed', inset: 0, zIndex: PANEL_FULLSCREEN_Z,",
     )
     expect(planted).toMatch(/position: 'fixed', inset: 0/)
@@ -180,10 +182,10 @@ describe('the fullscreen overlay respects the artifacts aside (I2)', () => {
 
   test('the scan still sees the rail-width argument dropped, silently uncovering it when the aside is empty', () => {
     const planted = SRC.replace(
-      /right: fullscreenInsetRight\(rightAsideEdge, viewportWidth, isMobile \? 0 : RAIL_WIDTH_PX\)/g,
+      /right: fullscreenInsetRight\(rightAsideEdge, viewportWidth, isMobile \? 0 : railWidth\)/g,
       'right: fullscreenInsetRight(rightAsideEdge, viewportWidth)',
     )
-    expect([...planted.matchAll(/right: fullscreenInsetRight\(rightAsideEdge, viewportWidth, isMobile \? 0 : RAIL_WIDTH_PX\)/g)])
+    expect([...planted.matchAll(/right: fullscreenInsetRight\(rightAsideEdge, viewportWidth, isMobile \? 0 : railWidth\)/g)])
       .toHaveLength(0)
   })
 })
@@ -233,5 +235,45 @@ describe('ShellBand is wired to the shared bottomOpen state (I3 — "picking She
       .replace('onOpenChange={setBottomOpen}', '// removed')
     expect(after.includes('open={slotLayout.bottomOpen}')).toBe(false)
     expect(after.includes('onOpenChange={setBottomOpen}')).toBe(false)
+  })
+})
+
+/**
+ * THE FIXED TASK CONTROL IS GONE FROM EVERY BOTTOM BAND, AND AN EMPTY ONE RENDERS NOTHING (owner,
+ * 2026-09-21: "quando removo todos os itens ele simplesmente deixa essa porra desse iconezinho feio
+ * ai... pode remover o icone fixo de tarefas tbm"). `tasks` is a rail-capable panel now, so the
+ * always-on `SessionTitleFlag` shortcut in every band's bar row was the one thing left standing once
+ * a reader emptied the bottom band entirely.
+ */
+describe('the fixed task control no longer renders in any bottom band', () => {
+  test('no band renders `taskControl` any more, and none of the four still takes it as a prop', () => {
+    expect(SRC).not.toMatch(/\{taskControl\}/)
+    expect(SRC).not.toMatch(/taskControl[?:]/)
+    expect(SRC).not.toMatch(/taskControl=\{taskControl\}/)
+  })
+
+  test('the scan still sees the render reintroduced on a call site', () => {
+    const planted = `${SRC}\n<ShellBand taskControl={taskControl} />\n`
+    expect(planted).toMatch(/taskControl=\{taskControl\}/)
+    expect(SRC).not.toMatch(/taskControl=\{taskControl\}/)
+  })
+
+  test('`PanelBarBand` (the relayed-session fallback) renders nothing once its own panel bar is empty', () => {
+    const start = SRC.indexOf('function PanelBarBand(')
+    const bodyEnd = SRC.indexOf('\nfunction ', start + 1)
+    const fn = bodyEnd === -1 ? SRC.slice(start) : SRC.slice(start, bodyEnd)
+    expect(start).toBeGreaterThan(-1)
+    expect(fn).toContain('if (barEntries.length === 0) return null')
+    // The guard must run BEFORE the band's own markup, or an empty band still measures a live DOM
+    // node for the length of one render.
+    expect(fn.indexOf('if (barEntries.length === 0) return null')).toBeLessThan(fn.indexOf('return ('))
+  })
+
+  test('the scan still sees the empty-band guard dropped from `PanelBarBand`', () => {
+    const start = SRC.indexOf('function PanelBarBand(')
+    const bodyEnd = SRC.indexOf('\nfunction ', start + 1)
+    const fn = bodyEnd === -1 ? SRC.slice(start) : SRC.slice(start, bodyEnd)
+    const planted = fn.replace('if (barEntries.length === 0) return null', '')
+    expect(planted.includes('if (barEntries.length === 0) return null')).toBe(false)
   })
 })

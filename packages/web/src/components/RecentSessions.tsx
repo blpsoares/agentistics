@@ -1876,8 +1876,19 @@ export function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, au
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, height: fill ? '100%' : undefined, flex: fill ? 1 : undefined }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ color: 'var(--anthropic-orange)', display: 'inline-flex' }}><Terminal size={14} /></span>
-        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{lang === 'pt' ? 'Terminal ao vivo' : 'Live terminal'}</span>
+        {/* THE "Terminal ao vivo" LABEL IS GONE IN `dedicated` PLACEMENT (owner, 2026-09-21: "eu
+            quero que seja apenas o terminal... sem o titulo da sessao dentro do componente pq ja
+            tem o titulo la em cima") — the dedicated screen's own page header already carries the
+            session's title above this component, so a second, generic label inside it read as
+            leftover chrome from the bottom-band version of this same component. The status badge
+            (connecting/live/stalled) and the zoom controls stay: they are live STATE and a working
+            CONTROL, neither of which is a title. */}
+        {placement !== 'dedicated' && (
+          <>
+            <span style={{ color: 'var(--anthropic-orange)', display: 'inline-flex' }}><Terminal size={14} /></span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{lang === 'pt' ? 'Terminal ao vivo' : 'Live terminal'}</span>
+          </>
+        )}
         <span
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600,

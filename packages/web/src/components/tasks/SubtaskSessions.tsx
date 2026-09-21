@@ -64,6 +64,7 @@ export function subtaskSessions(p: SubtaskSessionsProps): React.ReactNode {
           title={s.label}
           harness={s.harness}
           lang={p.lang}
+          historical={s.historical === true}
           onOpen={p.onOpen}
           onUnfile={p.onUnfile}
         />

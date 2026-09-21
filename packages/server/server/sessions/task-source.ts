@@ -12,13 +12,36 @@ import { readPreferences } from '../preferences'
 import { readRegistry } from './registry'
 import { createTaskStore, type TaskStore } from './task-store'
 import { migrateLegacyTasks, type TaskBook } from './task-model'
+import { historicalRows } from './task-historical'
 import type { ManagedSession } from './types'
 import { planStatusMigration, type SessionMeta } from '@agentistics/core'
 
+/**
+ * THE BOARD'S TWO ROW SETS, and why there is no field called plain `rows`.
+ *
+ * A conversation filed with no registry row behind it (`HistoricalSession`) is turned into a
+ * synthetic, read-only `ManagedSession`-shaped row so that every rollup inherits it. That row must
+ * never reach a path that WRITES to, or reasons about, the fleet — a stub in the registry would list
+ * as a finished, reopenable session with no cwd. So the two sets are separate FIELDS with names that
+ * say which is which, and a bare `rows` deliberately does not exist: any caller written against it
+ * fails to compile and has to pick.
+ *
+ *  - `registryRows` — exactly `readRegistry()`. The rows that REALLY exist. Use it for everything
+ *    that resolves a session id, patches a session, decides whether a session is there
+ *    (`attachSession`'s lookup, `detachSession`, `conversation_in_fleet`), or seeds legacy names.
+ *  - `rollupRows` — `registryRows` plus one synthetic row per historical link, APPENDED after them.
+ *    Use it to answer "what belongs to this delivery and what did it cost": the list, detail,
+ *    overview, stats, done gates, subtask `hasSession`, evidence and the sharing to a central.
+ *
+ * Audit of the readers (the registry itself is untouched, so fleet code that calls `readRegistry()`
+ * directly — cli-session, cli-start, the sessions host, terminal/input channels, live claims, hardware
+ * sessions — cannot see a synthetic row by construction and needs no change).
+ */
 export interface TaskWorld {
   store: TaskStore
   book: TaskBook
-  rows: ManagedSession[]
+  registryRows: ManagedSession[]
+  rollupRows: ManagedSession[]
   metas: ReadonlyMap<string, SessionMeta>
   costOf: (m: SessionMeta) => number
 }
@@ -82,18 +105,27 @@ async function ensureStatusesSeeded(store: TaskStore): Promise<void> {
  * deliveries travel" would spend that read on every cycle to learn what it already knows.
  * `loadTaskWorld` is this plus the store, so there is still one reader of the book.
  */
-export async function loadTaskBoard(): Promise<{ store: TaskStore; book: TaskBook; rows: ManagedSession[] }> {
+export async function loadTaskBoard(): Promise<{
+  store: TaskStore
+  book: TaskBook
+  registryRows: ManagedSession[]
+  rollupRows: ManagedSession[]
+}> {
   const store = createTaskStore(TASKS_FILE)
-  const rows = await readRegistry()
-  await ensureLegacyTasks(store, rows)
+  const registryRows = await readRegistry()
+  await ensureLegacyTasks(store, registryRows)
   await ensureStatusesSeeded(store)
-  return { store, book: await store.read(), rows }
+  const book = await store.read()
+  // No metas here (see this function's note): the rows carry the FILING, which is all the sharing
+  // path reads — the conversation id it ships is the conversation's own, subject to the same
+  // `sessionShared` gate as any other.
+  return { store, book, registryRows, rollupRows: [...registryRows, ...historicalRows(book.historicalSessions)] }
 }
 
 export async function loadTaskWorld(): Promise<TaskWorld> {
   const store = createTaskStore(TASKS_FILE)
-  const rows = await readRegistry()
-  await ensureLegacyTasks(store, rows)
+  const registryRows = await readRegistry()
+  await ensureLegacyTasks(store, registryRows)
   await ensureStatusesSeeded(store)
   const [book, metas] = await Promise.all([
     store.read(),
@@ -101,5 +133,8 @@ export async function loadTaskWorld(): Promise<TaskWorld> {
     // column, not the list.
     loadConsolidated().catch(() => new Map<string, SessionMeta>()),
   ])
-  return { store, book, rows, metas, costOf: sessionCostUSD }
+  return {
+    store, book, registryRows, metas, costOf: sessionCostUSD,
+    rollupRows: [...registryRows, ...historicalRows(book.historicalSessions, metas)],
+  }
 }
