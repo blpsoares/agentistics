@@ -50,12 +50,15 @@ async function readSharedTasks(
   knownIds: ReadonlySet<string>,
 ): Promise<SharedTask[]> {
   try {
-    const [{ loadTaskBoard }, { selectSharedTasks }, { rowsOfTask }] = await Promise.all([
+    const [{ loadTaskBoard }, { selectSharedTasks }, { rowsOfTask }, { conversationOwners }] = await Promise.all([
       import('./sessions/task-source'),
       import('./sessions/task-share'),
       import('./sessions/task-report'),
+      import('./sessions/task-conversations'),
     ])
     const { book, rows } = await loadTaskBoard()
+    // Ownership is decided once over the WHOLE registry, not once per task.
+    const owners = conversationOwners(rows)
     const shared = selectSharedTasks({
       tasks: book.tasks,
       rows,
@@ -64,7 +67,7 @@ async function readSharedTasks(
       files: book.files,
       sharedIds,
       knownIds,
-      rowsOf: rowsOfTask,
+      rowsOf: (task, all) => rowsOfTask(task, all, owners),
     })
     // The last point at which this text is still purely local.
     return shared.map(redactSharedTask)

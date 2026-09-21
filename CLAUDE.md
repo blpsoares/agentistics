@@ -2407,6 +2407,23 @@ by the compiler.
 - **`task_next` answers with the WITHHELD tasks too, and why.** An agent told "nothing" cannot tell
   "it is all done" from "it is all blocked", and re-dispatches forever. `boardProgress.settled` is
   deliberately two facts: nothing to hand out AND nothing in flight.
+- **A CONVERSATION BELONGS TO EXACTLY ONE TASK, decided once by `conversationOwners`
+  (`task-conversations.ts`) and inherited by every surface through `rowsOfTask`.** Filing is a MOVE
+  written on ONE row, and every attach/reopen/restart mints a new managed id for the same
+  conversation, so a conversation moved from A to B keeps an older row still saying A. Walking each
+  task's own rows found it in both and `buildBoardOverview` summed the two — the headline priced one
+  conversation twice. The rule: **the newest FILING STATEMENT wins**, where a row states something
+  only if it says something about the id — `taskId` non-empty files it, `taskId === ''` is an
+  explicit UNFILE (`detachSession` is the only writer of an empty string, so a detach un-owns the
+  conversation instead of falling back to an older row), and `taskId` ABSENT says nothing and never
+  decides (a reopen does not inherit the filing; the Pelvie coordinator conversation has 13 rows and
+  3 carry the task). The free-text NAME is a weaker tier used only when NO row says anything about
+  the id: it survives a rename and is copied into reopens, so a newer name-only row must not outrank
+  an id filing (it would hand the conversation to the phantom task minted from the old title —
+  measured: that phantom double-counted $383 and 616M tokens). **`rowsOfTask` needs the WHOLE
+  registry**; a caller asking about many tasks passes `conversationOwners(rows)` once. Rows with no
+  `conversationId` are never grouped. Known limit: the owner key is not checked against the book, so
+  a conversation last filed on a since-DELETED task belongs to that ghost and is counted by nobody.
 - **A claim and a live session are different things and are drawn apart.** A claim is a statement
   somebody made; a session is something `/proc` and tmux observed this second. Conflating them lets
   "an agent said it would" read as "an agent is".
