@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  TERMINAL_TARGETS, readTarget, resolveDockedTarget, shellTargetUnavailable, targetLabel,
-  targetScope, targetStreamId, usableTarget,
+  TERMINAL_TARGETS, followBottomOccupant, readTarget, resolveDockedTarget, shellTargetUnavailable,
+  targetLabel, targetScope, targetStreamId, usableTarget,
 } from './terminalTarget'
 
 describe('the two things a terminal band can show', () => {
@@ -147,5 +147,62 @@ describe('resolveDockedTarget — only a GENUINE record of shell survives being 
       usableTarget(bottomOccupant ?? readTarget(stored), enabled)
     expect(resolveDockedTarget('shell', undefined, false)).not.toBe(oldClamp('shell', undefined, false))
     expect(resolveDockedTarget(null, 'shell', false)).not.toBe(oldClamp(null, 'shell', false))
+  })
+})
+
+// `followBottomOccupant` — `ShellBand`'s own `bottomOccupant`-follow effect, extracted so the rule
+// can be pinned without mounting a component (this repo's test runner has no DOM). The bug it
+// replaces: the mobile "Which terminal" segment's own `chooseTarget` is entirely LOCAL (it never
+// writes `panelSlots`), so tapping "Shell" while `bottomOccupant` still read "cli" left the two
+// disagreeing on the very next render — and the OLD effect, which judged `bottomOccupant` against
+// `target`, read that disagreement as a fact to correct and reverted the tap immediately.
+describe('followBottomOccupant — a pick is authoritative until the occupant itself moves', () => {
+  // THE REGRESSION ITSELF: `bottomOccupant` has NOT changed since the effect last ran (same as
+  // `prevBottomOccupant`) even though it disagrees with `target` — a local pick, nothing else.
+  // Must NOT follow, or every tap of the mobile segment reverts on its own next render.
+  test('picking shell while the occupant (unchanged) still says cli: does not revert the pick', () => {
+    expect(followBottomOccupant('cli', 'cli', 'shell')).toBeNull()
+  })
+
+  test('picking cli while the occupant (unchanged) still says shell: does not revert the pick', () => {
+    expect(followBottomOccupant('shell', 'shell', 'cli')).toBeNull()
+  })
+
+  // A GENUINE TRANSITION: `bottomOccupant` itself moved since the effect last ran (SessionPanel's
+  // "bring it to the bottom" gesture placing a different panel here) — this is the one case that
+  // must still follow, or an external move stops reaching this band at all.
+  test('the occupant genuinely transitions to a different pane: follows it', () => {
+    expect(followBottomOccupant('shell', 'cli', 'cli')).toBe('shell')
+    expect(followBottomOccupant('cli', 'shell', 'shell')).toBe('cli')
+  })
+
+  // The occupant transitioned, but `target` already agrees with the new value (the person had
+  // already picked what the slot now names) — nothing to do.
+  test('a genuine transition that already matches target: no-op', () => {
+    expect(followBottomOccupant('shell', 'cli', 'shell')).toBeNull()
+  })
+
+  // `null` — the panel moved AWAY from the bottom, or nothing has ever named an occupant — never
+  // overwrites a choice made by clicking inside this band itself, transition or not.
+  test('bottomOccupant absent: never follows', () => {
+    expect(followBottomOccupant(null, 'cli', 'shell')).toBeNull()
+    expect(followBottomOccupant(null, null, 'shell')).toBeNull()
+  })
+
+  // First mount: the caller's own `useRef(bottomOccupant)` seeds `prevBottomOccupant` to the SAME
+  // value on the very first render, so this is a no-op there too — consistent with `target` already
+  // being seeded from `bottomOccupant` via `resolveDockedTarget` at mount.
+  test('first render (prev seeded from the current value): no-op regardless of target', () => {
+    expect(followBottomOccupant('shell', 'shell', 'cli')).toBeNull()
+  })
+
+  // Plant: reverting to the OLD comparison (`bottomOccupant` judged against `target`, never against
+  // its own previous value) must disagree on the regression case above — proving this test actually
+  // exercises the fix rather than a coincidence of the two shapes agreeing.
+  test('plant: the OLD comparison (against target, not against its own previous value) reverts the pick', () => {
+    const oldFollow = (bottomOccupant: 'cli' | 'shell' | null, target: 'cli' | 'shell') =>
+      bottomOccupant && bottomOccupant !== target ? bottomOccupant : null
+    expect(followBottomOccupant('cli', 'cli', 'shell')).not.toBe(oldFollow('cli', 'shell'))
+    expect(oldFollow('cli', 'shell')).toBe('cli') // the very revert the fix removes
   })
 })

@@ -88,6 +88,37 @@ export function resolveDockedTarget(
   return wanted === 'shell' && !shellEnabled && !chosen ? 'cli' : wanted
 }
 
+/**
+ * SHOULD `ShellBand`'s OWN `target` FOLLOW `bottomOccupant` ON THIS RENDER — and to WHAT? See
+ * `ShellBand`'s own `bottomOccupant`-follow effect for the header this answers, and its
+ * `bottomOccupant` prop's own doc comment for why the effect exists at all.
+ *
+ * **THE RULE: a person's pick is authoritative until `bottomOccupant` ITSELF changes for another
+ * reason — never merely because it disagrees with the CURRENT `target`.** `target` is the band's
+ * own local preference; the mobile "Which terminal" segment's `chooseTarget` never writes
+ * `panelSlots`, so `bottomOccupant` (read straight off the slot store) stays exactly where it was
+ * on every ordinary tap. Judging `bottomOccupant !== target` as "catch up" read that as a fact to
+ * correct: the tap landed for one render, and the very same effect — seeing the two disagree —
+ * called `chooseTarget(bottomOccupant)` right back, which is the segment that could never be
+ * switched. This asks a different question instead: has `bottomOccupant` ITSELF moved since the
+ * effect last ran (`prevBottomOccupant`, the caller's own `useRef`)? Only a genuine transition —
+ * `SessionPanel`'s "bring it to the bottom" gesture actually placing a different panel in this
+ * slot — is a reason to follow; a local pick merely diverging from an UNCHANGED `bottomOccupant`
+ * is not.
+ *
+ * Returns the target to switch to, or `null` when nothing should change.
+ */
+export function followBottomOccupant(
+  bottomOccupant: TerminalTarget | null,
+  prevBottomOccupant: TerminalTarget | null,
+  target: TerminalTarget,
+): TerminalTarget | null {
+  if (!bottomOccupant) return null
+  if (bottomOccupant === prevBottomOccupant) return null
+  if (bottomOccupant === target) return null
+  return bottomOccupant
+}
+
 /** Which of the two channels this target speaks. Never inferred from an id — an id is opaque. */
 export function targetScope(target: TerminalTarget): TerminalScope {
   return target === 'cli' ? 'fleet' : 'shell'
