@@ -16,6 +16,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronUp, GripVertical, SlidersHorizontal } from 'lucide-react'
+import { reorderByDrag, stepOrder } from '../../lib/dragReorder'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import {
   ASIDE_CARD_COLOR_VALUES, ASIDE_GROUP_BY_VALUES,
@@ -77,25 +78,11 @@ export function SessionsGroupMenu(p: SessionsGroupMenuProps) {
     }
   }, [open])
 
-  const move = (from: string, to: string) => {
-    if (from === to) return
-    const keys = p.groups.map(g => g.key)
-    const without = keys.filter(k => k !== from)
-    const at_ = without.indexOf(to)
-    if (at_ === -1) return
-    without.splice(at_, 0, from)
-    p.onReorder(without)
-  }
-
-  const step = (key: string, by: 1 | -1) => {
-    const keys = p.groups.map(g => g.key)
-    const from = keys.indexOf(key)
-    const to = from + by
-    if (from === -1 || to < 0 || to >= keys.length) return
-    const next = [...keys]
-    next.splice(to, 0, ...next.splice(from, 1))
-    p.onReorder(next)
-  }
+  // Shared with the panel rail's and the pinned-sessions band's own drag: `reorderByDrag` /
+  // `stepOrder` in `dragReorder.ts`. This menu's reorder was the reference implementation that
+  // pattern was extracted FROM — it was always correctly keyed, never by position.
+  const move = (from: string, to: string) => p.onReorder(reorderByDrag(p.groups.map(g => g.key), from, to))
+  const step = (key: string, by: 1 | -1) => p.onReorder(stepOrder(p.groups.map(g => g.key), key, by))
 
   const rowStyle = (on: boolean): React.CSSProperties => ({
     display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', textAlign: 'left',

@@ -832,21 +832,19 @@ describe('studioGearEntries — the gear menu\'s own rows, as data', () => {
     slot: 'right' as const,
   }
 
-  test('with nothing else offered, the Studio still always offers its OWN move and close — it can always reach the other slot', () => {
+  test('with nothing else offered, the Studio still always offers close — MOVE is gone from here (addendum, 2026-09-21), it lives on the icon\'s own right-click menu now', () => {
     expect(studioGearEntries(base)).toEqual([
-      { id: 'move-bottom', label: 'Move Studio to the bottom', iconId: 'arrow-down' },
       { id: 'close', label: 'Close Studio', iconId: 'x' },
     ])
   })
 
-  test('at the bottom, the move row points the other way', () => {
+  test('at the bottom, still just close — no move row either way any more', () => {
     const ids = studioGearEntries({ ...base, slot: 'bottom' }).map(e => e.id)
-    expect(ids).toEqual(['move-right', 'close'])
+    expect(ids).toEqual(['close'])
   })
 
   test('and in Portuguese', () => {
     expect(studioGearEntries({ ...base, lang: 'pt' })).toEqual([
-      { id: 'move-bottom', label: 'Mover Studio para baixo', iconId: 'arrow-down' },
       { id: 'close', label: 'Fechar Studio', iconId: 'x' },
     ])
   })
@@ -892,26 +890,53 @@ describe('studioGearEntries — the gear menu\'s own rows, as data', () => {
     expect(ids).not.toContain('exit-fullscreen')
   })
 
-  test('every row, in order — tree first (what StudioBar used to carry), move next, close LAST', () => {
+  test('every row, in order — tree first (what StudioBar used to carry), close LAST — move is gone', () => {
     const everything = studioGearEntries({
       lang: 'en', treeCollapsible: true, treeCollapsed: false, treeSide: 'left', slot: 'bottom',
     })
-    expect(everything.map(e => e.id)).toEqual(['tree-toggle', 'tree-side', 'move-right', 'close'])
+    expect(everything.map(e => e.id)).toEqual(['tree-toggle', 'tree-side', 'close'])
   })
 
   test(
-    'MOVE NAMES ONLY THE STUDIO — this menu is now the Studio\'s ONE menu wherever it is, so it ' +
-    'must never disagree with itself about where it would go (owner, 2026-09-19: "ao clicar na ' +
-    'engrenagem nao aparecem as opcoes corretas de mover")',
+    'ON DESKTOP, MOVE NEVER APPEARS HERE ANY MORE (addendum, 2026-09-21) — in neither slot, since ' +
+    'it now lives exclusively on the icon\'s own right-click menu (`PanelRail`/`PanelBar`), never ' +
+    'duplicated in the gear the way it once was split across two menus (owner, 2026-09-19: "ao ' +
+    'clicar na engrenagem nao aparecem as opcoes corretas de mover")',
     () => {
       const atRight = studioGearEntries({ ...base, slot: 'right' })
-      expect(atRight.find(e => e.id === 'move-bottom')).toBeDefined()
+      expect(atRight.find(e => e.id === 'move-bottom')).toBeUndefined()
       expect(atRight.find(e => e.id === 'move-right')).toBeUndefined()
       const atBottom = studioGearEntries({ ...base, slot: 'bottom' })
-      expect(atBottom.find(e => e.id === 'move-right')).toBeDefined()
+      expect(atBottom.find(e => e.id === 'move-right')).toBeUndefined()
       expect(atBottom.find(e => e.id === 'move-bottom')).toBeUndefined()
     },
   )
+
+  test(
+    'ON MOBILE, MOVE STAYS — there is no rail to right-click and no reliable touch context-menu ' +
+    'gesture, and spec §8 already says the gear covers those verbs there. Reproduced live at 390px ' +
+    'before this fix: the gear opened with only "Fechar Studio", no way to move it at all.',
+    () => {
+      const atRight = studioGearEntries({ ...base, slot: 'right', mobile: true })
+      expect(atRight.map(e => e.id)).toEqual(['move-bottom', 'close'])
+      const atBottom = studioGearEntries({ ...base, slot: 'bottom', mobile: true })
+      expect(atBottom.map(e => e.id)).toEqual(['move-right', 'close'])
+    },
+  )
+
+  // PLANTED-REVERT: a version that ignores `mobile` (always calls `panelMenuEntriesWithoutMove`)
+  // silently strands mobile without a move verb again — the exact regression found live.
+  test('[planted-revert coverage] ignoring mobile strips move even when it must stay', () => {
+    function brokenGearEntries(mobileFlag: boolean) {
+      // always strips move, regardless of mobileFlag — the bug this test catches
+      void mobileFlag
+      return studioGearEntries({ ...base, slot: 'right', mobile: false })
+    }
+    const broken = brokenGearEntries(true)
+    const correct = studioGearEntries({ ...base, slot: 'right', mobile: true })
+    expect(broken.map(e => e.id)).not.toEqual(correct.map(e => e.id))
+    expect(correct.map(e => e.id)).toContain('move-bottom')
+  })
 })
 
 /**

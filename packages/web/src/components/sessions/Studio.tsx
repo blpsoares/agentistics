@@ -125,7 +125,9 @@ import { RepoTreeView, toggleDirectory, treeViewState, type TreeOps } from './Re
 import { RepoNote } from './repoNote'
 import { insertMention } from '../../lib/mentionInsert'
 import { PanelFixedControls, panelMenuIconFor, type BandOverflowEntry } from './bandControls'
-import { panelMenuEntries, type PanelMenuEntryId, type PanelMenuIconId } from '../../lib/panelMenu'
+import {
+  panelMenuEntries, panelMenuEntriesWithoutMove, type PanelMenuEntryId, type PanelMenuIconId,
+} from '../../lib/panelMenu'
 import type { HarnessId } from '@agentistics/core'
 
 export interface StudioProps {
@@ -757,24 +759,40 @@ export interface StudioGearItem { id: StudioGearItemId; label: string; iconId?: 
  * THIS IS NOW THE ONE MENU THE STUDIO CARRIES WHEREVER IT IS (owner, 2026-09-19). It used to have
  * TWO: this one, and `StudioBand`'s own separate "Mais ações" when bottom-docked — two menus that
  * could (and did) disagree about what "move" meant the moment the Studio moved to the right, since
- * only THIS one travels with the component. `StudioBand`'s overflow is gone; its two rows (move,
- * close) are exactly the shared builder's own `move-right`/`close` rows, merged in here instead.
+ * only THIS one travels with the component. `StudioBand`'s overflow is gone; its "close" row is
+ * the shared builder's own `close` row, merged in here instead.
+ *
+ * MOVE IS GONE FROM HERE ON DESKTOP ONLY (addendum, 2026-09-21) — it now lives on the Studio's own
+ * rail icon / bottom tab right-click menu (`PanelRail`/`PanelBar`'s shared `PanelContextMenu`, both
+ * already built generically over every panel including this one), exactly once rather than in two
+ * places that could drift the way this gear and `StudioBand`'s old one once did on desktop.
+ * `panelMenuEntriesWithoutMove` is the filter that removes it there.
+ *
+ * ON MOBILE, MOVE STAYS (`mobile: true` keeps `panelMenuEntries`' full list) — spec §8 already
+ * states the reason for every OTHER panel's gear ("drag, right-click and the rail's config area are
+ * desktop-only; the gear menu covers those verbs there") and this menu is no exception, even though
+ * it travels with the Studio rather than living in `rightSlotBar`/`SimpleDockedBand`. There is no
+ * rail on a phone to right-click and no `contextmenu` gesture a touch reader can rely on, so
+ * stripping move here unconditionally left NO way to move the Studio on mobile at all — reproduced
+ * live at 390px: the gear opened with only "Fechar Studio", where "Mover Studio para a
+ * direita/baixo" used to be.
  *
  * A row is ABSENT rather than present-and-refusing when it has nothing to act on: `treeCollapsible`
- * (the exact gate `StudioBar` used to read for both tree rows) and `move-*` (via the builder's own
- * `allowed()` check — always present for the Studio, since it can always reach the other slot).
- * "Close" has no gate: it is the one row this menu always carries, the reason `onExit` stays a
- * REQUIRED prop on `Studio` itself (see this file's header on why an exit that can be absent is a
- * reader trapped in a panel).
+ * (the exact gate `StudioBar` used to read for both tree rows). "Close" has no gate: it is the one
+ * row this menu always carries, the reason `onExit` stays a REQUIRED prop on `Studio` itself (see
+ * this file's header on why an exit that can be absent is a reader trapped in a panel).
  */
 export function studioGearEntries({
-  lang, treeCollapsible: canToggleTree, treeCollapsed, treeSide, slot,
+  lang, treeCollapsible: canToggleTree, treeCollapsed, treeSide, slot, mobile = false,
 }: {
   lang: 'pt' | 'en'
   treeCollapsible: boolean
   treeCollapsed: boolean
   treeSide: TreeSide
   slot: 'right' | 'bottom'
+  /** Keeps the move row — see this function's own header. Defaults to `false` (desktop) so an
+   *  existing caller that has not been updated keeps today's (correct-on-desktop) behavior. */
+  mobile?: boolean
 }): StudioGearItem[] {
   const pt = lang === 'pt'
   const items: StudioGearItem[] = []
@@ -790,9 +808,8 @@ export function studioGearEntries({
         : (pt ? 'Mover árvore para a esquerda' : 'Move tree to the left'),
     })
   }
-  for (const entry of panelMenuEntries({
-    panel: 'studio', placement: slot === 'right' ? 'rail' : 'bottom', lang, panelName: 'Studio',
-  })) {
+  const menuInput = { panel: 'studio' as const, placement: slot === 'right' ? 'rail' as const : 'bottom' as const, lang, panelName: 'Studio' }
+  for (const entry of mobile ? panelMenuEntries(menuInput) : panelMenuEntriesWithoutMove(menuInput)) {
     items.push({ id: entry.id, label: entry.label, iconId: entry.iconId })
   }
   return items
@@ -1250,7 +1267,9 @@ export function Studio({
    * the ids that come back — a row this function did not return is a row with nothing to act on,
    * never a disabled one.
    */
-  const gearIds = studioGearEntries({ lang, treeCollapsible: collapsible, treeCollapsed, treeSide, slot })
+  const gearIds = studioGearEntries({
+    lang, treeCollapsible: collapsible, treeCollapsed, treeSide, slot, mobile: isMobile,
+  })
   const gearAction: Record<StudioGearItemId, { icon: ReactNode; onSelect: () => void }> = {
     'tree-toggle': {
       icon: treeCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />,

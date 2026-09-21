@@ -57,8 +57,8 @@ import { HideLensesButton } from '../components/a11y/HideLensesButton'
 import { ArtifactsAside } from '../components/sessions/ArtifactsAside'
 import { HardwarePanel } from '../components/sessions/HardwarePanel'
 import { UnsavedChangesGuard } from '../components/sessions/UnsavedChangesGuard'
-import { PanelFixedControls, panelMenuIconFor } from '../components/sessions/bandControls'
-import { fullscreenModeFor, panelMenuEntries } from '../lib/panelMenu'
+import { PanelFixedControls } from '../components/sessions/bandControls'
+import { fullscreenModeFor, panelMinimizeAction } from '../lib/panelMenu'
 import {
   artifactsPanelMax, ASIDE_ANIM_MS, ASIDE_EASE, currentAction, edgeHint, PANEL_MIN_WIDTH, panelWidth,
   resolveArtifactLayout, type ArtifactLayout,
@@ -67,7 +67,8 @@ import {
   openArtifacts, setArtifactCount, setArtifactLive, usePanelFocusRequest,
 } from '../lib/artifactsStore'
 import { studioMenuRow } from '../lib/studioMenuRow'
-import { RAIL_WIDTH_PX, restingLeftEdge, setRightAsideEdge } from '../lib/rightAsideEdge'
+import { closedRightEdge, RAIL_WIDTH_PX, restingLeftEdge, setRightAsideEdge } from '../lib/rightAsideEdge'
+import { useViewportWidth } from '../hooks/useViewportWidth'
 import type { SessionDrilldownProps } from '../components/SessionDrilldown'
 import type { Artifact } from '../lib/sessionArtifacts'
 import { liveEvents, type LiveTurn } from '../lib/artifactTabs'
@@ -625,7 +626,7 @@ export default function SessionsPage() {
    */
   const {
     layout: rawSlotLayout, openPanel: openSlotPanel, closePanel: closeSlotPanel,
-    movePanel: moveSlotPanel, setRightOpen,
+    movePanel: moveSlotPanel, dropPanel: dropSlotPanel, setRightOpen,
   } = usePanelSlots()
   const panelFocus = usePanelFocusRequest()
   const panelGates: PanelGates = { editorEnabled, shellEnabled, relayed }
@@ -923,9 +924,10 @@ export default function SessionsPage() {
    * was its own panel, where switching the internal `tab` state never remounted anything); switching
    * SESSION does reset it, since every per-session cache/effect in `ArtifactsAside` is keyed there.
    */
-  const tabPane = (id: TabPanelId): ReactNode => selected === undefined ? null : (
+  const tabPane = (id: TabPanelId, opts?: { hideCloseButton?: boolean }): ReactNode => selected === undefined ? null : (
     <ArtifactsAside
       key={selected.id}
+      {...(opts?.hideCloseButton ? { hideCloseButton: true } : {})}
       sessionId={selected.id}
       activeTab={id}
       // The MCP tab's per-directory scopes are resolved against this; with no directory they are
@@ -964,8 +966,13 @@ export default function SessionsPage() {
       onClose={() => closeSlotPanel(id)}
     />
   )
+  // ADDENDUM ITEM 4 — the right slot's own header close button is hidden on DESKTOP, where
+  // `rightSlotBar`'s `PanelFixedControls` minimize already calls the exact same `closeSlotPanel(id)`
+  // (`panelMinimizeAction`'s `close-right` — every one of these ten panels closes outright on
+  // minimize there, never merely collapses). On MOBILE there is no `rightSlotBar` at all
+  // (`rightSlotBar` itself returns `null` there), so the header's own button stays the only way out.
   const rightTabPane = slotLayout.right !== null && isTabPanelId(slotLayout.right)
-    ? tabPane(slotLayout.right) : null
+    ? tabPane(slotLayout.right, { hideCloseButton: !isMobile }) : null
   const bottomTabPane = slotLayout.bottom !== null && isTabPanelId(slotLayout.bottom)
     ? tabPane(slotLayout.bottom) : null
 
@@ -1096,15 +1103,12 @@ export default function SessionsPage() {
     panel: Exclude<PanelId, 'studio'>, panelName: string, onMinimize: () => void,
   ) => {
     if (isMobile || !selected) return null
-    const gearEntries = panelMenuEntries({
-      panel, placement: 'rail', lang: pt ? 'pt' : 'en', panelName,
-    }).filter(e => e.id === 'move-bottom').map(e => ({
-      id: e.id, label: e.label, icon: panelMenuIconFor(e.iconId),
-      // A genuine placement change — `movePanel`, not `openPanel` — or a panel whose placement was
-      // already `'rail'` (every one of these got here by being the rail's own active occupant)
-      // would simply reopen on the rail it is already leaving.
-      onSelect: () => moveSlotPanel(panel, 'bottom'),
-    }))
+    // NO GEAR (addendum, 2026-09-21): every panel this bar ever draws (`Exclude<..., 'studio'>`) had
+    // exactly ONE gear row — move to the bottom — and that row now lives on the rail ICON'S OWN
+    // right-click menu instead (`PanelRail`'s `onMove`, reachable for the exact same panel since it
+    // is this slot's active occupant). A gear with nothing left to hold is absent, never empty and
+    // present (`BandOverflowMenu`'s own rule) — this simply never builds one.
+    const gearEntries: never[] = []
     const fullscreen = fullscreenModeFor(panel) === 'navigate'
       ? {
         active: false,
@@ -1550,9 +1554,21 @@ export default function SessionsPage() {
    * element's OWN padding box, not the viewport, so it cannot answer "where is this on screen."
    */
   const rightAsideRef = useRef<HTMLDivElement | null>(null)
+  const viewportWidth = useViewportWidth()
   useEffect(() => {
     const el = rightAsideRef.current
-    if (isMobile || artShell === 'none' || artShell === 'fullscreen' || !el) {
+    // NOTHING OPEN ON THE RIGHT (`artShell === 'none'`) is NOT the same fact as "nothing on the
+    // right at all" — the RAIL (`PanelRail`, mounted exactly under `!isMobile && selected`, right
+    // below this effect's own JSX) is still there the instant a session is selected on desktop, so
+    // this reports the rail's own edge instead of `null` in that case (`closedRightEdge` in
+    // `rightAsideEdge.ts` — see that module's own header for the regression this fixes: the Filtros
+    // chips' closed-aside fallback painted 12px into the rail's icons because this used to report
+    // `null` here unconditionally, and their own margin was 12px short of the rail's width).
+    if (isMobile || artShell === 'none') {
+      setRightAsideEdge(closedRightEdge(!isMobile && selected !== undefined, viewportWidth))
+      return
+    }
+    if (artShell === 'fullscreen' || !el) {
       setRightAsideEdge(null)
       return
     }
@@ -1576,7 +1592,7 @@ export default function SessionsPage() {
       el.removeEventListener('transitionend', onTransformSettled)
       el.removeEventListener('transitioncancel', onTransformSettled)
     }
-  }, [isMobile, artShell, splitRoom, asideIn])
+  }, [isMobile, artShell, splitRoom, asideIn, selected, viewportWidth])
   useEffect(() => () => setRightAsideEdge(null), [])
 
   /**
@@ -2154,9 +2170,22 @@ export default function SessionsPage() {
         <PanelRail
           panels={gatedRailPanels}
           active={slotLayout.right}
+          rightOpen={slotLayout.rightOpen}
           lang={pt ? 'pt' : 'en'}
           {...(selected.harness ? { harness: selected.harness } : {})}
           onOpen={openSlotPanel}
+          // `panelMinimizeAction` decides WHAT minimize means for THIS panel in the rail slot — see
+          // `PanelRail`'s own `onMinimize` doc comment for the bug this replaced: `rightOpen` alone
+          // only ever gates the Studio (`collapse-right-park`); every other panel needs the genuine
+          // close (`close-right`) `rightSlotBar`'s own minimize button already performs, or the rail
+          // icon's "minimize" flips a flag nothing reads and the panel stays fully visible.
+          onMinimize={id => (
+            panelMinimizeAction(id, 'rail') === 'collapse-right-park'
+              ? setRightOpen(false)
+              : closeSlotPanel(id)
+          )}
+          onMove={id => moveSlotPanel(id, 'bottom')}
+          onDrop={dropSlotPanel}
         />
       )}
       {/* THE STUDIO'S OWN PERSISTENT HOST — a SIBLING of the pane above, never nested inside its
