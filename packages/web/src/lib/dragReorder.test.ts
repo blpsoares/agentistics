@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import { reorderByDrag, stepOrder } from './dragReorder'
+import {
+  DRAG_KEY_TYPE, hasDragPayload, readDragPayload, reorderByDrag, setDragPayload, stepOrder,
+} from './dragReorder'
 
 // ---------------------------------------------------------------------------------------------
 // reorderByDrag
@@ -92,6 +94,76 @@ describe('reorderByDrag', () => {
     // broken implementation splices raw index 0 (x) onto raw index 2 (live-a) — the actual defect.
     const broken = brokenIndexReorder(raw, 0, 2)
     expect(broken.filter(k => (k as string).startsWith('live-'))).not.toEqual(['live-b', 'live-a', 'live-c'])
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// setDragPayload / readDragPayload / hasDragPayload
+//
+// A minimal fake `DataTransfer` — bun's test runner has no DOM, so these exercise the exact
+// interface the three functions actually read/write (`types`, `getData`, `setData`,
+// `effectAllowed`), never the real browser class.
+// ---------------------------------------------------------------------------------------------
+
+class FakeDataTransfer {
+  private store = new Map<string, string>()
+  effectAllowed = 'uninitialized'
+  setData(type: string, value: string): void { this.store.set(type, value) }
+  getData(type: string): string { return this.store.get(type) ?? '' }
+  get types(): string[] { return [...this.store.keys()] }
+}
+
+describe('setDragPayload / readDragPayload — round-trip', () => {
+  test('the key set is exactly the key read back', () => {
+    const dt = new FakeDataTransfer()
+    setDragPayload({ dataTransfer: dt as unknown as DataTransfer }, 'studio')
+    expect(readDragPayload({ dataTransfer: dt as unknown as DataTransfer })).toBe('studio')
+  })
+
+  test('carries both the custom MIME type and a text/plain fallback', () => {
+    const dt = new FakeDataTransfer()
+    setDragPayload({ dataTransfer: dt as unknown as DataTransfer }, 'hardware')
+    expect(dt.getData(DRAG_KEY_TYPE)).toBe('hardware')
+    expect(dt.getData('text/plain')).toBe('hardware')
+  })
+
+  test('sets effectAllowed to move, for every drop target this app has ever offered a choice on', () => {
+    const dt = new FakeDataTransfer()
+    setDragPayload({ dataTransfer: dt as unknown as DataTransfer }, 'live')
+    expect(dt.effectAllowed).toBe('move')
+  })
+
+  test('readDragPayload is null when neither key was ever set', () => {
+    const dt = new FakeDataTransfer()
+    expect(readDragPayload({ dataTransfer: dt as unknown as DataTransfer })).toBeNull()
+  })
+
+  // rail-loose-ends item 2: `useBandDropTarget`'s native listener reads a real DOM `DragEvent`,
+  // whose `dataTransfer` is `DataTransfer | null` in the lib (unlike React's own, always non-null)
+  // — a genuinely absent one (some other event type mis-wired, or a browser that refuses to expose
+  // it) must read as "no payload", never throw.
+  test('a null dataTransfer reads as no payload, never throws', () => {
+    expect(readDragPayload({ dataTransfer: null })).toBeNull()
+    expect(hasDragPayload({ dataTransfer: null })).toBe(false)
+  })
+})
+
+describe('hasDragPayload — readable on dragover, before getData would be legal to call', () => {
+  test('true once the custom key type has been set, even with no data read yet', () => {
+    const dt = new FakeDataTransfer()
+    setDragPayload({ dataTransfer: dt as unknown as DataTransfer }, 'skills')
+    expect(hasDragPayload({ dataTransfer: dt as unknown as DataTransfer })).toBe(true)
+  })
+
+  test('false for a foreign drag carrying only text/plain — an OS file or a browser text selection', () => {
+    const dt = new FakeDataTransfer()
+    dt.setData('text/plain', 'just some copied text')
+    expect(hasDragPayload({ dataTransfer: dt as unknown as DataTransfer })).toBe(false)
+  })
+
+  test('false for an entirely empty DataTransfer', () => {
+    const dt = new FakeDataTransfer()
+    expect(hasDragPayload({ dataTransfer: dt as unknown as DataTransfer })).toBe(false)
   })
 })
 

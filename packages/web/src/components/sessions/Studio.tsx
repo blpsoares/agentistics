@@ -128,6 +128,7 @@ import { PanelFixedControls, panelMenuIconFor, type BandOverflowEntry } from './
 import {
   panelMenuEntries, panelMenuEntriesWithoutMove, type PanelMenuEntryId, type PanelMenuIconId,
 } from '../../lib/panelMenu'
+import type { OpenPlacement } from '../../lib/panelSlots'
 import type { HarnessId } from '@agentistics/core'
 
 export interface StudioProps {
@@ -185,19 +186,34 @@ export interface StudioProps {
    */
   onToggleFullscreen?: () => void
   /**
-   * WHERE THE STUDIO CURRENTLY SITS — `right` or `bottom` (`lib/panelSlots.ts`'s own `SlotId`),
-   * ALWAYS one or the other wherever this component is actually mounted (`StudioHost` only ever
-   * renders while `isPanelShown(layout, 'studio')`). This is what lets the ONE gear menu below offer
-   * the RIGHT move ("Mover Studio para baixo" at the right, "…para a direita" at the bottom) — the
-   * one thing `StudioBand`'s now-removed separate "Mais ações" used to say on its own, disagreeing
-   * with this menu the moment the two drifted (owner, 2026-09-19: "ao clicar na engrenagem nao
-   * aparecem as opcoes corretas de mover").
+   * WHERE THE STUDIO IS CURRENTLY SHOWN ON SCREEN — `right` or `bottom`. Drives the VISUAL
+   * questions only (the minimize icon's own gating below): on a phone `resolveForViewport`
+   * (`lib/panelSlots.ts`) folds a `bottom`-placed, bottom-band-active Studio into `right` (there is
+   * no bottom band on a phone — the fold is what lets the mobile switcher show it as a full sheet),
+   * so `slot` can read `'right'` there even while the panel's own PLACEMENT is genuinely `'bottom'`.
+   * That is exactly why the gear's move label is driven by `placement` below and NOT by this prop —
+   * see that prop's own header for the bug this split fixes (rail-loose-ends, item 4).
    */
   slot: 'right' | 'bottom'
   /**
-   * Move the Studio to the OTHER slot from wherever `slot` says it is now. Always offered — a panel
-   * always has somewhere else to go (`allowed()`, `lib/panelSlots.ts`) — so this is never optional
-   * the way `onToggleFullscreen` is.
+   * THE STUDIO'S OWN REAL PLACEMENT (`lib/panelSlots.ts`'s `OpenPlacement` — `'rail'` or
+   * `'bottom'`), never folded for a phone's viewport the way `slot` above is. This is what the ONE
+   * gear menu's move label is computed from ("Mover Studio para baixo" while placed on the rail,
+   * "…para a direita" while placed at the bottom) — `studioGearEntries` used to derive this from
+   * `slot` instead (`slot === 'right' ? 'rail' : 'bottom'`), which agrees with the real placement
+   * on desktop (there is no fold) but reads backwards on a phone whenever the Studio's real
+   * placement is `'bottom'`: `resolveForViewport` had already folded the occupancy to `'right'`,
+   * so the derived placement came out `'rail'` and the label read "para baixo" — offering to move
+   * it somewhere it already was, and never offering the move that would actually relocate it.
+   * Reported live: the mobile gear read "Mover Studio para baixo" while the Studio sat at the
+   * bottom already. The VERB was never wrong (`onMove` below always toggles the real placement
+   * correctly); only this LABEL was reading the folded value.
+   */
+  placement: OpenPlacement
+  /**
+   * Move the Studio to the OTHER slot from wherever `placement` says it is now. Always offered — a
+   * panel always has somewhere else to go (`allowed()`, `lib/panelSlots.ts`) — so this is never
+   * optional the way `onToggleFullscreen` is.
    */
   onMove: () => void
   /**
@@ -783,13 +799,19 @@ export interface StudioGearItem { id: StudioGearItemId; label: string; iconId?: 
  * this file's header on why an exit that can be absent is a reader trapped in a panel).
  */
 export function studioGearEntries({
-  lang, treeCollapsible: canToggleTree, treeCollapsed, treeSide, slot, mobile = false,
+  lang, treeCollapsible: canToggleTree, treeCollapsed, treeSide, placement, mobile = false,
 }: {
   lang: 'pt' | 'en'
   treeCollapsible: boolean
   treeCollapsed: boolean
   treeSide: TreeSide
-  slot: 'right' | 'bottom'
+  /**
+   * THE STUDIO'S OWN REAL PLACEMENT (`lib/panelSlots.ts`'s `OpenPlacement`), never a visual `slot`
+   * a phone's viewport fold may have overridden — see `StudioProps.placement`'s own header
+   * (rail-loose-ends, item 4) for the bug this parameter, taken directly rather than derived from
+   * `slot`, replaced.
+   */
+  placement: OpenPlacement
   /** Keeps the move row — see this function's own header. Defaults to `false` (desktop) so an
    *  existing caller that has not been updated keeps today's (correct-on-desktop) behavior. */
   mobile?: boolean
@@ -808,7 +830,7 @@ export function studioGearEntries({
         : (pt ? 'Mover árvore para a esquerda' : 'Move tree to the left'),
     })
   }
-  const menuInput = { panel: 'studio' as const, placement: slot === 'right' ? 'rail' as const : 'bottom' as const, lang, panelName: 'Studio' }
+  const menuInput = { panel: 'studio' as const, placement, lang, panelName: 'Studio' }
   for (const entry of mobile ? panelMenuEntries(menuInput) : panelMenuEntriesWithoutMove(menuInput)) {
     items.push({ id: entry.id, label: entry.label, iconId: entry.iconId })
   }
@@ -888,7 +910,7 @@ export function nextGoTo(
 
 export function Studio({
   sessionId, lang, autosave, turns, onExit, harness, composerMounted = true, onMention,
-  fullscreen = false, onToggleFullscreen, slot, onMove, onMinimizeRight,
+  fullscreen = false, onToggleFullscreen, slot, placement, onMove, onMinimizeRight,
 }: StudioProps) {
   const isMobile = useIsMobile()
   const pt = lang === 'pt'
@@ -1268,7 +1290,7 @@ export function Studio({
    * never a disabled one.
    */
   const gearIds = studioGearEntries({
-    lang, treeCollapsible: collapsible, treeCollapsed, treeSide, slot, mobile: isMobile,
+    lang, treeCollapsible: collapsible, treeCollapsed, treeSide, placement, mobile: isMobile,
   })
   const gearAction: Record<StudioGearItemId, { icon: ReactNode; onSelect: () => void }> = {
     'tree-toggle': {

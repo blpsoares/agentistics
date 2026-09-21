@@ -30,7 +30,8 @@ import { StudioHost, type StudioHostProps } from '../components/sessions/StudioH
 import { ResizeGrip } from '../components/ResizeGrip'
 import {
   hiddenPanels, isPanelShown, isTabPanelId, mountPanel, railPanels, resolveForGates,
-  resolveForViewport, usePanelSlots, type PanelGates, type PanelId, type TabPanelId,
+  resolveForViewport, usePanelSlots,
+  type OpenPlacement, type PanelGates, type PanelId, type TabPanelId,
 } from '../lib/panelSlots'
 import { panelIconFor } from '../lib/panelIcons'
 import { panelTitle } from '../lib/panelMeta'
@@ -116,6 +117,9 @@ export interface StudioHostMountParams {
   onToggleFullscreen?: () => void
   /** Where the Studio sits right now — see `Studio.tsx`'s own `slot` prop. */
   slot: 'right' | 'bottom'
+  /** The Studio's own REAL placement, never folded for mobile — see `Studio.tsx`'s own `placement`
+   *  prop (rail-loose-ends, item 4). */
+  placement: OpenPlacement
   /** Move it to the other slot — see `Studio.tsx`'s own `onMove` prop. */
   onMove: () => void
   /** The always-visible minimize icon, right-slot only — see `Studio.tsx`'s own `onMinimizeRight`. */
@@ -179,6 +183,7 @@ export function mountStudioHostPanel(params: StudioHostMountParams): ReactElemen
     fullscreen: params.fullscreen,
     onToggleFullscreen: params.onToggleFullscreen,
     slot: params.slot,
+    placement: params.placement,
     onMove: params.onMove,
     onMinimizeRight: params.onMinimizeRight,
   })
@@ -636,6 +641,18 @@ export default function SessionsPage() {
   const panelGates: PanelGates = { editorEnabled, shellEnabled, relayed }
   const slotLayout = resolveForGates(resolveForViewport(rawSlotLayout, isMobile), panelGates)
   const rightIsStudio = slotLayout.right === 'studio'
+  /**
+   * THE STUDIO'S OWN REAL PLACEMENT — `rawSlotLayout`, never `slotLayout` (which
+   * `resolveForViewport` has already folded for a phone's viewport: a `bottom`-placed, bottom-
+   * band-active Studio reads as `slotLayout.right === 'studio'` there too, with nothing left in
+   * this fact to tell "genuinely on the rail" apart from "placed at the bottom, shown as the
+   * phone's full sheet because there is no bottom band to hold it"). `rightIsStudio` answers a
+   * VISUAL question (what is currently drawn where) and stays correct for that; this answers a
+   * PLACEMENT question, and the gear's move label/verb need the second one — see `Studio.tsx`'s
+   * own `placement` prop for the bug this fixes (rail-loose-ends, item 4: the mobile gear kept
+   * reading "Mover Studio para baixo" even once the Studio's real placement already was 'bottom').
+   */
+  const studioPlacement: OpenPlacement = rawSlotLayout.placement.studio === 'bottom' ? 'bottom' : 'rail'
   const rightIsCli = slotLayout.right === 'cli'
   const rightIsShell = slotLayout.right === 'shell'
   const rightIsHardware = slotLayout.right === 'hardware'
@@ -2273,7 +2290,13 @@ export default function SessionsPage() {
         // panel (owner, 2026-09-19). `rightIsStudio`/`bottomIsStudio` are already mutually
         // exclusive wherever `shown` is true, the same fact `studioTarget` above rests on.
         slot: rightIsStudio ? 'right' : 'bottom',
-        onMove: () => moveSlotPanel('studio', rightIsStudio ? 'bottom' : 'rail'),
+        // THE REAL PLACEMENT (rail-loose-ends, item 4) — `studioPlacement`, never `rightIsStudio`,
+        // which a phone's viewport fold can leave reading `true` long after the real placement has
+        // already become `'bottom'`. `onMove` is driven by the SAME fact for the SAME reason: with
+        // `rightIsStudio` a second mobile press (bottom -> rail) silently did nothing, because the
+        // fold kept asking to move it to `'bottom'`, where it already was.
+        placement: studioPlacement,
+        onMove: () => moveSlotPanel('studio', studioPlacement === 'bottom' ? 'rail' : 'bottom'),
         // THE ALWAYS-VISIBLE MINIMIZE ICON — right-slot only; at the bottom `StudioBand`'s own
         // collapse chevron already is this control (`panelMenu.ts`'s own `panelMinimizeAction`).
         onMinimizeRight: rightIsStudio ? () => setRightOpen(false) : undefined,
