@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import {
-  ArrowDown, ArrowRight, ChevronDown, ChevronUp, Maximize2, Minimize2, MoreHorizontal, Settings, X,
+  ArrowDown, ArrowRight, Maximize2, Minimize2, Minus, MoreHorizontal, Settings, X,
 } from 'lucide-react'
 import type { PanelBarEntry, PanelBarId } from '../../lib/panelBar'
-import type { PanelMenuIconId } from '../../lib/panelMenu'
+import { readDragPayload, setDragPayload } from '../../lib/dragReorder'
+import { panelMoveEntry, type PanelMenuIconId } from '../../lib/panelMenu'
+import type { PanelDropTarget } from '../../lib/panelSlots'
 import { resolveBandDrag, resolveBandHeight } from '../../lib/shellBand'
 import { targetLabel } from '../../lib/terminalTarget'
 import { panelIconFor } from '../../lib/panelIcons'
@@ -243,17 +246,27 @@ export function BandLabeledButton({
  * so its own padding is spent INSIDE that figure rather than added on top of it — the exact defect
  * this file's header describes (a 28px box next to 22-24px pills).
  */
-export function BandSegment({ label, isMobile, children }: {
+export function BandSegment({ label, isMobile, children, onDragOver, onDrop, dropHighlight }: {
   label: string
   isMobile: boolean
   children: ReactNode
+  /** Drag support (spec §3), all optional — `ShellBand`'s fixed two-way switch never passes these. */
+  onDragOver?: (e: React.DragEvent<HTMLDivElement>) => void
+  onDrop?: (e: React.DragEvent<HTMLDivElement>) => void
+  dropHighlight?: boolean
 }) {
   return (
-    <div role="tablist" aria-label={label} style={{
-      display: 'flex', alignItems: 'center', gap: 3, padding: '0 3px', flexShrink: 0,
-      boxSizing: 'border-box', height: isMobile ? 44 : BAND_CONTROL_H,
-      borderRadius: 8, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-    }}>
+    <div
+      role="tablist" aria-label={label}
+      {...(onDragOver ? { onDragOver } : {})}
+      {...(onDrop ? { onDrop } : {})}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 3, padding: '0 3px', flexShrink: 0,
+        boxSizing: 'border-box', height: isMobile ? 44 : BAND_CONTROL_H,
+        borderRadius: 8, background: 'var(--bg-elevated)',
+        border: dropHighlight ? '1px solid var(--anthropic-orange)' : '1px solid var(--border-subtle)',
+      }}
+    >
       {children}
     </div>
   )
@@ -278,7 +291,7 @@ export function BandSegment({ label, isMobile, children }: {
  * rather than a fifth copy of the same five (now fourteen) entries.
  */
 export function PanelBar({
-  entries, lang, studioSeen, harness, onPick, compact = false,
+  entries, lang, studioSeen, harness, onPick, compact = false, onDrop, onMove,
 }: {
   entries: readonly PanelBarEntry[]
   lang: 'pt' | 'en'
@@ -292,8 +305,28 @@ export function PanelBar({
    * ALWAYS keeps its label: it is the one fact the bar exists to state at a glance.
    */
   compact?: boolean
+  /**
+   * A drag ended here (spec §3) — either on a specific tab or on this bar's own empty space.
+   * OPTIONAL: a caller that never wires it simply renders a non-draggable bar (nothing in this
+   * component assumes drag is available).
+   */
+  onDrop?: (dragPanel: PanelBarId, target: PanelDropTarget) => void
+  /**
+   * The right-click menu's own move verb (addendum, 2026-09-21) — "move to the rail", since every
+   * bottom-band tab's other placement is the rail. OPTIONAL, same reasoning as `onDrop`: a caller
+   * that never wires it renders tabs with no context menu at all.
+   */
+  onMove?: (id: PanelBarId) => void
 }) {
   const pt = lang === 'pt'
+  const [dragOver, setDragOver] = useState<PanelBarId | 'bar' | null>(null)
+  const [menu, setMenu] = useState<{ id: PanelBarId; at: { x: number; y: number } } | null>(null)
+  const dropHere = onDrop && ((e: React.DragEvent, target: PanelDropTarget) => {
+    e.preventDefault()
+    const key = readDragPayload(e)
+    if (key) onDrop(key as PanelBarId, target)
+    setDragOver(null)
+  })
   const labelFor = (id: PanelBarId): string => {
     if (id === 'cli') return targetLabel('cli', harness, lang)
     if (id === 'shell') return targetLabel('shell', harness, lang)
@@ -316,7 +349,14 @@ export function PanelBar({
     return panelIconFor(id, 14, harness)
   }
   return (
-    <BandSegment label={pt ? 'O que mostrar' : 'What to show'} isMobile={false}>
+    <BandSegment
+      label={pt ? 'O que mostrar' : 'What to show'} isMobile={false}
+      {...(dropHere ? {
+        onDragOver: (e: React.DragEvent) => { e.preventDefault(); setDragOver(s => s ?? 'bar') },
+        onDrop: (e: React.DragEvent) => dropHere(e, { placement: 'bottom' }),
+      } : {})}
+      dropHighlight={dragOver === 'bar'}
+    >
       {entries.map(({ id, on }) => {
         const label = labelFor(id)
         // An unlit tab in compact mode still carries the FULL text as its accessible name (a screen
@@ -333,16 +373,51 @@ export function PanelBar({
             icon={iconFor(id)}
             label={hideLabel ? <span style={VISUALLY_HIDDEN}>{label}</span> : <span>{label}</span>}
             title={label}
+            {...(onMove ? {
+              onContextMenu: (e: React.MouseEvent<HTMLButtonElement>) => {
+                e.preventDefault()
+                setMenu({ id, at: { x: e.currentTarget.getBoundingClientRect().left, y: e.currentTarget.getBoundingClientRect().bottom + 4 } })
+              },
+            } : {})}
+            {...(dropHere ? {
+              draggable: true,
+              onDragStart: (e: React.DragEvent<HTMLButtonElement>) => setDragPayload(e, id),
+              onDragEnd: () => setDragOver(null),
+              onDragOver: (e: React.DragEvent<HTMLButtonElement>) => {
+                e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'move'; setDragOver(id)
+              },
+              onDrop: (e: React.DragEvent<HTMLButtonElement>) => { e.stopPropagation(); dropHere(e, { panel: id }) },
+              dropHighlight: dragOver === id,
+            } : {})}
           />
         )
       })}
+      {menu && onMove && (
+        <PanelContextMenu
+          at={menu.at}
+          entries={(() => {
+            const move = panelMoveEntry({ panel: menu.id, placement: 'bottom', lang, panelName: labelFor(menu.id) })
+            return move ? [{ id: move.id, label: move.label, icon: <ArrowRight size={14} />, onSelect: () => onMove(menu.id) }] : []
+          })()}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </BandSegment>
   )
 }
 
-/** One tab inside a `BandSegment` — `height: '100%'` fills the wrapper's own fixed height exactly,
- *  rather than repeating a second number that could drift from it. */
-export function BandSegmentTab({ on, onClick, icon, label, isMobile, title }: {
+/**
+ * One tab inside a `BandSegment` — `height: '100%'` fills the wrapper's own fixed height exactly,
+ * rather than repeating a second number that could drift from it.
+ *
+ * DRAG (spec §3) is entirely OPTIONAL here — `ShellBand`'s own `cli`/`shell` segmented switch uses
+ * this same component for a fixed two-way choice that is never reordered, so every drag prop is
+ * only ever passed by `PanelBar`'s own call site, never required.
+ */
+export function BandSegmentTab({
+  on, onClick, icon, label, isMobile, title, draggable, onDragStart, onDragOver, onDragEnd, onDrop,
+  dropHighlight, onContextMenu,
+}: {
   on: boolean
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
   icon?: ReactNode
@@ -352,6 +427,16 @@ export function BandSegmentTab({ on, onClick, icon, label, isMobile, title }: {
    *  (`label`), never this — a tag folded into `label` (design item 1's "the tag is also part of
    *  the tab's accessible name") would otherwise be lost the moment a caller also set `aria-label`. */
   title?: string
+  draggable?: boolean
+  onDragStart?: (e: React.DragEvent<HTMLButtonElement>) => void
+  onDragOver?: (e: React.DragEvent<HTMLButtonElement>) => void
+  onDragEnd?: (e: React.DragEvent<HTMLButtonElement>) => void
+  onDrop?: (e: React.DragEvent<HTMLButtonElement>) => void
+  /** Is a drag currently hovering THIS tab as its drop target? */
+  dropHighlight?: boolean
+  /** Right-click / Menu key / Shift+F10 — `PanelBar`'s own context menu (addendum, 2026-09-21).
+   *  OPTIONAL, same as the drag props: `ShellBand`'s fixed two-way switch never passes it. */
+  onContextMenu?: (e: React.MouseEvent<HTMLButtonElement>) => void
 }) {
   return (
     <button
@@ -360,6 +445,8 @@ export function BandSegmentTab({ on, onClick, icon, label, isMobile, title }: {
       onClick={onClick}
       type="button"
       {...(title !== undefined ? { title } : {})}
+      {...(draggable ? { draggable: true, onDragStart, onDragOver, onDragEnd, onDrop } : {})}
+      {...(onContextMenu ? { onContextMenu } : {})}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0,
         height: '100%', padding: isMobile ? '0 14px' : '0 9px',
@@ -367,6 +454,7 @@ export function BandSegmentTab({ on, onClick, icon, label, isMobile, title }: {
         fontSize: 11, fontWeight: 650, whiteSpace: 'nowrap',
         background: on ? 'var(--bg-surface)' : 'transparent',
         color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
+        boxShadow: dropHighlight ? 'inset 0 0 0 1.5px var(--anthropic-orange)' : undefined,
       }}
     >
       {icon}
@@ -536,9 +624,12 @@ export function BandOverflowMenu({ label, entries, isMobile = false, icon }: {
  * genuinely has nowhere to send it (never present and refusing) — see `fullscreenModeFor` in
  * `lib/panelMenu.ts` for which panels can and cannot.
  *
- * MINIMIZE IS ALWAYS THE SAME CHEVRON, ALWAYS THE ACCENT ORANGE — never the neutral secondary-text
- * colour every other icon in this file uses, and never buried in the gear. `collapsed` decides only
- * the ARROW'S DIRECTION (down to collapse, up to reopen); it does NOT decide whether the control is
+ * MINIMIZE IS ALWAYS THE SAME LITERAL `−` (addendum item 4: "o minimizar laranja vira um `−`
+ * literal" — replacing the ChevronDown/ChevronUp pair this used to alternate by `collapsed`, the OS
+ * window-control convention where minimize never itself signals current state), ALWAYS THE ACCENT
+ * ORANGE — never the neutral secondary-text colour every other icon in this file uses, and never
+ * buried in the gear. `collapsed` is kept as a prop (some callers still read it for their OWN
+ * layout) but no longer changes this glyph. It does NOT decide whether the control is
  * drawn — a panel that can only ever be told to go away (the four right-slot panels that close
  * outright, `panelMenu.ts`'s own `close-right`) simply never reads `collapsed: true`, since there
  * is nothing left on screen to reopen it from once it has gone. `onMinimize` is OPTIONAL for
@@ -605,9 +696,91 @@ export function PanelFixedControls({
           title={minimizeLabel}
           aria-label={minimizeLabel}
           style={{ ...iconBtn, color: 'var(--anthropic-orange)' }}
-        >{collapsed ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
+        ><Minus size={14} /></button>
       )}
       <BandOverflowMenu label={gearLabel} icon={<Settings size={14} />} entries={gearEntries} isMobile={isMobile} />
     </>
+  )
+}
+
+// ---------------------------------------------------------------------------------------------
+// PanelContextMenu — the icon-level right-click menu
+// ---------------------------------------------------------------------------------------------
+
+export interface PanelContextMenuEntry {
+  id: string
+  label: string
+  icon: ReactNode
+  onSelect: () => void
+}
+
+/**
+ * PanelContextMenu — right-click on a rail icon or a bottom-band tab (owner feedback, 2026-09-21:
+ * "a engrenagem pode sumir tbm se a opcao for somente 'mover pra baixo' ou 'mover para direita' pq
+ * agora com arrasta e solta nao tem mais necessidade de ter uma engrenagem so pra isso"). It holds
+ * exactly what a GEAR whose only row was ever a move verb used to hold — that row moved HERE, not
+ * away, because drag reaches neither the keyboard nor a phone and the spec's own rule (§9) is that
+ * every verb reachable by drag is also reachable by click. The gear stays exactly where a panel has
+ * something ELSE to say (the Studio's tree options, the Shell's "end this shell", a genuine close);
+ * this menu is additional there too, never a replacement for that gear's own entries.
+ *
+ * KEYBOARD-REACHABLE FOR FREE: the `contextmenu` DOM event already fires for the Menu key and
+ * `Shift+F10` on a focused element, with no extra wiring — a component that answers `onContextMenu`
+ * on a focusable element (every rail icon and bar tab already is one, `role="tab"`) is reachable
+ * that way without a second, bespoke keyboard path to drift from the pointer one.
+ *
+ * PORTALED, `position: fixed`, ANCHORED TO THE TRIGGERING ELEMENT'S OWN RECT rather than
+ * `event.clientX/clientY` — a keyboard-fired `contextmenu` reports those inconsistently across
+ * browsers (often 0,0 or the viewport corner), while the element's `getBoundingClientRect()` is
+ * always where the reader is actually looking. Portaled for the same reason the rail's own tooltip
+ * is now portaled: the rail's `overflow: hidden` would otherwise clip a menu opening to its left.
+ */
+export function PanelContextMenu({ at, entries, onClose }: {
+  at: { x: number; y: number } | null
+  entries: readonly PanelContextMenuEntry[]
+  onClose: () => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!at) return
+    const away = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onClose() }
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('mousedown', away)
+    document.addEventListener('keydown', key)
+    return () => {
+      document.removeEventListener('mousedown', away)
+      document.removeEventListener('keydown', key)
+    }
+  }, [at, onClose])
+  useEffect(() => {
+    if (at) ref.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus()
+  }, [at])
+  if (!at || entries.length === 0) return null
+  const width = 220
+  const left = Math.min(at.x, window.innerWidth - width - 8)
+  const top = Math.min(at.y, window.innerHeight - entries.length * 34 - 16)
+  return createPortal(
+    <div
+      ref={ref} role="menu"
+      style={{
+        position: 'fixed', left, top, width, zIndex: 1300,
+        borderRadius: 10, border: '1px solid var(--border-subtle)',
+        background: 'var(--bg-elevated)', boxShadow: 'var(--ag-shadow-menu)',
+        padding: 4, display: 'grid', gap: 1,
+      }}
+    >
+      {entries.map(entry => (
+        <button
+          key={entry.id} type="button" role="menuitem"
+          onClick={e => { e.stopPropagation(); entry.onSelect(); onClose() }}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px',
+            borderRadius: 6, border: 'none', background: 'transparent', cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: 12, color: 'var(--text-primary)', textAlign: 'left',
+          }}
+        >{entry.icon}{entry.label}</button>
+      ))}
+    </div>,
+    document.body,
   )
 }

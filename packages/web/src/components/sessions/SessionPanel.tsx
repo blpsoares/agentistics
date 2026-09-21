@@ -28,7 +28,7 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { useElementWidth } from '../../hooks/useElementWidth'
 import { useViewportWidth } from '../../hooks/useViewportWidth'
 import {
-  bottomPanels, resolveForViewport, usePanelSlots, type PanelId,
+  bottomPanels, resolveForViewport, usePanelSlots, type PanelDropTarget, type PanelId,
 } from '../../lib/panelSlots'
 import { panelTitle } from '../../lib/panelMeta'
 import { RAIL_WIDTH_PX, fullscreenInsetRight, useRightAsideEdge } from '../../lib/rightAsideEdge'
@@ -37,7 +37,6 @@ import {
   type PanelBarEntry, type PanelBarGates, type PanelBarId,
 } from '../../lib/panelBar'
 import type { TerminalTarget } from '../../lib/terminalTarget'
-import { panelMenuEntries } from '../../lib/panelMenu'
 import { RelayedScreen } from './RelayedScreen'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import type { FleetActionId, FleetRow } from '../../lib/fleet'
@@ -51,7 +50,7 @@ import {
   writeBandPrefs,
 } from '../../lib/shellBand'
 import {
-  BAND_CONTROL_H, BandResizeHandle, PanelBar, PanelFixedControls, panelMenuIconFor, useBandDrag,
+  BAND_CONTROL_H, BandResizeHandle, PanelBar, PanelFixedControls, useBandDrag,
   type BandOverflowEntry,
 } from './bandControls'
 
@@ -230,7 +229,8 @@ export function SessionPanel({
    */
   const isMobile = useIsMobile()
   const {
-    layout: rawSlotLayout, openPanel: openSlotPanel, movePanel: moveSlotPanel, setBottomOpen,
+    layout: rawSlotLayout, openPanel: openSlotPanel, movePanel: moveSlotPanel, dropPanel: dropSlotPanel,
+    setBottomOpen,
   } = usePanelSlots()
   const slotLayout = resolveForViewport(rawSlotLayout, isMobile)
   /**
@@ -463,6 +463,8 @@ export function SessionPanel({
           onToggleOpen={() => setBottomOpen(!slotLayout.bottomOpen)}
           barEntries={barEntries}
           onBarPick={onPanelBarPick}
+          onBarDrop={dropSlotPanel}
+          onBarMove={id => moveSlotPanel(id, 'rail')}
           studioSeen={studioSeen}
           taskControl={taskControl}
           fullscreen={studioFullscreen === true}
@@ -482,6 +484,17 @@ export function SessionPanel({
           columnHeight={columnHeight}
           barEntries={barEntries}
           onBarPick={onPanelBarPick}
+          onBarDrop={dropSlotPanel}
+          /*
+           * `moveSlotPanel(id, 'rail')` — a genuine placement change, not merely an open. The docked
+           * band's own `cli`/`shell` preference (`shellBand.ts`'s `target`) is never written through
+           * `panelSlots` except on an explicit tab click, so on a fresh session `slotLayout.bottom`
+           * may never have recorded what this band was already showing; `movePanel` no longer
+           * refuses for that reason (it always sets placement AND opens, regardless of prior
+           * visibility — see `panelSlots.ts`'s own header), so what the band shows right now is
+           * always exactly what moves.
+           */
+          onBarMove={id => moveSlotPanel(id, 'rail')}
           studioSeen={studioSeen}
           // The security narrowing: WHICH of the two panes ShellBand may ever show/open, never
           // whether it renders at all — see this prop's own doc comment on `ShellBand`.
@@ -505,16 +518,6 @@ export function SessionPanel({
           // record's stale `open` cold, ignoring the `bottomOpen: true` `openPanel` had just set.
           open={slotLayout.bottomOpen}
           onOpenChange={setBottomOpen}
-          /*
-           * `moveSlotPanel(id, 'rail')` — a genuine placement change, not merely an open. The docked
-           * band's own `cli`/`shell` preference (`shellBand.ts`'s `target`) is never written through
-           * `panelSlots` except on an explicit tab click, so on a fresh session `slotLayout.bottom`
-           * may never have recorded what this band was already showing; `movePanel` no longer
-           * refuses for that reason (it always sets placement AND opens, regardless of prior
-           * visibility — see `panelSlots.ts`'s own header), so what the band shows right now is
-           * always exactly what moves.
-           */
-          onMoveToRight={id => moveSlotPanel(id, 'rail')}
         />
       ) : bottomBand !== 'bar-only' && bottomBand !== 'none' ? (
         /* ANY OTHER PANEL DOCKED AT THE BOTTOM — one of the ten former Contents tabs, or hardware.
@@ -529,9 +532,10 @@ export function SessionPanel({
           open={slotLayout.bottomOpen}
           columnHeight={columnHeight}
           onToggleOpen={() => setBottomOpen(!slotLayout.bottomOpen)}
-          onMoveToRight={() => moveSlotPanel(bottomBand, 'rail')}
           barEntries={barEntries}
           onBarPick={onPanelBarPick}
+          onBarDrop={dropSlotPanel}
+          onBarMove={id => moveSlotPanel(id, 'rail')}
           studioSeen={studioSeen}
           taskControl={taskControl}
           fullscreen={bottomTabFullscreen === true}
@@ -581,7 +585,7 @@ export function SessionPanel({
  * which is `ShellBand`'s alone — only `height`/`full` are read and written from here.
  */
 function StudioBand({
-  lang, open, columnHeight, onToggleOpen, barEntries, onBarPick, studioSeen,
+  lang, open, columnHeight, onToggleOpen, barEntries, onBarPick, onBarDrop, onBarMove, studioSeen,
   taskControl, contentRef, fullscreen, onFullscreenChange, harness,
 }: {
   lang: 'pt' | 'en'
@@ -609,6 +613,10 @@ function StudioBand({
    */
   barEntries: readonly PanelBarEntry[]
   onBarPick: (id: PanelBarId) => void
+  /** Spec §3, drag — see `PanelBar`'s own `onDrop` prop. Optional so no caller is forced to wire it. */
+  onBarDrop?: (dragPanel: PanelBarId, target: PanelDropTarget) => void
+  /** The bar's own context-menu move verb (addendum, 2026-09-21) — see `PanelBar`'s own `onMove`. */
+  onBarMove?: (id: PanelBarId) => void
   studioSeen: boolean
   taskControl: ReactNode
   contentRef?: (el: HTMLDivElement | null) => void
@@ -737,6 +745,8 @@ function StudioBand({
         <PanelBar
           entries={barEntries} lang={lang} studioSeen={studioSeen} onPick={onBarPick} compact={compact}
           {...(harness ? { harness } : {})}
+          {...(onBarDrop ? { onDrop: onBarDrop } : {})}
+          {...(onBarMove ? { onMove: onBarMove } : {})}
         />
         <span style={{ flex: 1 }} />
         {/* NO SECOND MENU HERE ANY MORE (owner, 2026-09-19: "no studio aparece os 3 pontinhos e a
@@ -817,8 +827,8 @@ function StudioBand({
  * no toolbar of their own the way Studio does, so there is nowhere else for these three to live.
  */
 function SimpleDockedBand({
-  panel, panelName, lang, open, columnHeight, onToggleOpen, onMoveToRight, barEntries, onBarPick,
-  studioSeen, taskControl, fullscreen, onFullscreenChange, harness, children,
+  panel, panelName, lang, open, columnHeight, onToggleOpen, barEntries, onBarPick,
+  onBarDrop, onBarMove, studioSeen, taskControl, fullscreen, onFullscreenChange, harness, children,
 }: {
   panel: Exclude<PanelId, 'cli' | 'shell' | 'studio'>
   panelName: string
@@ -826,9 +836,12 @@ function SimpleDockedBand({
   open: boolean
   columnHeight: number
   onToggleOpen: () => void
-  onMoveToRight: () => void
   barEntries: readonly PanelBarEntry[]
   onBarPick: (id: PanelBarId) => void
+  /** Spec §3, drag — see `PanelBar`'s own `onDrop` prop. Optional so no caller is forced to wire it. */
+  onBarDrop?: (dragPanel: PanelBarId, target: PanelDropTarget) => void
+  /** The bar's own context-menu move verb (addendum, 2026-09-21) — see `PanelBar`'s own `onMove`. */
+  onBarMove?: (id: PanelBarId) => void
   studioSeen: boolean
   taskControl: ReactNode
   fullscreen: boolean
@@ -867,12 +880,10 @@ function SimpleDockedBand({
   useEffect(() => {
     if (!open && fullscreen) onFullscreenChange(false)
   }, [open, fullscreen, onFullscreenChange])
-  const gearEntries: readonly BandOverflowEntry[] = panelMenuEntries({
-    panel, placement: 'bottom', lang, panelName,
-  }).map(entry => ({
-    id: entry.id, label: entry.label, icon: panelMenuIconFor(entry.iconId),
-    onSelect: onMoveToRight,
-  }))
+  // NO GEAR (addendum, 2026-09-21): `panel` here is never the Studio (`Exclude<..., 'studio'>`), so
+  // its only-ever gear row was move — now the tab's OWN right-click menu (`onBarMove`, wired at the
+  // call site). A panel this generic band hosts has nothing else to say in a gear.
+  const gearEntries: readonly BandOverflowEntry[] = []
   return (
     <div style={{
       // FULL SCREEN STOPS SHORT OF THE ARTIFACTS ASIDE — see `StudioBand`'s own comment on
@@ -906,6 +917,8 @@ function SimpleDockedBand({
         <PanelBar
           entries={barEntries} lang={lang} studioSeen={studioSeen} onPick={onBarPick} compact={compact}
           {...(harness ? { harness } : {})}
+          {...(onBarDrop ? { onDrop: onBarDrop } : {})}
+          {...(onBarMove ? { onMove: onBarMove } : {})}
         />
         <span style={{ flex: 1 }} />
         <PanelFixedControls

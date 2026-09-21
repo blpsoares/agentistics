@@ -194,6 +194,18 @@ export interface ArtifactsAsideProps {
   outsideNote?: string
   onClose: () => void
   /**
+   * Suppress this header's own close button (addendum item 4, owner: "nao quero mais que exista o
+   * icone de aside no aside lateral direito"). `onClose` STAYS REQUIRED — it is still what this
+   * mount closes through, and on a phone (no `rightSlotBar` at all) it is the ONLY way out — this
+   * only hides the BUTTON, on the ONE mount where it duplicates a control that already sits right
+   * above it: the right slot on desktop, where `rightSlotBar`'s own `PanelFixedControls` minimize
+   * IS a literal close for every one of these ten panels (`panelMinimizeAction`'s `close-right`) —
+   * calling the exact same `closeSlotPanel(id)` this header's own button called. The bottom band's
+   * own minimize COLLAPSES instead (`collapse-bottom`, the band stays this panel's occupant), so
+   * this button keeps its job there.
+   */
+  hideCloseButton?: boolean
+  /**
    * The conversation's turns, for the LIVE tab.
    *
    * The feed is derived from the same turns the chat renders, so it can never claim something the
@@ -219,7 +231,7 @@ export interface ArtifactsAsideProps {
 
 export function ArtifactsAside({
   sessionId, cwd, lang, artifacts, loading, unavailable, older, turns, onClose,
-  unlistedWrites, outsideNote,
+  unlistedWrites, outsideNote, hideCloseButton,
   activeTab, focusRequest, session, onOpenTask, onTaskChanged, metrics,
 }: ArtifactsAsideProps) {
   const pt = lang === 'pt'
@@ -507,18 +519,20 @@ export function ArtifactsAside({
             {created > 0 && ` · ${created} ${pt ? (created === 1 ? 'novo' : 'novos') : 'new'}`}
           </span>
         )}
-        <button
-          onClick={onClose}
-          aria-label={pt ? 'Fechar artefatos' : 'Close artifacts'}
-          title={pt ? 'Fechar o painel' : 'Close the panel'}
-          style={{
-            marginLeft: 'auto', display: 'flex', width: 26, height: 26, borderRadius: 7,
-            alignItems: 'center', justifyContent: 'center', border: 'none',
-            background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer',
-          }}
-        >
-          <PanelRightClose size={15} />
-        </button>
+        {!hideCloseButton && (
+          <button
+            onClick={onClose}
+            aria-label={pt ? 'Fechar artefatos' : 'Close artifacts'}
+            title={pt ? 'Fechar o painel' : 'Close the panel'}
+            style={{
+              marginLeft: 'auto', display: 'flex', width: 26, height: 26, borderRadius: 7,
+              alignItems: 'center', justifyContent: 'center', border: 'none',
+              background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer',
+            }}
+          >
+            <PanelRightClose size={15} />
+          </button>
+        )}
       </div>
       {shortfall.map(line => (
         <p key={line} style={{

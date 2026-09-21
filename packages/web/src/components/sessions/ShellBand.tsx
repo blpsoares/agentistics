@@ -47,7 +47,7 @@ import {
 import { useDocumentVisible } from '../../hooks/useDocumentVisible'
 import { useElementWidth } from '../../hooks/useElementWidth'
 import { keyStripShown } from '../../lib/terminalSurface'
-import { dockedShowsTarget, usePanelSlots } from '../../lib/panelSlots'
+import { dockedShowsTarget, usePanelSlots, type PanelDropTarget } from '../../lib/panelSlots'
 import {
   followBottomOccupant, resolveDockedTarget, shellTargetUnavailable, targetLabel, targetScope,
   targetStreamId, type TerminalTarget,
@@ -239,6 +239,10 @@ export interface ShellBandProps {
    * other caller of the shared handler needs to know that.
    */
   onBarPick?: (id: PanelBarId) => void
+  /** Spec §3, drag — see `PanelBar`'s own `onDrop` prop. Optional so no caller is forced to wire it. */
+  onBarDrop?: (dragPanel: PanelBarId, target: PanelDropTarget) => void
+  /** The bar's own context-menu move verb (addendum, 2026-09-21) — see `PanelBar`'s own `onMove`. */
+  onBarMove?: (id: PanelBarId) => void
   /** The first-open dot on the Studio entry — `App.tsx`'s own `studioSeen`, threaded down through
    *  `SessionPanel`. */
   studioSeen?: boolean
@@ -313,9 +317,6 @@ export interface ShellBandProps {
    * no room for a second control.
    */
   taskControl?: ReactNode
-  /** Move whichever pane THIS band is currently showing to the right slot. Docked only — `aside` is
-   *  already the right slot, and `dedicated` has no slot to move into. */
-  onMoveToRight?: (target: TerminalTarget) => void
   /**
    * THE CENTRE COLUMN'S OWN MEASURED HEIGHT (design item 7) — what "full" resolves against, and
    * the ceiling `resolveBandHeight` reads. `docked` only: `dedicated`/`aside` already fill the
@@ -350,9 +351,9 @@ export interface ShellBandProps {
 
 export function ShellBand({
   sessionId, cwd, lang, theme, harness, placement = 'docked', onOpenFullscreen,
-  barEntries, onBarPick, studioSeen = true, bottomOccupant = null, shellEnabled = true,
+  barEntries, onBarPick, onBarDrop, onBarMove, studioSeen = true, bottomOccupant = null, shellEnabled = true,
   shellCapable = true, onShellEnabledChange, taskControl,
-  onMoveToRight, columnHeight = 0, open: openSeed, onOpenChange,
+  columnHeight = 0, open: openSeed, onOpenChange,
 }: ShellBandProps) {
   const t = TXT[lang]
   const isMobile = useIsMobile()
@@ -819,6 +820,8 @@ export function ShellBand({
     <PanelBar
       entries={barEntries} lang={lang} studioSeen={studioSeen} harness={harness} onPick={handleBarPick}
       compact={compact}
+      {...(onBarDrop ? { onDrop: onBarDrop } : {})}
+      {...(onBarMove ? { onMove: onBarMove } : {})}
     />
   )
   /**
@@ -837,13 +840,21 @@ export function ShellBand({
    * three to act on, so the gear itself goes ABSENT (`BandOverflowMenu`'s own empty-entries rule)
    * rather than opening onto rows about a pane the reader cannot currently see.
    */
-  const moveEntry = panelMenuEntries({
+  // MOVE IS GONE FROM THIS GEAR ON DESKTOP ONLY (addendum, 2026-09-21) — it now lives on the BAR
+  // TAB's own right-click menu (`PanelBar`'s `onMove`, wired below), reachable for exactly the same
+  // panel this gear is about. ON MOBILE it STAYS: there is no rail to right-click and no reliable
+  // `contextmenu` gesture on a touch device, and spec §8 already states the rule this follows ("the
+  // gear menu covers those verbs there") — the same fix `Studio.tsx`'s own gear needed for the exact
+  // same reason (reproduced live: stripping this unconditionally left NO way to move Claude Code's
+  // pane on a phone at all). `onBarMove` already IS "move to rail" for any panel id, so it is reused
+  // rather than re-deriving the same action a second way.
+  const moveEntry = isMobile && prefs.open && onBarMove ? panelMenuEntries({
     panel: target, placement: 'bottom', lang, panelName: targetLabel(target, harness, lang),
-  }).find(e => e.id === 'move-right')
+  }).find(e => e.id === 'move-right') : undefined
   const gearEntries: BandOverflowEntry[] = [
-    ...(prefs.open && onMoveToRight && moveEntry ? [{
+    ...(moveEntry ? [{
       id: moveEntry.id, label: moveEntry.label, icon: panelMenuIconFor(moveEntry.iconId),
-      onSelect: () => onMoveToRight(target),
+      onSelect: () => onBarMove!(target),
     }] : []),
     ...(prefs.open && shell && target === 'shell' ? [{
       id: 'end', label: t.close, icon: <Trash2 size={14} />, onSelect: () => { void close() },

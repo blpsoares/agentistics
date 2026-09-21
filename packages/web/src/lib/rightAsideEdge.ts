@@ -13,6 +13,17 @@
  * `null` means "no aside on screen right now" — closed, or a route with no `SessionsPage` mounted
  * at all — and the caller falls back to the viewport's own right edge, exactly as
  * `resolveArtifactLayout` already treats a closed panel as "the aside is not there."
+ *
+ * WHILE A SESSION IS SELECTED ON DESKTOP BUT NOTHING IS OPEN ON THE RIGHT, this is no longer `null`
+ * — it is the RAIL's own left edge (`closedRightEdge`, below), because the rail (spec §2: "the rail
+ * exists even when every panel is at the bottom") occupies that space instead of empty viewport the
+ * instant a session is selected. `SessionsPage.tsx`'s own reporting effect is the ONE place that
+ * decides this; every consumer of `useRightAsideEdge()` — `fullscreenInsetRight` in this file, and
+ * `sessionsFiltersPanel.ts`'s Filtros/metrics bounds in `App.tsx` — then reads the SAME already-
+ * resolved edge, which is what stops one of them learning about the rail and the other not. Reported
+ * live: "a barrinha de filtro ta em cima da barra fixa da direita com os icones" — the Filtros
+ * chips' own closed-aside fallback used the bare viewport edge minus a 32px margin, 12px short of
+ * the rail's 44px, so the chips painted 12px INTO the rail's icons the moment nothing was open.
  */
 
 import { useSyncExternalStore } from 'react'
@@ -124,12 +135,26 @@ export function restingLeftEdge(visualLeft: number, computedTransform: string): 
 export const RAIL_WIDTH_PX = 44
 
 /**
+ * WHERE THE RIGHT-HAND FURNITURE STARTS while NOTHING is open on the right — the ONE function every
+ * "stay clear of the right side" caller's closed-aside fallback ultimately runs through, since
+ * `SessionsPage.tsx`'s reporting effect is the only caller and every consumer just reads the result
+ * back off `useRightAsideEdge()`. `railShowing` is the rail's own presence condition, restated by
+ * its one caller (`!isMobile && selected !== undefined`, `PanelRail`'s own mount condition in
+ * `SessionsPage.tsx`) rather than duplicated here — this function does not know what a session is.
+ * `null` when there is no rail either (mobile, or no session selected): genuinely nothing on the
+ * right, the bare viewport edge.
+ */
+export function closedRightEdge(railShowing: boolean, viewportWidth: number): number | null {
+  return railShowing ? viewportWidth - RAIL_WIDTH_PX : null
+}
+
+/**
  * `railWidth` (default 0, for a caller on a viewport with no rail at all — mobile) is what makes
- * this respect the rail (spec §2: "Full screen respects the rail") EVEN WHILE `rightAsideEdge` is
- * `null` — the rail (design §2: "the rail exists even when every panel is at the bottom") sits to
- * the right of the aside whenever the aside itself is showing something, so `rightAsideEdge`'s own
- * `viewportWidth - rightAsideEdge` already reaches the rail's own left edge in that case; only the
- * CLOSED-aside case (`null`) needs the constant added back by hand.
+ * this respect the rail (spec §2: "Full screen respects the rail") on the rare path where
+ * `rightAsideEdge` is STILL `null` (no session selected at all, or mobile) — the ordinary
+ * closed-aside-with-a-session-selected case no longer reaches this branch, because
+ * `SessionsPage.tsx` now reports the rail's own edge there via `closedRightEdge` instead of `null`,
+ * and `viewportWidth - rightAsideEdge` already reaches it like any other reported edge.
  */
 export function fullscreenInsetRight(
   rightAsideEdge: number | null, viewportWidth: number, railWidth = 0,

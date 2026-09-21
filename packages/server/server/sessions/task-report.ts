@@ -13,6 +13,7 @@ import type {
   Attempt, AttemptStatus, Subtask, Task, TaskComment, TaskFile,
 } from './task-model'
 import { groupMembers, isGroupMember, isGroupSubtask, legacyTaskId } from './task-model'
+import { distinctConversations } from './task-conversations'
 import { rollupAttempt, type AttemptRollup, type RollupSession } from './task-rollup'
 import { scopedTaskStats, taskStats, type TaskStats } from './task-stats'
 import type { ManagedSession } from './types'
@@ -105,8 +106,12 @@ export function rowsOfTask(task: Task, rows: readonly ManagedSession[]): Managed
     || (r.task !== undefined && legacyTaskId(r.task) === task.id))
 }
 
+// The rule lives in `task-conversations.ts` (see there); re-exported so this module stays the one
+// door every existing caller imports it through.
+export { distinctConversations }
+
 /**
- * One `RollupSession` per row.
+ * One `RollupSession` per CONVERSATION (`distinctConversations`).
  *
  * `provenance` is READ from the record rather than guessed: a link with no `conversationLink` was
  * written before that field existed and was an assigned one. A row whose conversation is not in the
@@ -115,24 +120,6 @@ export function rowsOfTask(task: Task, rows: readonly ManagedSession[]): Managed
  * `costMeasured` stays unset: nothing reads a harness's own cost figure yet, and claiming a figure
  * is measured when it was estimated is precisely the confusion that field exists to prevent.
  */
-/**
- * One row per CONVERSATION, in first-seen order — the rule stated once, for every surface that
- * accumulates over a task's rows. `task-overview.ts` needs it too: it walks the rows itself rather
- * than going through the rollup, so without this the headline counted a reopened conversation once
- * per reopening while the delivery under it counted correctly.
- *
- * A row with NO conversation link is always kept: it cannot be shown to be a duplicate of anything.
- */
-export function distinctConversations(rows: readonly ManagedSession[]): ManagedSession[] {
-  const seen = new Set<string>()
-  return rows.filter(r => {
-    if (!r.conversationId) return true
-    if (seen.has(r.conversationId)) return false
-    seen.add(r.conversationId)
-    return true
-  })
-}
-
 export function rollupSessionsFor(
   rows: readonly ManagedSession[],
   metas: ReadonlyMap<string, SessionMeta>,
@@ -164,10 +151,17 @@ export function rollupSessionsFor(
 export function attemptViews(
   task: Task,
   attempts: readonly Attempt[],
-  rows: readonly ManagedSession[],
+  allRows: readonly ManagedSession[],
   metas: ReadonlyMap<string, SessionMeta>,
   costOf: (m: SessionMeta) => number,
 ): AttemptView[] {
+  // PARTITION THE CONVERSATIONS, NOT THE ROWS. A conversation reopened under a different attempt
+  // has one row per reopening, each carrying the attempt it was filed under at the time; filtering
+  // first and deduping inside each bucket counted the conversation once PER bucket it ever touched.
+  // Deduping first makes the newest row — the current filing — the only one that is bucketed, so
+  // every conversation lands in exactly one bucket. Idempotent: a caller that already deduped
+  // (`buildTaskDetail`) pays nothing.
+  const rows = distinctConversations(allRows)
   const mine = attempts.filter(a => a.taskId === task.id)
   const views: AttemptView[] = mine.map(a => ({
     id: a.id,
@@ -249,10 +243,15 @@ export interface SubtaskView {
 export function subtaskViews(
   task: Task,
   subtasks: readonly Subtask[],
-  rows: readonly ManagedSession[],
+  allRows: readonly ManagedSession[],
   metas: ReadonlyMap<string, SessionMeta>,
   costOf: (m: SessionMeta) => number,
 ): SubtaskView[] {
+  // Same rule as `attemptViews`, and it matters more here because a filing is a MOVE: a conversation
+  // filed on three subtasks in turn holds three rows, and only the newest names where it is NOW.
+  // Bucketing before deduping put its cost under every subtask it ever visited and left the current
+  // one unmeasured whenever an older row happened to come first.
+  const rows = distinctConversations(allRows)
   const mine = subtasks.filter(s => s.taskId === task.id)
   // Every subtask that is NOT a group member gets its own bucket, keyed by its own id — a loose
   // subtask exactly as before, a group by the same rule (its rollup is simply the rows filed on
@@ -378,7 +377,11 @@ export function buildTaskDetail(o: {
   subtasks?: readonly Subtask[]
   files?: readonly TaskFile[]
 }): TaskDetail {
-  const mine = rowsOfTask(o.task, o.rows)
+  // ONE ROW PER CONVERSATION, decided ONCE and handed to everything below — the newest row of each
+  // conversation, because it carries the current filing and the current liveness. Every figure and
+  // every list on this detail reads the same set, so a conversation cannot be in the list and
+  // missing from a bucket, or counted twice in the evidence block, or filed in two places.
+  const mine = distinctConversations(rowsOfTask(o.task, o.rows))
   const metas = mine
     .map(r => (r.conversationId ? o.metas.get(r.conversationId) : undefined))
     .filter((m): m is SessionMeta => m !== undefined)
@@ -406,7 +409,7 @@ export function buildTaskDetail(o: {
     //
     // It is the twin of the 2026-09-08 defect recorded on `rollupSessionsFor`, which was fixed in
     // the figures and left in the list standing next to them.
-    sessions: distinctConversations(mine).map(r => {
+    sessions: mine.map(r => {
       const meta = r.conversationId ? o.metas.get(r.conversationId) ?? null : null
       return {
         id: r.id,

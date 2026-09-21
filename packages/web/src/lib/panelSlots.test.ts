@@ -2,10 +2,11 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import {
   DEFAULT_PLACEMENT, EMPTY_SLOT_LAYOUT, PANEL_IDS, allowed, bottomPanels, closePanel,
   getPanelLayout, hidePanel, hiddenPanels, hidePanelPlacement, isPanelId, isPanelShown, movePanel,
-  openPanel, railPanels, readLayout, relocatePanel, reorderPlacement, resetPanelSlots,
-  resolveForGates, resolveForViewport, restorePanelPlacement, rightSlotShowing, setBandOpen,
-  setBottomOpen, setPlacement, setRightOpen, setSlotRightOpen, showPanel, subscribePanelLayout,
-  type OpenPlacement, type PanelGates, type Placement,
+  openPanel, planPanelDrop, railClickAction, railPanels, readLayout, relocatePanel, reorderPlacement,
+  resetPanelSlots, resolveForGates, resolveForViewport, restorePanelPlacement, rightSlotShowing,
+  setBandOpen, setBottomOpen, setPlacement, setRightOpen, setSlotRightOpen, showPanel,
+  subscribePanelLayout,
+  type OpenPlacement, type PanelGates, type PanelId, type Placement,
 } from './panelSlots'
 import { answerUnsaved, getUnsaved, reportUnsaved, resetUnsaved } from './unsavedBuffers'
 
@@ -188,6 +189,99 @@ describe('reorderPlacement', () => {
   test('never touches placement, only order', () => {
     const next = reorderPlacement(EMPTY_SLOT_LAYOUT, 'rail', [...railPanels(EMPTY_SLOT_LAYOUT)].reverse())
     expect(next.placement).toEqual(EMPTY_SLOT_LAYOUT.placement)
+  })
+})
+
+describe('planPanelDrop — spec §3, drag', () => {
+  test('same-bar drop on another panel reorders, matching reorderByDrag exactly', () => {
+    const rail = railPanels(EMPTY_SLOT_LAYOUT) // ['live', 'gallery', 'skills', ...]
+    const next = planPanelDrop(EMPTY_SLOT_LAYOUT, rail[0]!, { panel: rail[2]! })
+    // live dragged onto skills: gallery moves ahead, live lands right before skills.
+    expect(railPanels(next)).toEqual([rail[1]!, rail[0]!, rail[2]!, ...rail.slice(3)])
+    // placement is untouched — a same-bar drop is a pure reorder.
+    expect(next.placement).toEqual(EMPTY_SLOT_LAYOUT.placement)
+  })
+
+  test('dropping a panel on itself is a no-op', () => {
+    const next = planPanelDrop(EMPTY_SLOT_LAYOUT, 'live', { panel: 'live' })
+    expect(next).toBe(EMPTY_SLOT_LAYOUT)
+  })
+
+  test('cross-bar drop onto a specific panel MOVES, OPENS, and lands beside that panel', () => {
+    // drag a rail panel onto 'shell' (bottom) — spec: it becomes a tab there AND opens there.
+    const next = planPanelDrop(EMPTY_SLOT_LAYOUT, 'skills', { panel: 'shell' })
+    expect(next.placement.skills).toBe('bottom')
+    expect(next.bottom).toBe('skills') // opened, displacing nothing since bottom starts empty
+    expect(bottomPanels(next)).toEqual(['cli', 'skills', 'shell'])
+  })
+
+  test('cross-bar drop onto bare placement space MOVES, OPENS, and appends at the end', () => {
+    const next = planPanelDrop(EMPTY_SLOT_LAYOUT, 'skills', { placement: 'bottom' })
+    expect(next.placement.skills).toBe('bottom')
+    expect(next.bottom).toBe('skills')
+    expect(bottomPanels(next)).toEqual(['cli', 'shell', 'skills'])
+  })
+
+  test('same-bar drop onto bare placement space is a no-op — no position was implied', () => {
+    const next = planPanelDrop(EMPTY_SLOT_LAYOUT, 'live', { placement: 'rail' })
+    expect(next).toBe(EMPTY_SLOT_LAYOUT)
+  })
+
+  test('a panel currently hidden, dropped on a rail panel, is placed on the rail and opened there', () => {
+    const hidden = hidePanelPlacement(EMPTY_SLOT_LAYOUT, 'skills')
+    const next = planPanelDrop(hidden, 'skills', { panel: 'live' })
+    expect(next.placement.skills).toBe('rail')
+    expect(next.right).toBe('skills')
+    const rail = railPanels(next)
+    // lands immediately before the panel it was dropped on, same as any cross-bar drop onto a
+    // specific target.
+    expect(rail.indexOf('skills')).toBe(rail.indexOf('live') - 1)
+  })
+
+  test('restoreTo is refreshed by a cross-bar drop exactly as the gear’s move verb refreshes it', () => {
+    const viaMove = movePanel(EMPTY_SLOT_LAYOUT, 'skills', 'bottom')
+    const viaDrop = planPanelDrop(EMPTY_SLOT_LAYOUT, 'skills', { placement: 'bottom' })
+    expect(viaDrop.restoreTo).toEqual(viaMove.restoreTo)
+  })
+
+  // PLANTED-REVERT: plant the class of bug this shares its arithmetic with (an index-based reorder
+  // applied across bars, ignoring the target bar's OWN current order), confirm the tests above
+  // distinguish it, then restore the file to its correct state.
+  test('[planted-revert coverage] a drop is judged by the TARGET panel’s bar, not the dragged one’s', () => {
+    // If planPanelDrop mistakenly reordered within the DRAGGED panel's own (rail) list instead of
+    // the target's (bottom) list, 'skills' would never appear in bottomPanels at all.
+    const next = planPanelDrop(EMPTY_SLOT_LAYOUT, 'skills', { panel: 'shell' })
+    expect(bottomPanels(next)).toContain('skills')
+    expect(railPanels(next)).not.toContain('skills')
+  })
+})
+
+describe('railClickAction — the rail is a launcher, the bottom bar is a tab strip', () => {
+  test('clicking the panel that is already open, and active, minimizes it', () => {
+    expect(railClickAction('skills', true, 'skills')).toBe('minimize')
+  })
+
+  test('clicking a DIFFERENT panel opens it, even while something else is open', () => {
+    expect(railClickAction('skills', true, 'live')).toBe('open')
+  })
+
+  test('clicking the active panel while it is ALREADY minimized restores it — never a third state', () => {
+    expect(railClickAction('skills', false, 'skills')).toBe('open')
+  })
+
+  test('clicking when nothing is open opens', () => {
+    expect(railClickAction(null, false, 'live')).toBe('open')
+  })
+
+  // PLANTED-REVERT: a version that ignores `rightOpen` would minimize an already-minimized active
+  // panel on a second click (a no-op read as a toggle), which is exactly the "third state" this
+  // function's own header refuses.
+  test('[planted-revert coverage] ignoring rightOpen would wrongly toggle a minimized active panel', () => {
+    function brokenAction(active: PanelId | null, _rightOpen: boolean, panel: PanelId): 'open' | 'minimize' {
+      return active === panel ? 'minimize' : 'open'
+    }
+    // active + minimized: correct answer is 'open' (restore); the broken version says 'minimize'.
+    expect(brokenAction('skills', false, 'skills')).not.toBe(railClickAction('skills', false, 'skills'))
   })
 })
 

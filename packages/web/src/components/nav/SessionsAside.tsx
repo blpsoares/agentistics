@@ -241,9 +241,14 @@ export function SessionsAside({
   }
   /** No longer only about pins — the row menu's action results land here too. */
   const [notice, setNotice] = useState<string | null>(null)
-  /** Which pinned row is being dragged, and where it would land. Local: a drag is not shared state. */
-  const [dragFrom, setDragFrom] = useState<number | null>(null)
-  const [dragOver, setDragOver] = useState<number | null>(null)
+  /** Which pinned row is being dragged, and which one it is hovering over — by the row's own pin
+   *  KEY, never its position in this (filtered) list. See `pinnedSessions.ts`'s `planPinMoveTo` for
+   *  why a filtered-list index was the actual §6 bug: `pinnedRows` is the RESOLVED, filtered view,
+   *  and the persisted, RAW pin list can hold entries that do not resolve to any row here — so a
+   *  drag from filtered index 0 to filtered index 2 is not the same move as raw index 0 to raw index
+   *  2 the moment anything ahead of them fails to resolve. Local: a drag is not shared state. */
+  const [dragFrom, setDragFrom] = useState<string | null>(null)
+  const [dragOver, setDragOver] = useState<string | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; id: string; state: string; verbs: RowVerb[] } | null>(null)
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null)
   /** The task picker, anchored where the menu was — see `pickMenuAction`. */
@@ -628,25 +633,27 @@ export function SessionsAside({
               <span style={{ marginLeft: 'auto', fontWeight: 600, opacity: 0.75 }}>{pinnedRows.length}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {pinnedRows.map((s, i) => (
+              {pinnedRows.map((s, i) => {
+                const key = pinKeyOf(s)
+                return (
                 <div
                   key={`pin-${s.id}`}
                   draggable
-                  onDragStart={e => { setDragFrom(i); e.dataTransfer.effectAllowed = 'move' }}
-                  onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOver(i) }}
+                  onDragStart={e => { setDragFrom(key); e.dataTransfer.effectAllowed = 'move' }}
+                  onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOver(key) }}
                   onDragEnd={() => { setDragFrom(null); setDragOver(null) }}
                   onDrop={e => {
                     e.preventDefault()
-                    if (dragFrom !== null) movePinnedSession(dragFrom, i)
+                    if (dragFrom !== null) movePinnedSession(dragFrom, key)
                     setDragFrom(null); setDragOver(null)
                   }}
                   style={{
                     // The drop target is shown as an EDGE, not by moving the rows: a list that
                     // reflows under the cursor moves the target you were aiming at.
-                    boxShadow: dragOver === i && dragFrom !== null && dragFrom !== i
+                    boxShadow: dragOver === key && dragFrom !== null && dragFrom !== key
                       ? 'inset 0 2px 0 var(--anthropic-orange)'
                       : undefined,
-                    opacity: dragFrom === i ? 0.45 : 1,
+                    opacity: dragFrom === key ? 0.45 : 1,
                     ...(tap ? { touchAction: 'none' as const } : {}),
                   }}
                 >
@@ -657,7 +664,12 @@ export function SessionsAside({
                     {...(tap ? { tap } : {})}
                     onPin={() => flip(s)}
                     onOpen={() => (onOpenRow ? onOpenRow(s) : navigate(sessionPath(s.id)))}
-                    onMoveBy={d => movePinnedSession(i, i + d)}
+                    onMoveBy={d => {
+                      // The step buttons move relative to the VISIBLE neighbor — same key-based
+                      // rule as the drag above; there is no raw-array index to step by here either.
+                      const neighbor = pinnedRows[i + d]
+                      if (neighbor) movePinnedSession(key, pinKeyOf(neighbor))
+                    }}
                     {...(rowsById?.get(s.id) ? { verbs: rowsById.get(s.id)!.verbs } : {})}
                     onOpenMenu={(x, y, verbs) => openMenu(s, x, y, verbs)}
                     onFile={(x, y) => setLinking({ id: s.id, x, y })}
@@ -665,7 +677,8 @@ export function SessionsAside({
                     cardColor={cardColor}
                   />
                 </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         )}

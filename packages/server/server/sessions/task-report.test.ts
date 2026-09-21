@@ -133,19 +133,73 @@ describe('rollupSessionsFor', () => {
 })
 
 describe('distinctConversations', () => {
+  const at = (hh: number) => `2026-09-05T${String(hh).padStart(2, '0')}:00:00.000Z`
+
   it('is the rule every surface that walks a task\'s rows must share', async () => {
     // `task-overview.ts` accumulates its own totals rather than going through the rollup, so the
     // headline counted a reopened conversation once per reopening while the delivery under it was
     // right. Measured on a live board: 13.110.140.051 tokens over deliveries summing 2.493.697.631.
     const { distinctConversations } = await import('./task-report')
     const rows = [
-      row({ id: 'r1', conversationId: 'c1' }),
-      row({ id: 'r2', conversationId: 'c1' }),
-      row({ id: 'r3', conversationId: 'c2' }),
+      row({ id: 'r1', conversationId: 'c1', createdAt: at(10) }),
+      row({ id: 'r2', conversationId: 'c1', createdAt: at(11) }),
+      row({ id: 'r3', conversationId: 'c2', createdAt: at(10) }),
       row({ id: 'r4', conversationId: undefined }),
       row({ id: 'r5', conversationId: undefined }),
     ]
-    expect(distinctConversations(rows).map(r => r.id)).toEqual(['r1', 'r3', 'r4', 'r5'])
+    // ONE row per conversation — the NEWEST of them (r2), in the FIRST-SEEN slot of the conversation.
+    expect(distinctConversations(rows).map(r => r.id)).toEqual(['r2', 'r3', 'r4', 'r5'])
+  })
+
+  it('picks the newest row by createdAt, whatever order the registry lists them in', async () => {
+    const { distinctConversations } = await import('./task-report')
+    const oldest = row({ id: 'old', conversationId: 'c1', createdAt: at(9) })
+    const middle = row({ id: 'mid', conversationId: 'c1', createdAt: at(10) })
+    const newest = row({ id: 'new', conversationId: 'c1', createdAt: at(11) })
+    for (const order of [[oldest, middle, newest], [newest, middle, oldest], [middle, newest, oldest]]) {
+      expect(distinctConversations(order).map(r => r.id)).toEqual(['new'])
+    }
+  })
+
+  it('keeps the order in which the conversations were FIRST seen, so a list does not reshuffle', async () => {
+    const { distinctConversations } = await import('./task-report')
+    const out = distinctConversations([
+      row({ id: 'a1', conversationId: 'ca', createdAt: at(9) }),
+      row({ id: 'b1', conversationId: 'cb', createdAt: at(9) }),
+      row({ id: 'a2', conversationId: 'ca', createdAt: at(12) }), // reopened last, but `ca` was first
+    ])
+    expect(out.map(r => r.id)).toEqual(['a2', 'b1'])
+  })
+
+  it('falls back to REGISTRY ORDER (the later row is the newer) when the stamps tie or cannot be read', async () => {
+    const { distinctConversations } = await import('./task-report')
+    // Tie.
+    expect(distinctConversations([
+      row({ id: 'x1', conversationId: 'c1', createdAt: at(10) }),
+      row({ id: 'x2', conversationId: 'c1', createdAt: at(10) }),
+    ]).map(r => r.id)).toEqual(['x2'])
+    // A missing / garbage stamp is not evidence that a row is old — on either side.
+    expect(distinctConversations([
+      row({ id: 'y1', conversationId: 'c1', createdAt: at(10) }),
+      row({ id: 'y2', conversationId: 'c1', createdAt: '' }),
+    ]).map(r => r.id)).toEqual(['y2'])
+    expect(distinctConversations([
+      row({ id: 'z1', conversationId: 'c1', createdAt: 'not a date' }),
+      row({ id: 'z2', conversationId: 'c1', createdAt: at(10) }),
+    ]).map(r => r.id)).toEqual(['z2'])
+  })
+
+  it('only ever chooses among the candidates it is GIVEN', async () => {
+    // The caller decides the scope: handed one task's rows, the newest row OF THAT TASK stands for
+    // the conversation, however new a row filed elsewhere may be.
+    const { distinctConversations } = await import('./task-report')
+    const mine = [
+      row({ id: 'm1', conversationId: 'c1', taskId: 't1', createdAt: at(9) }),
+      row({ id: 'm2', conversationId: 'c1', taskId: 't1', createdAt: at(10) }),
+    ]
+    const elsewhere = row({ id: 'e1', conversationId: 'c1', taskId: 't2', createdAt: at(12) })
+    expect(distinctConversations(mine).map(r => r.id)).toEqual(['m2'])
+    expect(distinctConversations([...mine, elsewhere]).map(r => r.id)).toEqual(['e1'])
   })
 })
 
@@ -173,13 +227,14 @@ describe('buildTaskDetail — one row per conversation', () => {
 
   it('collapses the reopenings of ONE conversation into one row', () => {
     const detail = detailOf([
-      row({ id: 'r1', conversationId: 'c1', endedAt: '2026-09-05T11:00:00.000Z' }),
-      row({ id: 'r2', conversationId: 'c1', endedAt: '2026-09-05T12:00:00.000Z' }),
-      row({ id: 'r3', conversationId: 'c1' }),
+      row({ id: 'r1', conversationId: 'c1', createdAt: '2026-09-05T10:00:00.000Z', endedAt: '2026-09-05T11:00:00.000Z' }),
+      row({ id: 'r2', conversationId: 'c1', createdAt: '2026-09-05T11:30:00.000Z', endedAt: '2026-09-05T12:00:00.000Z' }),
+      row({ id: 'r3', conversationId: 'c1', createdAt: '2026-09-05T13:00:00.000Z' }),
     ])
     expect(detail.sessions.length).toBe(1)
-    // FIRST-SEEN order, the same rule `distinctConversations` states for every other surface.
-    expect(detail.sessions[0]!.id).toBe('r1')
+    // The NEWEST row stands for the conversation — the rule `distinctConversations` states for every
+    // other surface, because it carries the current filing and the current liveness.
+    expect(detail.sessions[0]!.id).toBe('r3')
   })
 
   it('agrees with the rollup drawn beside it', () => {
@@ -553,5 +608,131 @@ describe('subtaskViews — the three shapes, no session counted twice', () => {
       expect(sum).toBe(23) // 5 + 7 + 11
       expect(detail.stats.filesModified).toBe(23)
     })
+  })
+})
+
+/**
+ * THE CONVERSATION IS DESCRIBED BY ITS NEWEST ROW, AND BUCKETED BY ITS CURRENT FILING.
+ *
+ * Measured on the live board (task "Pelvie - novas alterações", 2026-09-21): ONE coordinator
+ * conversation reopened twelve times, three of those rows in the task — the oldest filed on the
+ * task directly and ended, a middle one filed on subtask s-b7c40d02cc and ended, and the newest,
+ * RUNNING, filed on subtask s-6474c0f53b (the last of three filings a peer made; a filing is a MOVE).
+ * `distinctConversations` kept the FIRST row, so the detail listed only the oldest one: the running
+ * session was absent from `sessions` and its cost sat under the original task-level filing while
+ * `subtaskRollups` never saw the subtask it was filed on. The COUNT was right; the DESCRIPTION was
+ * of the wrong row.
+ */
+describe('buildTaskDetail — a moved conversation is where it was filed LAST', () => {
+  const costs: Record<string, number> = { coord: 10, other: 5 }
+  const costOf = (m: SessionMeta) => costs[m.session_id] ?? 0
+  const metas = metasOf(
+    meta({
+      session_id: 'coord', files_modified: 7, lines_added: 30, git_commits: 2,
+      input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+      user_message_count: 9,
+    }),
+    meta({
+      session_id: 'other', files_modified: 1,
+      input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+      user_message_count: 2,
+    }),
+  )
+  const subs = [
+    subtask({ id: 's-b7' }), subtask({ id: 's-64' }), subtask({ id: 's-other' }),
+  ]
+
+  // The registry appends, so this is oldest-first — exactly the order that used to pick the WRONG row.
+  const registry = (): ManagedSession[] => [
+    row({ id: 'old', conversationId: 'coord', createdAt: '2026-09-10T10:00:00.000Z',
+      endedAt: '2026-09-11T10:00:00.000Z' }), // filed on the task itself
+    // Rows of the SAME conversation filed on a DIFFERENT task never reach this task's rows.
+    row({ id: 'elsewhere', conversationId: 'coord', taskId: 't2', createdAt: '2026-09-11T12:00:00.000Z' }),
+    row({ id: 'mid', conversationId: 'coord', subtaskId: 's-b7', createdAt: '2026-09-12T08:00:00.000Z',
+      endedAt: '2026-09-12T20:00:00.000Z' }),
+    row({ id: 'other-row', conversationId: 'other', subtaskId: 's-other', createdAt: '2026-09-12T09:00:00.000Z' }),
+    row({ id: 'live', conversationId: 'coord', subtaskId: 's-64', createdAt: '2026-09-13T08:00:00.000Z' }),
+  ]
+
+  const detailOf = (rows: ManagedSession[]) =>
+    buildTaskDetail({
+      task: task(), attempts: [], rows, metas, costOf, comments: [], subtasks: subs, files: [],
+    })
+
+  it('lists exactly ONE row for the conversation, and it is the newest', () => {
+    const detail = detailOf(registry())
+    expect(detail.sessions.map(s => s.id)).toEqual(['live', 'other-row'])
+    const coord = detail.sessions.find(s => s.conversationId === 'coord')!
+    expect(coord.subtaskId).toBe('s-64') // the newest filing
+    expect(coord.endedAt).toBeUndefined() // the current liveness: still running
+    expect(coord.costUSD).toBe(10) // counted once
+  })
+
+  it('counts the conversation once: the task total is the sum of distinct conversations, in any registry order', () => {
+    const forward = detailOf(registry())
+    const backward = detailOf([...registry()].reverse())
+    for (const detail of [forward, backward]) {
+      expect(detail.rollup.costUSD).toBe(15) // 10 + 5 — never 10 x 3 + 5
+      expect(detail.rollup.tokens).toBe(165)
+      expect(detail.rollup.rounds).toBe(11)
+      expect(detail.rollup.sessionsUsed).toBe(2)
+    }
+    // Which row stands for the conversation must not move a single figure.
+    expect(backward.rollup).toEqual(forward.rollup)
+    expect(backward.sessions.find(s => s.conversationId === 'coord')!.id).toBe('live')
+  })
+
+  it('puts the conversation\'s cost under the subtask it is filed on NOW, not under the older filings', () => {
+    const detail = detailOf(registry())
+    const bucket = (id: string | null) => detail.subtaskRollups.find(v => v.id === id)
+    expect(bucket('s-64')!.rollup.costUSD).toBe(10)
+    expect(bucket('s-64')!.rollup.sessionsUsed).toBe(1)
+    // The two OLD filings no longer carry it — the conversation moved away from them.
+    expect(bucket('s-b7')!.rollup.sessionsUsed).toBe(0)
+    expect(bucket('s-b7')!.rollup.costUSD).toBeNull()
+    // Nor does the direct bucket: with the old task-level row superseded there is nothing filed
+    // directly on the delivery, so there is no `id: null` bucket at all.
+    expect(bucket(null)).toBeUndefined()
+    // A partition: every conversation lands in exactly one bucket, and the buckets add up to the total.
+    const sum = detail.subtaskRollups.reduce((a, v) => a + (v.rollup.costUSD ?? 0), 0)
+    expect(sum).toBe(detail.rollup.costUSD!)
+  })
+
+  it('counts the conversation once in the evidence block too, per bucket and in total', () => {
+    const detail = detailOf(registry())
+    // 7 (coord) + 1 (other) — it was 7 x 3 + 1 while `stats` mapped over every row.
+    expect(detail.stats.filesModified).toBe(8)
+    expect(detail.stats.commits).toBe(2)
+    expect(detail.stats.tokens).toEqual({ input: 110, output: 55, cacheRead: 0, cacheWrite: 0 })
+    const bucket = (id: string) => detail.subtaskRollups.find(v => v.id === id)!
+    expect(bucket('s-64').stats!.filesModified).toBe(7)
+    expect(bucket('s-b7').stats).toBeNull()
+    const sum = detail.subtaskRollups.reduce((a, v) => a + (v.stats?.filesModified ?? 0), 0)
+    expect(sum).toBe(detail.stats.filesModified!)
+  })
+
+  it('agrees between the list card and the detail', () => {
+    const rows = registry()
+    const list = buildTaskList({ tasks: [task()], attempts: [], rows, metas, costOf, subtasks: subs })[0]!
+    const detail = detailOf(rows)
+    expect(list.rollup).toEqual(detail.rollup)
+  })
+
+  it('applies the same rule to ATTEMPTS: a conversation is in the attempt it is filed under now', () => {
+    const attempts = [
+      { id: 'a1', taskId: 't1', label: 'first try', status: 'running', createdAt: '', updatedAt: '' },
+      { id: 'a2', taskId: 't1', label: 'second try', status: 'running', createdAt: '', updatedAt: '' },
+    ] as never
+    const rows = [
+      row({ id: 'o1', conversationId: 'coord', attemptId: 'a1', createdAt: '2026-09-10T10:00:00.000Z' }),
+      row({ id: 'o2', conversationId: 'coord', attemptId: 'a2', createdAt: '2026-09-11T10:00:00.000Z' }),
+    ]
+    const detail = buildTaskDetail({
+      task: task(), attempts, rows, metas, costOf, comments: [], subtasks: [], files: [],
+    })
+    const view = (id: string | null) => detail.attempts.find(a => a.id === id)!
+    expect(view('a2').rollup.costUSD).toBe(10)
+    expect(view('a1').rollup.sessionsUsed).toBe(0)
+    expect(detail.rollup.costUSD).toBe(10)
   })
 })

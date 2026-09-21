@@ -1,5 +1,7 @@
 import { describe, test, expect } from 'bun:test'
-import { transformTranslateX, restingLeftEdge, fullscreenInsetRight } from './rightAsideEdge'
+import {
+  closedRightEdge, fullscreenInsetRight, restingLeftEdge, transformTranslateX,
+} from './rightAsideEdge'
 
 describe('transformTranslateX', () => {
   test('no transform at all — nothing to discount', () => {
@@ -98,5 +100,49 @@ describe('fullscreenInsetRight', () => {
 
   test('mobile (no rail at all) — omitting railWidth behaves exactly as before this pass', () => {
     expect(fullscreenInsetRight(null, 390)).toBe(0)
+  })
+})
+
+// -------------------------------------------------------------------------------------------
+// closedRightEdge — the addendum's Filtros-chips-over-the-rail fix
+// -------------------------------------------------------------------------------------------
+
+describe('closedRightEdge', () => {
+  test('the rail showing (a session selected, desktop) — reports the RAIL\'s own left edge', () => {
+    expect(closedRightEdge(true, 1440)).toBe(1440 - 44)
+  })
+
+  test('no rail (mobile, or no session selected) — reports null, genuinely nothing on the right', () => {
+    expect(closedRightEdge(false, 1440)).toBeNull()
+  })
+
+  test('tracks the viewport, not a fixed number', () => {
+    expect(closedRightEdge(true, 1024)).toBe(1024 - 44)
+    expect(closedRightEdge(true, 390)).toBe(390 - 44)
+  })
+
+  // THE REGRESSION ITSELF, reproduced at the exact arithmetic level: the Filtros chips' own
+  // closed-aside fallback (`sessionsFiltersPanel.ts`'s `filtrosPanelBoundsRight`) used
+  // `viewportWidth - VIEWPORT_EDGE_MARGIN` (32px) as its right edge whenever `rightAsideEdge` was
+  // `null` — 12px short of the rail's 44px, so the chips' own right boundary sat 12px INSIDE the
+  // rail's icons. Once `SessionsPage.tsx` reports `closedRightEdge`'s result instead of `null`
+  // while the rail is showing, that same fallback resolves to the rail's edge exactly, with no
+  // change needed in `sessionsFiltersPanel.ts` itself — see this module's own header.
+  test('[the regression] is narrower than the old 32px margin — the chips would still have overlapped it', () => {
+    const VIEWPORT_EDGE_MARGIN = 32
+    const oldFallback = 1440 - VIEWPORT_EDGE_MARGIN // what the chips used to compute
+    const railEdge = closedRightEdge(true, 1440)!
+    expect(railEdge).toBeLessThan(oldFallback) // the rail starts BEFORE where the old margin stopped
+  })
+
+  // PLANTED-REVERT: a version that always subtracts the rail width, whether or not the rail is
+  // actually showing, would wrongly narrow the fallback on mobile / no-session-selected — exactly
+  // the "genuinely nothing on the right" case this function must still answer `null` for.
+  test('[planted-revert coverage] ignoring railShowing would wrongly narrow the no-rail case', () => {
+    function brokenClosedRightEdge(_railShowing: boolean, viewportWidth: number): number | null {
+      return viewportWidth - 44 // always subtracts, regardless of whether a rail exists
+    }
+    expect(brokenClosedRightEdge(false, 1440)).not.toBe(closedRightEdge(false, 1440))
+    expect(closedRightEdge(false, 1440)).toBeNull()
   })
 })

@@ -95,6 +95,28 @@ export function panelMenuEntries({
   return entries
 }
 
+/**
+ * THE ONE THING EVERY ICON'S RIGHT-CLICK MENU OFFERS (addendum, 2026-09-21) — the move verb toward
+ * the panel's other placement, split out of `panelMenuEntries` because CLOSE (the Studio's one
+ * exception) stays a GEAR row, never a context-menu row. The context menu mirrors what a DRAG can
+ * do (drag only ever moves a panel, never closes one), so it can never offer more than a drag could.
+ * `null` when the other placement cannot host this panel at all (`allowed()`, today never false).
+ */
+export function panelMoveEntry(input: PanelMenuInput): PanelMenuEntry | null {
+  return panelMenuEntries(input).find(e => e.id === 'move-right' || e.id === 'move-bottom') ?? null
+}
+
+/**
+ * GEAR ENTRIES WITH THE MOVE VERB REMOVED (addendum, 2026-09-21) — every existing caller of
+ * `panelMenuEntries` for its OWN gear now filters through this instead, so the move row disappears
+ * from the gear everywhere in one place rather than at each call site. A panel whose gear would then
+ * hold NOTHING (every panel but the Studio, today) draws no gear at all — `BandOverflowMenu`'s own
+ * empty-entries rule, unchanged.
+ */
+export function panelMenuEntriesWithoutMove(input: PanelMenuInput): PanelMenuEntry[] {
+  return panelMenuEntries(input).filter(e => e.id !== 'move-right' && e.id !== 'move-bottom')
+}
+
 // ---------------------------------------------------------------------------------------------
 // The always-visible FULL SCREEN control — a fixed button, never a row above.
 // ---------------------------------------------------------------------------------------------
