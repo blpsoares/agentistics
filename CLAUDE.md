@@ -2316,6 +2316,7 @@ packages/server/server/sessions/
   task-store.ts     the JSON book, one writer per process + the cross-process file lock
   task-attribution.ts  first-sighting claim (refuses on ambiguity)
   task-rollup.ts    cost / rounds / tokens with PROVENANCE — never a confident 0
+  task-historical.ts PURE: a conversation filed on the BOARD with no registry row -> a read-only row
   task-next.ts      PURE: readiness, the lease, convergence
   task-rank.ts      PURE: hand order as a fractional-index string
   task-report.ts / task-overview.ts / task-stats.ts / task-evidence.ts / task-filter.ts
@@ -2502,6 +2503,30 @@ by the compiler.
   visibility model for it would be a second place to get it wrong. **A delivery may only name its
   OWN machine's sessions**: `sessionIds` comes from the member, so anything else counts as MISSING
   rather than resolving a neighbour's cost and tokens under this delivery.
+- **A conversation whose registry row is GONE can still be filed on a task or subtask, and the link
+  lives on the BOARD, never in the fleet registry.** A coordinator kills its subtask sessions before
+  closing the subtasks and agentop purges the rows; the filing died with the row, so `done` subtasks read
+  as sessionless and their cost was missing from every rollup, while the metas (tokens, cost, first
+  prompt) were still in the consolidate store keyed by `conversationId`. `TaskBook.historicalSessions`
+  (`HistoricalSession`, one link per conversation, id `hist:<conversationId>`, so filing is a MOVE)
+  holds them, and `attachConversation` (the ONE door — REST `POST /api/tasks/<ref>/sessions
+  {conversationId}`, the MCP `agentistics_task_session`) writes them. **A stub registry row would be a
+  session the fleet believes in** — finished, reopenable, no cwd, probed and heartbeated, listed by
+  `agentop session ls` — so `loadTaskWorld` builds the synthetic `historical: true` row IN MEMORY per
+  read (`historicalRows`) and there are two row sets with names that make the wrong choice hard:
+  `registryRows` (exactly `readRegistry()` — anything that resolves, patches or decides about a
+  session) and `rollupRows` (registry + synthetic — anything that answers what a delivery holds and
+  cost). There is deliberately no bare `rows`. The row's `createdAt` is `linkedAt`: a link is a filing
+  STATEMENT, so `conversationOwners` (newest statement wins) lets it override an older registry filing
+  and be overridden by a later one with no special case. Refusals are their own codes:
+  `no_such_conversation` (nothing in the store to price — never a link that reads as a delivery that
+  cost nothing) and `conversation_in_fleet` (a row exists; the answer carries its id, file THAT);
+  the target rules are `planAttach`'s, unchanged. The done gate, `subtask_has_sessions` and the sharing
+  path read `rollupRows`, so a recovered subtask can close; a shared delivery ships the conversation's
+  OWN id, behind the same `sessionShared` gate on the meta. `TaskSessionRow.historical` tells a surface
+  there is no session to open — never a link to `/sessions/hist:…`. Removing the task drops its links;
+  removing a subtask sends its links back to the delivery. Both `attachSession` and `attachConversation`
+  answer `movedFrom` when they displaced a filing.
 - **New `/api/tasks` sub-routes ride the existing `capability-guard.ts` entries** (`/api/tasks`,
   `/api/task-files` → `localShell`). `GET /api/tasks/next` and `/api/tasks/activity` are matched
   BEFORE the generic `<ref>` GET, or they resolve as task references and 404.

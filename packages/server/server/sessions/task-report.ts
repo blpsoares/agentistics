@@ -14,6 +14,7 @@ import type {
 } from './task-model'
 import { groupMembers, isGroupMember, isGroupSubtask, legacyTaskId } from './task-model'
 import { conversationOwners, distinctConversations } from './task-conversations'
+import { isHistoricalRow } from './task-historical'
 import { rollupAttempt, type AttemptRollup, type RollupSession } from './task-rollup'
 import { scopedTaskStats, taskStats, type TaskStats } from './task-stats'
 import type { ManagedSession } from './types'
@@ -48,6 +49,12 @@ export interface TaskSessionRow {
   endedAt?: string
   label?: string
   conversationId?: string
+  /**
+   * True for a conversation filed on the board with NO session behind it (`HistoricalSession`): its
+   * numbers are real and it counts everywhere, but there is nothing to open — `id` (`hist:<conv>`)
+   * names no session, so a surface must not link to `/sessions/<id>` for it.
+   */
+  historical?: boolean
   /** Null when the conversation is not in the store — see `RollupSession.meta`. */
   tokens: number | null
   costUSD: number | null
@@ -440,6 +447,7 @@ export function buildTaskDetail(o: {
         ...(r.endedAt ? { endedAt: r.endedAt } : {}),
         ...(r.label ? { label: r.label } : {}),
         ...(r.conversationId ? { conversationId: r.conversationId } : {}),
+        ...(isHistoricalRow(r) ? { historical: true } : {}),
         tokens: meta ? sessionTokenTotal(meta) : null,
         costUSD: meta ? o.costOf(meta) : null,
         rounds: meta?.user_message_count ?? null,

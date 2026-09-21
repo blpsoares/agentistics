@@ -394,18 +394,34 @@ const TOOLS: Tool[] = [
   {
     name: "agentistics_task_session",
     description:
-      "BETA — the task board is new and still changing; its shapes may move between releases. File a SESSION under a task, which is what makes the task measurable: its cost, tokens, rounds and harness all come from the sessions filed under it. Pass `subtaskId` to file it under one of the task's subtasks (the unit of WORK, for a task broken into steps) — this INCLUDES a subtask GROUP (see agentistics_task_subtask's `isGroup`), which holds a session exactly like any other subtask; omit `subtaskId` to file the session directly on the task itself (the unit of DELIVERY, for a task simple enough not to need subtasks). Both can be used on the same task — some sessions direct, some under subtasks — and each subtask's own rollup plus the directly-filed sessions' own rollup are both readable via agentistics_task's `subtaskRollups` (keyed by subtask id, with `id: null` for the direct ones), so the breakdown never disappears. **Filing on a subtask that is a MEMBER of a group (has a `parentGroupId`) is refused (422, `subtask_in_group`)** — a member can never hold a session, only the group itself can; file on the group's own id instead. Use agentistics_task to read the subtasks, or agentistics_task_subtask to create one, then pass `ref` + `sessionId` (a managed session id or conversation id) + optionally `subtaskId`. Pass `detach` with a session id to unfile one. The task inherits the session's repository when it has none.",
+      "BETA — the task board is new and still changing; its shapes may move between releases. File a SESSION under a task, which is what makes the task measurable: its cost, tokens, rounds and harness all come from the sessions filed under it. Pass `subtaskId` to file it under one of the task's subtasks (the unit of WORK, for a task broken into steps) — this INCLUDES a subtask GROUP (see agentistics_task_subtask's `isGroup`), which holds a session exactly like any other subtask; omit `subtaskId` to file the session directly on the task itself (the unit of DELIVERY, for a task simple enough not to need subtasks). Both can be used on the same task — some sessions direct, some under subtasks — and each subtask's own rollup plus the directly-filed sessions' own rollup are both readable via agentistics_task's `subtaskRollups` (keyed by subtask id, with `id: null` for the direct ones), so the breakdown never disappears. **Filing on a subtask that is a MEMBER of a group (has a `parentGroupId`) is refused (422, `subtask_in_group`)** — a member can never hold a session, only the group itself can; file on the group's own id instead. Use agentistics_task to read the subtasks, or agentistics_task_subtask to create one, then pass `ref` + `sessionId` (a managed session id) + optionally `subtaskId`. Pass `detach` with a session id to unfile one. The task inherits the session's repository when it has none. **HISTORICAL conversations — pass `conversationId` INSTEAD of `sessionId`** to file a conversation that has NO live/registry row: typically a session that was killed and whose row agentop then purged, leaving its subtask `done` with 0 sessions and its cost missing from every rollup. The conversation must still be in the metrics store (its tokens/cost are what get counted); the link is kept on the board, never in the fleet, so nothing appears in the Sessions workspace and there is nothing to open — the row is marked `historical: true` in agentistics_task's `sessions`. Filing is a MOVE: one link per conversation, so filing it elsewhere replaces the old link and the answer reports `movedFrom: {taskId, subtaskId?}` (a plain `sessionId` filing reports `movedFrom` too when it displaced another filing). It counts everywhere a live session does (rollups, `subtaskRollups`, the board headline, `done_needs_session`, the group-join rule). Refusals: `no_such_conversation` (422 — the store has no record of that id; nothing to price, so nothing is filed), `conversation_in_fleet` (422 — a registry row already exists; the answer carries its `sessionId`, so call again with that as `sessionId`), plus the same target refusals as a session (`no_such_task`, `no_such_subtask`, `wrong_delivery`, `blocked`, `subtask_in_group`). Optional `harness` disambiguates and `note` is kept on the link. To remove a historical link pass `detach` with the conversation id (or the row's `hist:<conversationId>` id).",
     inputSchema: {
       type: "object",
       properties: {
         ref: { type: "string" },
         sessionId: { type: "string" },
+        conversationId: {
+          type: "string",
+          description:
+            "A HISTORICAL conversation id (in the metrics store, no live/registry row) to file instead of a `sessionId`. Refused `conversation_in_fleet` if a row exists for it — use that row's id as `sessionId`.",
+        },
+        harness: {
+          type: "string",
+          description: "Only with `conversationId`: the conversation's harness, to disambiguate. Optional; it is read from the store.",
+        },
+        note: {
+          type: "string",
+          description: "Only with `conversationId`: a free-text note kept on the link (why it was filed here).",
+        },
         subtaskId: {
           type: "string",
           description:
             "The subtask to file it under. Optional — omit to file the session directly on the task itself.",
         },
-        detach: { type: "string" },
+        detach: {
+          type: "string",
+          description: "A session id to unfile — or a historical conversation id (or `hist:<id>`) to drop its link.",
+        },
       },
       required: [],
     },
@@ -802,7 +818,15 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         // and refuses what it must (unknown task/subtask, a still-blocked subtask) — this is not a
         // second copy of that rule, just the pass-through.
         const body = await apiSend("POST", `/api/tasks/${ref}/sessions`, {
-          sessionId: a?.sessionId,
+          // A historical conversation goes by `conversationId` and carries NO `sessionId`: the two
+          // are different doors on the server, and sending both is refused there.
+          ...(a?.conversationId
+            ? {
+              conversationId: a.conversationId,
+              ...(a?.harness ? { harness: a.harness } : {}),
+              ...(a?.note ? { note: a.note } : {}),
+            }
+            : { sessionId: a?.sessionId }),
           ...(a?.subtaskId ? { subtaskId: a.subtaskId } : {}),
         });
         return { content: [{ type: "text", text: JSON.stringify(body, null, 2) }] };

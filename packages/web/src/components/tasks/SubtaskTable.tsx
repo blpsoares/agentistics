@@ -460,6 +460,7 @@ export function SubtaskTable(p: SubtaskTableProps) {
                       title={s.label}
                       harness={s.harness}
                       lang={p.lang}
+                      historical={s.historical === true}
                       onOpen={p.onOpenSession}
                       onUnfile={sid => void p.onUnfile(sid)}
                     />

@@ -36,7 +36,7 @@ describe('createTaskStore', () => {
     const { s } = await store()
     expect(await s.read()).toEqual({
       tasks: [], attempts: [], comments: [], subtasks: [], files: [], tombstones: [], events: [],
-      statuses: [],
+      historicalSessions: [], statuses: [],
     })
   })
 
@@ -111,7 +111,7 @@ describe('createTaskStore', () => {
     await writeFile(file, '{ this is not json', 'utf8')
     expect(await s.read()).toEqual({
       tasks: [], attempts: [], comments: [], subtasks: [], files: [], tombstones: [], events: [],
-      statuses: [],
+      historicalSessions: [], statuses: [],
     })
   })
 
@@ -427,5 +427,95 @@ describe('setRanks and the activity log', () => {
     await s.logEvents([{ id: 'e-1', taskId: 't-1', at: 'now', actor: 'me', kind: 'status' }])
     await s.removeTask('t-1')
     expect((await s.read()).events).toEqual([])
+  })
+
+  describe('historical conversations', () => {
+    const link = (conv: string, taskId: string, over: Record<string, unknown> = {}) => ({
+      id: `hist:${conv}`, conversationId: conv, harness: 'claude' as const, taskId,
+      linkedAt: '2026-09-21T10:00:00.000Z', ...over,
+    })
+
+    it('round-trips a link through the read whitelist — every field survives the next read()', async () => {
+      // The trap this pins is the one `sanitizeSubtask` fell into for `blockedBy`: a write lands on
+      // disk and the read-side whitelist silently drops it. A raw `expect(file)` would pass; only a
+      // read() proves the value is still there.
+      const { s } = await store()
+      await s.fileHistorical(link('c1', 't-1', { subtaskId: 's-1', note: 'recovered' }))
+      expect((await s.read()).historicalSessions).toEqual([
+        link('c1', 't-1', { subtaskId: 's-1', note: 'recovered' }),
+      ])
+    })
+
+    it('reads a book written before the collection existed as having none', async () => {
+      const { file, s } = await store()
+      await writeFile(file, JSON.stringify({ tasks: [], attempts: [] }), 'utf8')
+      expect((await s.read()).historicalSessions).toEqual([])
+    })
+
+    it('drops a record naming no conversation or no task, and collapses duplicates to the last', async () => {
+      const { file, s } = await store()
+      await writeFile(file, JSON.stringify({
+        historicalSessions: [
+          { conversationId: 'c1', taskId: 't-1', linkedAt: 'a' },
+          { conversationId: '', taskId: 't-1' },
+          { conversationId: 'c2' },
+          { conversationId: 'c1', taskId: 't-2', linkedAt: 'b', id: 'forged' },
+        ],
+      }), 'utf8')
+      const got = (await s.read()).historicalSessions
+      // The id is re-derived, never trusted, and one conversation is one link.
+      expect(got.map(h => [h.id, h.taskId])).toEqual([['hist:c1', 't-2']])
+    })
+
+    it('is a MOVE: filing again replaces the link and reports what it displaced', async () => {
+      const { s } = await store()
+      expect(await s.fileHistorical(link('c1', 't-1', { subtaskId: 's-1' }))).toEqual({})
+      const out = await s.fileHistorical(link('c1', 't-1', { subtaskId: 's-2' }))
+      expect(out.replaced?.subtaskId).toBe('s-1')
+      const links = (await s.read()).historicalSessions
+      expect(links).toHaveLength(1)
+      expect(links[0]!.subtaskId).toBe('s-2')
+    })
+
+    it('unfiles by link id or by conversation id, and says when there was nothing to drop', async () => {
+      const { s } = await store()
+      await s.fileHistorical(link('c1', 't-1'))
+      await s.fileHistorical(link('c2', 't-1'))
+      expect((await s.unfileHistorical('c1'))?.conversationId).toBe('c1')
+      expect((await s.unfileHistorical('hist:c2'))?.conversationId).toBe('c2')
+      expect(await s.unfileHistorical('c1')).toBeNull()
+      expect((await s.read()).historicalSessions).toEqual([])
+    })
+
+    it('other writes never drop the collection (a whole-book write carries it)', async () => {
+      const { s } = await store()
+      await s.upsertTask(task('t-1'))
+      await s.fileHistorical(link('c1', 't-1'))
+      await s.upsertTask(task('t-2'))
+      await s.patchTask('t-1', { priority: 'high' })
+      await s.logEvents([{ id: 'e', taskId: 't-1', at: 'now', actor: 'me', kind: 'x' }])
+      expect((await s.read()).historicalSessions.map(h => h.id)).toEqual(['hist:c1'])
+    })
+
+    it('takes a task\'s links with the task, frees the conversation, and keeps other tasks\'', async () => {
+      const { s } = await store()
+      await s.upsertTask(task('t-1'))
+      await s.upsertTask(task('t-2'))
+      await s.fileHistorical(link('c1', 't-1'))
+      await s.fileHistorical(link('c2', 't-2'))
+      await s.removeTask('t-1')
+      expect((await s.read()).historicalSessions.map(h => h.id)).toEqual(['hist:c2'])
+    })
+
+    it('a removed subtask sends its historical conversations back to the delivery, not into limbo', async () => {
+      const { s } = await store()
+      await s.upsertTask(task('t-1'))
+      await s.upsertSubtask(subtask('s-1', 't-1'))
+      await s.fileHistorical(link('c1', 't-1', { subtaskId: 's-1' }))
+      await s.removeSubtask('s-1')
+      const [h] = (await s.read()).historicalSessions
+      expect(h!.taskId).toBe('t-1')
+      expect(h!.subtaskId).toBeUndefined()
+    })
   })
 })
