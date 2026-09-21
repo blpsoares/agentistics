@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { allowed, PANEL_IDS, type OpenPlacement, type PanelId } from './panelSlots'
 import { PANEL_META } from './panelMeta'
-import { fullscreenModeFor, panelMenuEntries, panelMinimizeAction, type PanelMenuEntry } from './panelMenu'
+import {
+  fullscreenModeFor, panelMenuEntries, panelMenuEntriesWithoutMove, panelMinimizeAction, panelMoveEntry,
+  type PanelMenuEntry,
+} from './panelMenu'
 
 const PLACEMENTS: readonly OpenPlacement[] = ['rail', 'bottom']
 
@@ -152,5 +155,59 @@ describe('panelMinimizeAction — what minimizing this panel, in this placement,
       if (panel === 'studio') continue
       expect(panelMinimizeAction(panel, 'rail')).toBe('close-right')
     }
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// panelMoveEntry / panelMenuEntriesWithoutMove — the addendum's "gear disappears when it would
+// hold only move" split: move goes to the right-click context menu, everything else stays gear.
+// ---------------------------------------------------------------------------------------------
+
+describe('panelMoveEntry — the ONE thing the context menu ever offers', () => {
+  test('every panel × placement pair yields exactly the move row panelMenuEntries would have shown', () => {
+    for (const panel of PANEL_IDS) {
+      for (const placement of PLACEMENTS) {
+        if (!allowed(placement, panel)) continue
+        const full = panelMenuEntries({ panel, placement, lang: 'pt', panelName: panel })
+        const move = panelMoveEntry({ panel, placement, lang: 'pt', panelName: panel })
+        expect(move).toEqual(full.find(e => e.id === 'move-right' || e.id === 'move-bottom') ?? null)
+      }
+    }
+  })
+
+  test('never returns "close" — the Studio close stays a gear row, never a context-menu row', () => {
+    const entry = panelMoveEntry({ panel: 'studio', placement: 'rail', lang: 'en', panelName: 'Studio' })
+    expect(entry?.id).not.toBe('close')
+    expect(entry?.id).toBe('move-bottom')
+  })
+})
+
+describe('panelMenuEntriesWithoutMove — what is left in the gear once move moves out', () => {
+  test('every panel but the Studio is left with NOTHING — the gear must vanish for all of them', () => {
+    for (const panel of PANEL_IDS) {
+      if (panel === 'studio') continue
+      for (const placement of PLACEMENTS) {
+        if (!allowed(placement, panel)) continue
+        expect(panelMenuEntriesWithoutMove({ panel, placement, lang: 'en', panelName: panel })).toEqual([])
+      }
+    }
+  })
+
+  test('the Studio keeps its "close" row — its gear must still exist', () => {
+    for (const placement of PLACEMENTS) {
+      const rest = panelMenuEntriesWithoutMove({ panel: 'studio', placement, lang: 'en', panelName: 'Studio' })
+      expect(names(rest)).toEqual(['close'])
+    }
+  })
+
+  // PLANTED-REVERT: a filter that keeps move instead of dropping it would put move back in the
+  // gear silently — the exact regression this pair exists to prevent (a gear reappearing with
+  // nothing but the row that moved out of it, on every one of the thirteen non-Studio panels).
+  test('[planted-revert coverage] a filter that keeps move breaks the "vanishes" assertion above', () => {
+    function brokenWithoutMove(input: Parameters<typeof panelMenuEntries>[0]): PanelMenuEntry[] {
+      return panelMenuEntries(input).filter(e => e.id !== 'close') // keeps move by mistake
+    }
+    const broken = brokenWithoutMove({ panel: 'live', placement: 'rail', lang: 'en', panelName: 'live' })
+    expect(broken).not.toEqual([]) // the broken version fails where panelMenuEntriesWithoutMove passes
   })
 })

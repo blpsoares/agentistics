@@ -61,6 +61,7 @@
  * asks: nothing is dropped by changing which slot shows a panel that stays mounted throughout.
  */
 
+import { reorderByDrag } from './dragReorder'
 import { createElement, useSyncExternalStore, type ComponentType, type ReactElement } from 'react'
 import { holdIfUnsaved } from './unsavedBuffers'
 
@@ -318,6 +319,20 @@ export function restorePanelPlacement(layout: SlotLayout, panel: PanelId): SlotL
   return setPlacement(layout, panel, layout.restoreTo[panel])
 }
 
+/**
+ * WHAT CLICKING A RAIL ICON DOES (addendum item 3, owner: "quando eu abro o item ele nao minimiza
+ * dnv se eu clicar no icone do item dnv") — the RAIL IS A LAUNCHER, so its icon TOGGLES: clicking
+ * the icon of the panel that is already open minimizes it, clicking any other icon opens it (which
+ * also RESTORES a panel that is active but currently minimized — there is no third state a rail
+ * icon click can express). Deliberately NOT the bottom bar's rule (`panelBar.ts`'s own tab pick,
+ * `resolvePanelBarPick`): a TAB STRIP is select-only — clicking an already-open tab there must never
+ * close it, since a tab strip's whole point is "here is where you are", not "here is a switch". Two
+ * different controls, two different rules, stated once each in the module that owns it.
+ */
+export function railClickAction(active: PanelId | null, rightOpen: boolean, panel: PanelId): 'open' | 'minimize' {
+  return active === panel && rightOpen ? 'minimize' : 'open'
+}
+
 /** Reorder every panel currently in `placement` to match `orderedIds` (design §3, wired for a later
  *  drag pass) — panels of `placement` absent from `orderedIds` keep their relative order, appended
  *  after the given ones; an id in `orderedIds` that is not actually in `placement` is ignored. */
@@ -331,6 +346,51 @@ export function reorderPlacement(
   const order = { ...layout.order }
   sequence.forEach((id, i) => { order[id] = i })
   return { ...layout, order }
+}
+
+/**
+ * A drag's drop TARGET (spec §3): either a specific other panel's icon/tab (reorder near it, or —
+ * if it lives in the other bar — move there and land next to it) or a bare placement (dropped in
+ * empty space of a bar, or on the bar's own container rather than on any one item — append to the
+ * end, the same place the gear's move verb already lands a panel).
+ */
+export type PanelDropTarget = { panel: PanelId } | { placement: OpenPlacement }
+
+/**
+ * WHAT A DRAG-AND-DROP OF `dragPanel` ONTO `target` DOES (design §3) — the one pure decision behind
+ * both the rail's own reorder and the rail↔bottom move, so the DOM layer only ever has to report
+ * "this key was dropped on that key/bar" and never has to know which of the two operations that
+ * implies.
+ *
+ * SAME BAR: a plain reorder via `reorderPlacement`, built on the shared `reorderByDrag` (the same
+ * primitive `pinnedSessions.ts`'s drag and `SessionsGroupMenu`'s group-order drag both use).
+ *
+ * DIFFERENT BAR (or the panel is currently hidden — reachable from neither, so there is no "same
+ * bar" to speak of): `movePanel` places it AND opens it there, mirroring the gear's own move verb
+ * exactly, because that is what the spec asks for — a panel just dragged onto the bottom band is
+ * the panel the person meant to look at next. When the drop landed on a SPECIFIC panel (rather than
+ * bare empty space) it is then reordered to sit immediately before that panel, so "drop it here, ON
+ * this tab" and "drop it here, roughly among these tabs" land in the same place rather than always
+ * at the end regardless of where the cursor actually was.
+ *
+ * A drop with nothing to do (the target panel IS the dragged one, same bar) is a no-op — same as
+ * `reorderByDrag`'s own no-op rule.
+ */
+export function planPanelDrop(layout: SlotLayout, dragPanel: PanelId, target: PanelDropTarget): SlotLayout {
+  const targetPanel = 'panel' in target ? target.panel : null
+  const targetPlacement: OpenPlacement = 'placement' in target
+    ? target.placement
+    : (layout.placement[targetPanel!] === 'bottom' ? 'bottom' : 'rail')
+  if (targetPanel === dragPanel) return layout
+
+  const samePlacement = layout.placement[dragPanel] === targetPlacement
+  let next = samePlacement ? layout : movePanel(layout, dragPanel, targetPlacement)
+
+  if (targetPanel !== null) {
+    const order = (targetPlacement === 'rail' ? railPanels : bottomPanels)(next)
+    next = reorderPlacement(next, targetPlacement, reorderByDrag(order, dragPanel, targetPanel))
+  }
+  return next
 }
 
 /**
@@ -584,6 +644,14 @@ export function relocatePanel(panel: PanelId, to: OpenPlacement): void {
   commit(movePanel(state, panel, to))
 }
 
+/** A drag's drop, imperatively (spec §3) — same-bar reorder or cross-bar move, decided by
+ *  `planPanelDrop`. Never asks — same as `relocatePanel`, which this can do everything that one
+ *  does (a cross-bar drop can displace the Studio exactly as the gear's own move verb can, and
+ *  neither one has ever asked first). */
+export function dropPanel(panel: PanelId, target: PanelDropTarget): void {
+  commit(planPanelDrop(state, panel, target))
+}
+
 export function setBandOpen(open: boolean): void {
   commit(setBottomOpen(state, open))
 }
@@ -605,6 +673,8 @@ export interface PanelSlotsApi {
   openPanel: (panel: PanelId) => void
   closePanel: (panel: PanelId) => void
   movePanel: (panel: PanelId, to: OpenPlacement) => void
+  /** A drag's drop (spec §3) — see `dropPanel`/`planPanelDrop`. */
+  dropPanel: (panel: PanelId, target: PanelDropTarget) => void
   setBottomOpen: (open: boolean) => void
   setRightOpen: (open: boolean) => void
 }
@@ -618,6 +688,7 @@ export function usePanelSlots(): PanelSlotsApi {
     openPanel: showPanel,
     closePanel: hidePanel,
     movePanel: relocatePanel,
+    dropPanel,
     setBottomOpen: setBandOpen,
     setRightOpen: setSlotRightOpen,
   }

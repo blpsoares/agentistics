@@ -19,6 +19,7 @@
  *    unpins it, so a slot is never taken away behind their back.
  */
 
+import { reorderByDrag } from './dragReorder'
 import { createSharedPref } from './sharedPref'
 
 const KEY = 'agentistics-pinned-sessions'
@@ -40,22 +41,25 @@ export function planPinToggle(current: readonly string[], id: string, max = MAX_
 }
 
 /**
- * PURE: reorder the pinned set.
+ * PURE: reorder the pinned set — by KEY, never by index.
  *
- * Total — an index outside the list returns it unchanged rather than throwing or silently
- * appending. A drag can end anywhere, including outside the list, and a reorder that invents a
- * position is worse than one that does nothing.
+ * `current` is the RAW, persisted list, which can (and in practice does) hold ids that no longer
+ * resolve to any row the person can see (a pinned session that has since been removed from the
+ * fleet outright, not merely ended — see `resolvePinnedRows`'s own note on why an ENDED one is kept
+ * on purpose). The band the person drags in only ever shows the RESOLVED, filtered rows, so the
+ * only identity a drag gesture can name is a KEY, never a position — a position in the filtered
+ * list does not correspond to the same position in this raw one the instant one entry in front of
+ * it fails to resolve. This replaced an index-based `planPinMove(current, from, to)` for exactly
+ * that reason: the caller had only a filtered-list index to offer it, so a drag from filtered
+ * position 0 to filtered position 2 was applied as raw index 0 to raw index 2 — a different pair of
+ * ids whenever anything ahead of them did not resolve, which read as "the order reverts" because
+ * the two entries that actually moved were invisible either way.
  *
- * Membership is never touched here: only `planPinToggle` adds or removes.
+ * Total — a key this list does not hold, dragged or dropped, is refused unchanged (see
+ * `reorderByDrag`). Membership is never touched here: only `planPinToggle` adds or removes.
  */
-export function planPinMove(current: readonly string[], from: number, to: number): string[] {
-  const next = [...current]
-  if (from < 0 || from >= next.length) return next
-  if (to < 0 || to >= next.length) return next
-  if (from === to) return next
-  const [moved] = next.splice(from, 1)
-  next.splice(to, 0, moved!)
-  return next
+export function planPinMoveTo(current: readonly string[], dragKey: string, dropKey: string): string[] {
+  return reorderByDrag(current, dragKey, dropKey)
 }
 
 /**
@@ -104,9 +108,14 @@ export function togglePinnedSession(id: string): PinToggleResult {
   return result
 }
 
-/** Reorder and persist. Subscribers are notified exactly as `togglePinnedSession` notifies them. */
-export function movePinnedSession(from: number, to: number): void {
-  store.set(planPinMove(store.get(), from, to))
+/**
+ * Reorder by dragging `dragKey` onto `dropKey` (or, for the up/down chevrons, `dragKey`'s own key
+ * and the key of the VISIBLE neighbor it is stepping past) and persist. Subscribers are notified
+ * exactly as `togglePinnedSession` notifies them. Takes session KEYS, never a position — see
+ * `planPinMoveTo` for why a filtered-list position is never safe to use here.
+ */
+export function movePinnedSession(dragKey: string, dropKey: string): void {
+  store.set(planPinMoveTo(store.get(), dragKey, dropKey))
 }
 
 export function subscribePinnedSessions(fn: () => void): () => void {
