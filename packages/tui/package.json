@@ -1,6 +1,6 @@
 {
   "name": "@agentistics/tui",
-  "version": "2.47.0",
+  "version": "2.48.0",
   "private": true,
   "type": "module",
   "main": "src/control/index.ts",
