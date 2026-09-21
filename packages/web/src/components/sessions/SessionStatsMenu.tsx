@@ -229,14 +229,19 @@ export function SessionStatsMenu({
   // `variant` (design item 4 — "keeping its existing dropdown unchanged"); only its HORIZONTAL
   // ANCHOR does, and only because the trigger itself moved. The `'button'` trigger sits at the
   // header's own right edge, so the card opens LEFTWARD from it (`right: 0`) — the only direction
-  // with room. The `'tab'` trigger sits right after "Filtros", a short distance from the LEFT
-  // aside, so the same leftward card would swallow that aside whole; it opens RIGHTWARD instead
-  // (`left: 0`), toward the session's own content, clamped to `panelMaxWidth` — the room
-  // `metricsTabBounds` (`lib/sessionsFiltersPanel.ts`) already measured clear of BOTH asides.
+  // with room.
+  //
+  // THE `'tab'` TRIGGER ALSO OPENS LEFTWARD NOW (owner, 2026-09-20 — the tabs moved to the top
+  // right): it sits immediately BEFORE "Filtros", which itself sits flush against the ARTIFACTS
+  // aside, so a card opening rightward (toward Filtros, then the aside) would swallow both. It
+  // opens `right: 0` instead, into the session's own content on the LEFT, clamped to
+  // `panelMaxWidth` — the room `metricsTabBoundsRight` (`lib/sessionsFiltersPanel.ts`) already
+  // measured clear of both asides on that side. Same anchor as `'button'`, different reason: that
+  // one has nowhere else to go from the header's own right edge; this one now shares the same
+  // right-hand neighbourhood as the button used to.
   const panel = open && (
       <div style={{
-          position: 'absolute', top: touch ? 48 : 36, zIndex: 60,
-          ...(variant === 'tab' ? { left: 0 } : { right: 0 }),
+          position: 'absolute', top: touch ? 48 : 36, zIndex: 60, right: 0,
           // On a phone it is measured from the VIEWPORT, not given a fixed width: this control sits
           // near the right edge of a 390px bar, so a 300px panel anchored to it would hang a piece
           // of itself off the screen.

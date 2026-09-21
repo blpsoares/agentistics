@@ -22,6 +22,10 @@
  * itself throw.
  */
 
+// `PanelId`/`PANEL_IDS` only — `panelSlots.ts` imports nothing from this module, so this stays a
+// one-way dependency rather than a circular one.
+import { PANEL_IDS, type PanelId } from './panelSlots'
+
 /** The smallest band worth drawing: a prompt, a command and a few lines of its output. */
 export const BAND_MIN_PX = 140
 
@@ -244,13 +248,26 @@ export interface BandPrefs {
   height: number
   /**
    * SNAPPED TO FILL THE CENTRE COLUMN (design item 7) — persisted the same way `height` already is,
-   * so a band left full reopens full. `height` is STILL kept current while `full` is true (the
-   * measured column height at the moment it was written), which is what lets a reload on a
-   * DIFFERENT-sized screen still read as full rather than as an arbitrary tall number — the render
-   * path re-derives the actual pixel figure from the live measurement, this flag only says which of
-   * the two readings applies.
+   * so a band left full reopens full. `height` is STILL kept current while a panel's own entry here
+   * is true (the measured column height at the moment it was written), which is what lets a reload
+   * on a DIFFERENT-sized screen still read as full rather than as an arbitrary tall number — the
+   * render path re-derives the actual pixel figure from the live measurement, this flag only says
+   * which of the two readings applies.
+   *
+   * FULL SCREEN IS A PROPERTY OF THE PANEL, NOT OF THE SLOT — found by the agent fixing the band's
+   * resize grip: drag one band (say the Studio) to fill the column, then move a DIFFERENT panel
+   * (Contents, say) into the SAME bottom slot, and the new occupant read as full too, on the first
+   * frame, before anyone had dragged it anywhere. The OLD shape was one flat boolean, shared by
+   * `StudioBand`, `SimpleDockedBand` and `ShellBand` alike — whichever panel next reads this record
+   * inherits whatever the LAST occupant left behind, because the record never named who it was
+   * about. Keyed by `PanelId` instead: each panel reads and writes only its OWN entry
+   * (`bandPanelFull`/`withBandPanelFull`, below), so a new occupant starts un-full regardless of
+   * what the panel it replaced was doing. `height`/`open`/`target`/`geometry` stay SHARED on
+   * purpose — the band's own size and visibility are a property of the BOX a reader keeps
+   * reaching for, which is exactly why a band left tall reopens tall for the next panel too; only
+   * "is THIS panel covering the whole column" is a fact about the panel and not the box.
    */
-  full?: boolean
+  full?: Partial<Record<PanelId, boolean>>
   /**
    * The last geometry each PLACEMENT measured for its terminal, so the next open can state it
    * before the first capture instead of snapping a quarter-second later.
@@ -305,10 +322,10 @@ export function readBandPrefs(storage?: Storage): BandPrefs {
       height: typeof r.height === 'number' && Number.isFinite(r.height)
         ? Math.max(BAND_MIN_PX, r.height)
         : DEFAULT_BAND_PREFS.height,
-      // OMITTED rather than `false`, matching `geometry`/`target` below: absent and false read the
-      // same way to every caller (`prefs.full === true`), so there is no reason for a record that
-      // never mentioned it to gain a key it did not have.
-      ...(r.full === true ? { full: true } : {}),
+      // OMITTED rather than an empty object, matching `geometry`/`target` below: absent and "no
+      // panel is full" read the same way to every caller (`bandPanelFull(prefs, panel)`), so there
+      // is no reason for a record that never mentioned it to gain a key it did not have.
+      ...(readFullMap(r.full) ? { full: readFullMap(r.full)! } : {}),
       // DROPPED PER PLACEMENT when it does not read as a pair of positive whole numbers. Half a
       // geometry is worse than none — it would be sent, refused, and the reader would never learn
       // why — and one unreadable placement must not cost the other.
@@ -320,6 +337,66 @@ export function readBandPrefs(storage?: Storage): BandPrefs {
   } catch {
     return DEFAULT_BAND_PREFS
   }
+}
+
+/**
+ * MIGRATES AWAY FROM THE OLD SHAPE, NEVER RESURRECTS IT — `full` used to be a flat `boolean`
+ * (`BandPrefs.full`'s own header). A record still holding that shape must not throw (it is
+ * ordinary, pre-existing data, not corruption) and must not carry the old `true` forward as some
+ * panel's own entry either — that boolean named no panel, so applying it to whichever one asks
+ * first would just move the exact bug it is being migrated away from one layer down. So a
+ * non-object `full` (the old shape, `true` or `false` alike) reads as "nothing stored", silently,
+ * and only the NEW object shape is read through — one known panel id at a time, `=== true` only.
+ */
+function readFullMap(v: unknown): Partial<Record<PanelId, boolean>> | null {
+  if (typeof v !== 'object' || v === null) return null
+  const r = v as Record<string, unknown>
+  const out: Partial<Record<PanelId, boolean>> = {}
+  for (const panel of PANEL_IDS) {
+    if (r[panel] === true) out[panel] = true
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
+/** Is THIS panel the one that was put in full screen — never whichever panel left an entry behind
+ *  for the slot in general. See `BandPrefs.full`'s own header. */
+export function bandPanelFull(prefs: BandPrefs, panel: PanelId): boolean {
+  return prefs.full?.[panel] === true
+}
+
+/**
+ * The read-modify-write for ONE panel's own entry, leaving every other panel's exactly as it was.
+ * `value: false` REMOVES the key rather than writing a literal `false` — matching `readBandPrefs`'s
+ * own convention that absent and false must read identically to every caller — so a record with no
+ * panel full at all round-trips with no `full` key at all, not `{}`.
+ */
+export function withBandPanelFull(prefs: BandPrefs, panel: PanelId, value: boolean): BandPrefs {
+  const next: Partial<Record<PanelId, boolean>> = { ...prefs.full }
+  if (value) next[panel] = true
+  else delete next[panel]
+  const { full: _drop, ...rest } = prefs
+  void _drop
+  return Object.keys(next).length > 0 ? { ...rest, full: next } : rest
+}
+
+/**
+ * SEED A FRESHLY-READ RECORD WITH AN EXTERNALLY-OWNED `open` VALUE — the fix for the sibling of the
+ * `full` bug above, found by the agent fixing the resize grip: with the band open on the Studio,
+ * picking Claude Code or Shell MINIMIZED it instead of switching, needing a second click to both
+ * open it and show the tab just picked. `ShellBand` mounts fresh whenever it swaps in for
+ * `StudioBand`/`SimpleDockedBand` (they are three different components sharing one bottom slot),
+ * and `useState(() => readBandPrefs())` read that shared record's `open` field COLD — a boolean
+ * never scoped to which panel it was about, exactly like `full` before `withBandPanelFull` existed
+ * — ignoring the `bottomOpen: true` `panelSlots.ts`'s own `openPanel` had JUST written for the very
+ * panel now mounting. `openSeed` is `slotLayout.bottomOpen` itself, read ONCE at mount (`StudioBand`
+ * takes it as a fully CONTROLLED prop; this band cannot go that far without also rewiring the shell-
+ * resolution reducer's OWN mount-time read of the same flag, so it seeds instead — see `ShellBand`'s
+ * own `open` prop for the rest of that story). `undefined` means the caller has no such authority
+ * (a placement other than `docked`, or a caller that predates this prop) and the stored value is
+ * trusted exactly as read.
+ */
+export function seedBandOpen(prefs: BandPrefs, openSeed: boolean | undefined): BandPrefs {
+  return openSeed === undefined ? prefs : { ...prefs, open: openSeed }
 }
 
 function readGeometry(v: unknown): PaneGeometry | null {

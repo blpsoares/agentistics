@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { transformTranslateX, restingLeftEdge } from './rightAsideEdge'
+import { transformTranslateX, restingLeftEdge, fullscreenInsetRight } from './rightAsideEdge'
 
 describe('transformTranslateX', () => {
   test('no transform at all — nothing to discount', () => {
@@ -53,5 +53,36 @@ describe('restingLeftEdge', () => {
 
   test('a box with no transform at all (the split shell) is read at face value', () => {
     expect(restingLeftEdge(585, 'none')).toBe(585)
+  })
+})
+
+describe('fullscreenInsetRight', () => {
+  test('the aside open at 1440×900, default 620px width settling at x=820 — the overlay stops there', () => {
+    expect(fullscreenInsetRight(820, 1440)).toBe(620)
+  })
+
+  test('no aside on screen at all — the overlay covers the whole viewport, exactly as inset:0 did', () => {
+    expect(fullscreenInsetRight(null, 1440)).toBe(0)
+  })
+
+  test('the aside minimized (its edge goes back to null) — the SAME viewport now yields zero inset', () => {
+    // The reactive half of the fix: minimizing never re-enters full screen, it just changes what
+    // this function is fed on the next render.
+    const open = fullscreenInsetRight(820, 1440)
+    const minimized = fullscreenInsetRight(null, 1440)
+    expect(open).toBeGreaterThan(0)
+    expect(minimized).toBe(0)
+  })
+
+  test('a narrower aside (dragged in) yields a smaller inset, never negative', () => {
+    expect(fullscreenInsetRight(1200, 1440)).toBe(240)
+  })
+
+  test('an edge past the viewport (a stale measurement) floors at zero rather than going negative', () => {
+    expect(fullscreenInsetRight(1500, 1440)).toBe(0)
+  })
+
+  test('a narrow viewport with the aside occupying most of it — the overlay is a thin strip', () => {
+    expect(fullscreenInsetRight(585, 1024)).toBe(439)
   })
 })

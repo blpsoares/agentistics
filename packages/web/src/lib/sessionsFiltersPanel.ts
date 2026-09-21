@@ -130,3 +130,59 @@ export function metricsTabBounds(
   const panelMaxWidth = Math.max(METRICS_PANEL_MIN_WIDTH, Math.min(METRICS_PANEL_PREFERRED_WIDTH, available))
   return { left, panelMaxWidth }
 }
+
+// ---------------------------------------------------------------------------------------------
+// THE RIGHT-ANCHORED MIRROR (owner: "você vai mover os dois itens 'Filtros' e os stats da sessão
+// pra direita, quando o aside da direita abrir eles devem vir mais pra esquerda junto, eles nunca
+// vao ficar por cima dele") — the same two tabs, moved from hanging off the FLEET aside's own right
+// edge to hanging off the ARTIFACTS aside's own left edge instead. `filtrosPanelBoundsRight` is
+// `filtrosPanelBounds` with the anchor flipped: the CLAMP is identical arithmetic (the room between
+// the two asides does not change because a control chooses which side to hug), only the returned
+// offset is a CSS `right` value — the distance from the VIEWPORT's own right edge — rather than a
+// `left` one, so the tab's own box sits flush against the artifacts aside (or the viewport's edge
+// when it is closed) and grows LEFTWARD into the room, never rightward under the aside.
+//
+// `metricsTabBoundsRight` mirrors `metricsTabBounds` the same way, but the SECOND tab moves to the
+// OTHER side of the first: Filtros is the one control that is ALWAYS on screen (narrowing the fleet
+// list needs no selected session), so it stays the stable anchor flush against the artifacts aside;
+// the session-metrics tab is the CONDITIONAL one (only a selected session has anything to show), so
+// it is the one derived from the anchor's own measured trigger width — exactly the role
+// `metricsTabBounds` already gives it, just measured leftward from Filtros instead of rightward.
+// Reusing that ordering (rather than swapping which tab anchors) means Filtros never has to wait on
+// a width that might not exist yet.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The RIGHT-anchored mirror of `filtrosPanelBounds`. `right` is a CSS `right` offset — pixels from
+ * the viewport's own right edge — not a `left` one; see this module's own header, above, for why
+ * the width clamp itself is unchanged.
+ */
+export function filtrosPanelBoundsRight(
+  leftAside: HorizontalEdges,
+  rightAside: HorizontalEdges | null,
+  viewportWidth: number,
+): { right: number; width: number } {
+  const rightEdge = rightAside === null ? viewportWidth : rightAside.left
+  const available = Math.max(0, rightEdge - leftAside.right)
+  const width = Math.max(FILTROS_PANEL_MIN_WIDTH, Math.min(FILTROS_PANEL_PREFERRED_WIDTH, available))
+  return { right: Math.max(0, viewportWidth - rightEdge), width }
+}
+
+/**
+ * The RIGHT-anchored mirror of `metricsTabBounds` — the session-metrics tab sits to the LEFT of
+ * Filtros (further from the artifacts aside) by Filtros' own measured trigger width plus the gap,
+ * and its dropdown opens further left still, bounded by the SAME far edge Filtros' own box already
+ * respects (`filtros.right + filtros.width` — Filtros' own left-most extent, mirroring
+ * `metricsTabBounds`'s `filtros.left + filtros.width`).
+ */
+export function metricsTabBoundsRight(
+  filtros: { right: number; width: number },
+  filtrosTabW: number,
+  gap: number,
+): { right: number; panelMaxWidth: number } {
+  const right = filtros.right + filtrosTabW + gap
+  const farEdge = filtros.right + filtros.width
+  const available = Math.max(0, farEdge - right)
+  const panelMaxWidth = Math.max(METRICS_PANEL_MIN_WIDTH, Math.min(METRICS_PANEL_PREFERRED_WIDTH, available))
+  return { right, panelMaxWidth }
+}

@@ -2,7 +2,7 @@ import { describe, expect, it, test } from 'bun:test'
 import {
   BAND_FULLSCREEN_OVERSHOOT_PX, BAND_MIN_PX, BAND_SNAP_THRESHOLD_PX, DEFAULT_BAND_PREFS,
   clampBandHeight, readBandPrefs, resolveBandDrag, resolveBandHeight, shellErrorText,
-  wantsFullscreen,
+  wantsFullscreen, bandPanelFull, withBandPanelFull, seedBandOpen,
   bandGeometry, shellApiUrl, shellWatching, shellWhere, writeBandGeometry, writeBandPrefs, type BandPrefs,
 } from './shellBand'
 
@@ -272,15 +272,115 @@ describe('the band prefs are a per-viewer convenience and never a hard dependenc
   })
 
   // design item 7
-  it('round-trips `full` too, omitted (not `false`) when it was never set', () => {
+  it('round-trips `full` too, omitted (not `false`) when no panel has it set', () => {
     const s = memory()
-    writeBandPrefs({ open: true, height: 900, full: true }, s)
-    expect(readBandPrefs(s)).toEqual({ open: true, height: 900, full: true })
+    writeBandPrefs({ open: true, height: 900, full: { studio: true } }, s)
+    expect(readBandPrefs(s)).toEqual({ open: true, height: 900, full: { studio: true } })
 
     const s2 = memory()
     writeBandPrefs({ open: true, height: 260 }, s2)
     expect(readBandPrefs(s2)).toEqual({ open: true, height: 260 })
     expect('full' in readBandPrefs(s2)).toBe(false)
+  })
+
+  /**
+   * FULL SCREEN IS A PROPERTY OF THE PANEL, NOT OF THE SLOT — the reported bug: drag the Studio to
+   * fill the column, then move Contents into the SAME bottom band, and Contents read as full too,
+   * on the very first frame, before anyone had dragged it anywhere. `full` used to be one flat
+   * boolean shared by every occupant of the band; it is now keyed by `PanelId`, and
+   * `bandPanelFull`/`withBandPanelFull` are the only way anything reads or writes an entry in it.
+   */
+  describe('full screen is a property of the panel, not of the slot', () => {
+    it('a panel put in full screen reads full; a DIFFERENT panel moved into the same band does not', () => {
+      const s = memory()
+      writeBandPrefs(withBandPanelFull(readBandPrefs(s), 'studio', true), s)
+      const prefs = readBandPrefs(s)
+      expect(bandPanelFull(prefs, 'studio')).toBe(true)
+      expect(bandPanelFull(prefs, 'contents')).toBe(false)
+      expect(bandPanelFull(prefs, 'hardware')).toBe(false)
+      expect(bandPanelFull(prefs, 'cli')).toBe(false)
+      expect(bandPanelFull(prefs, 'shell')).toBe(false)
+    })
+
+    it('two panels can each be full at once — a per-panel fact, not a single slot-wide switch', () => {
+      let prefs = withBandPanelFull(DEFAULT_BAND_PREFS, 'studio', true)
+      prefs = withBandPanelFull(prefs, 'contents', true)
+      expect(bandPanelFull(prefs, 'studio')).toBe(true)
+      expect(bandPanelFull(prefs, 'contents')).toBe(true)
+      expect(bandPanelFull(prefs, 'hardware')).toBe(false)
+    })
+
+    it('turning full OFF for one panel never disturbs another panel\'s own entry', () => {
+      let prefs = withBandPanelFull(DEFAULT_BAND_PREFS, 'studio', true)
+      prefs = withBandPanelFull(prefs, 'shell', true)
+      prefs = withBandPanelFull(prefs, 'studio', false)
+      expect(bandPanelFull(prefs, 'studio')).toBe(false)
+      expect(bandPanelFull(prefs, 'shell')).toBe(true)
+    })
+
+    it('turning off the LAST full panel omits the key entirely, not an empty object', () => {
+      let prefs = withBandPanelFull(DEFAULT_BAND_PREFS, 'studio', true)
+      prefs = withBandPanelFull(prefs, 'studio', false)
+      expect('full' in prefs).toBe(false)
+    })
+
+    it('setting a panel that was never full to false is a no-op, not a thrown key', () => {
+      const prefs = withBandPanelFull(DEFAULT_BAND_PREFS, 'hardware', false)
+      expect('full' in prefs).toBe(false)
+    })
+
+    it('every other field survives a full-panel write untouched', () => {
+      const before: BandPrefs = { open: true, height: 555, target: 'shell' }
+      const after = withBandPanelFull(before, 'cli', true)
+      expect(after.open).toBe(true)
+      expect(after.height).toBe(555)
+      expect(after.target).toBe('shell')
+    })
+  })
+
+  /**
+   * THE MIGRATION: an existing record still holding the OLD flat-boolean shape must not throw, and
+   * must not carry that boolean forward as any panel's own entry — it named no panel, so applying
+   * it to whichever one asks first would just move the same bug one layer down.
+   */
+  describe('the old flat-boolean `full` migrates away rather than resurrecting', () => {
+    it('an old record with `full: true` reads as no panel being full — never as EVERY panel full', () => {
+      const s = memory()
+      s.setItem('agentistics-shell-band', JSON.stringify({ open: true, height: 900, full: true }))
+      const prefs = readBandPrefs(s)
+      expect('full' in prefs).toBe(false)
+      for (const panel of ['studio', 'contents', 'hardware', 'cli', 'shell'] as const) {
+        expect(bandPanelFull(prefs, panel)).toBe(false)
+      }
+    })
+
+    it('an old record with `full: false` reads the same way, and the rest of the record survives', () => {
+      const s = memory()
+      s.setItem('agentistics-shell-band', JSON.stringify({ open: true, height: 700, full: false }))
+      const prefs = readBandPrefs(s)
+      expect('full' in prefs).toBe(false)
+      expect(prefs.open).toBe(true)
+      expect(prefs.height).toBe(700)
+    })
+
+    it('reading an old record never throws', () => {
+      const s = memory()
+      s.setItem('agentistics-shell-band', JSON.stringify({ open: true, height: 400, full: true }))
+      expect(() => readBandPrefs(s)).not.toThrow()
+    })
+
+    it('an unrecognised key under the new object shape is dropped, not carried through', () => {
+      const s = memory()
+      s.setItem('agentistics-shell-band', JSON.stringify({ open: true, height: 400, full: { bogus: true, studio: true } }))
+      const prefs = readBandPrefs(s)
+      expect(prefs.full).toEqual({ studio: true })
+    })
+
+    it('a non-`true` value under a real panel key is dropped, matching every other boolean here', () => {
+      const s = memory()
+      s.setItem('agentistics-shell-band', JSON.stringify({ open: true, height: 400, full: { studio: 'yes' } }))
+      expect('full' in readBandPrefs(s)).toBe(false)
+    })
   })
 
   it('no stored value reads as CLOSED — the band is never opened by a machine nobody asked', () => {
@@ -300,6 +400,52 @@ describe('the band prefs are a per-viewer convenience and never a hard dependenc
     expect(readBandPrefs(s).open).toBe(false)
     s.setItem('agentistics-shell-band', '{"open":"yes","height":"tall"}')
     expect(readBandPrefs(s)).toEqual({ open: false, height: DEFAULT_BAND_PREFS.height })
+  })
+})
+
+/**
+ * `seedBandOpen` — THE FIX: with the band open on the Studio, picking Claude Code or Shell used to
+ * MINIMIZE it instead of switching, needing a second click. `ShellBand` mounts fresh whenever it
+ * swaps in for `StudioBand`/`SimpleDockedBand` (three different components sharing one bottom
+ * slot), and reading the shared `agentistics-shell-band` record's `open` field cold — the same
+ * flat-boolean shape `withBandPanelFull` already had to fix for `full` — ignored the
+ * `bottomOpen: true` `panelSlots.ts`'s own `openPanel` had JUST set for the very panel now
+ * mounting. This is the one function that closes it: seed the freshly-read record with the
+ * authoritative `slotLayout.bottomOpen` the caller passes in as `openSeed`.
+ */
+describe('seedBandOpen — the fresh-mount fix for "picking a tab minimized the band"', () => {
+  it('a stale `open: false` in storage is overridden by a true seed', () => {
+    const stale: BandPrefs = { open: false, height: 300 }
+    expect(seedBandOpen(stale, true)).toEqual({ open: true, height: 300 })
+  })
+
+  it('a stale `open: true` in storage is overridden by a false seed', () => {
+    const stale: BandPrefs = { open: true, height: 300 }
+    expect(seedBandOpen(stale, false)).toEqual({ open: false, height: 300 })
+  })
+
+  it('no seed (a caller that predates the prop) trusts the record exactly as read', () => {
+    const stored: BandPrefs = { open: false, height: 300 }
+    expect(seedBandOpen(stored, undefined)).toEqual(stored)
+    expect(seedBandOpen(stored, undefined)).toBe(stored) // the SAME object — never a needless copy
+  })
+
+  it('every other field survives a seed untouched', () => {
+    const stored: BandPrefs = { open: false, height: 555, target: 'shell', full: { studio: true } }
+    expect(seedBandOpen(stored, true)).toEqual({ open: true, height: 555, target: 'shell', full: { studio: true } })
+  })
+
+  it('the reported repro, worked through the record directly: Studio open, collapsed, then Claude Code takes the slot', () => {
+    // 1) The band is open on Studio: `agentistics-shell-band` holds `open: true`.
+    const whileStudioOpen: BandPrefs = { open: true, height: 300 }
+    // 2) The reader collapses it (the shared minimize chevron writes `open: false` here too, since
+    //    Studio and this band share one record for `height`/`open`).
+    const whileStudioCollapsed: BandPrefs = { ...whileStudioOpen, open: false }
+    // 3) The reader picks "Claude Code". `resolvePanelBarPick` answers `{kind:'open'}`,
+    //    `panelSlots.openPanel` sets `bottomOpen: true` for the NEW occupant, and `ShellBand` mounts
+    //    fresh — `openSeed` is that fresh `true`, not the `false` the record above still holds.
+    const seeded = seedBandOpen(whileStudioCollapsed, true)
+    expect(seeded.open).toBe(true) // FIXED: without the seed this stays `false` (the reported bug)
   })
 })
 

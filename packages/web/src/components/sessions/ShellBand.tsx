@@ -60,8 +60,9 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { useTerminalStream } from '../../hooks/useTerminalStream'
 import { useTerminalWrite } from '../../hooks/useTerminalWrite'
 import {
-  BAND_MIN_PX, readBandPrefs, shellApiUrl, shellErrorText, shellWatching,
-  bandGeometry, shellWhere, writeBandGeometry, writeBandPrefs, type BandPrefs,
+  BAND_MIN_PX, bandPanelFull, readBandPrefs, resolveBandDrag, resolveBandHeight, seedBandOpen,
+  shellApiUrl, shellErrorText, shellWatching, bandGeometry, shellWhere, withBandPanelFull,
+  writeBandGeometry, writeBandPrefs, type BandPrefs,
 } from '../../lib/shellBand'
 import {
   INITIAL_SHELL_BAND, shellBandReducer, shellResolveWanted, type OpenShell,
@@ -322,13 +323,36 @@ export interface ShellBandProps {
    * yet", which `resolveBandHeight` already treats as "never snap".
    */
   columnHeight?: number
+  /**
+   * THE BOTTOM SLOT'S OWN OPEN STATE, `slotLayout.bottomOpen` — `docked` only, and read ONCE, to
+   * SEED this band's own `prefs.open` at mount. `StudioBand`/`SimpleDockedBand` take `open` as a
+   * fully CONTROLLED prop (`SessionPanel.tsx` owns it outright); this band could not go that far
+   * without also touching the shell-resolution reducer's own mount-time read of the same flag
+   * (`useReducer`'s init function), so it stays a SEED rather than a controlled value — but a seed
+   * is exactly what the bug needed. Found by the agent fixing the resize grip: with the band open
+   * on the CLI, picking Shell left it open (this band stayed MOUNTED — `chooseTarget` alone, no
+   * seed involved); but with the band open on STUDIO, picking Shell (or CLI) MINIMIZED it, needing
+   * a second click. Studio and this band do not share a React instance, so the "open" the reader
+   * was looking at was `StudioBand`'s own controlled `open` prop; the moment this band mounted in
+   * its place, `useState(() => readBandPrefs())` read the ONE shared `agentistics-shell-band`
+   * record's `open` field cold, ignoring the `bottomOpen: true` `openPanel` had just written to the
+   * slot the RENDER before — a stale `false` left over from whenever ANY panel in that band was
+   * last collapsed (the field was never panel-scoped, unlike `full` — see `BandPrefs.full`'s own
+   * header for the sibling bug this one is). `onOpenChange`, below, is the other half: it keeps
+   * `slotLayout.bottomOpen` itself in step with whatever THIS band's own tab clicks or minimize
+   * chevron do afterward, so the NEXT panel to take the slot reads a fresh answer in its turn.
+   */
+  open?: boolean
+  /** Fired whenever this band's own open/collapsed state changes post-mount — see `open`'s own
+   *  header. `SessionPanel.tsx` wires it straight to `setBottomOpen`. */
+  onOpenChange?: (open: boolean) => void
 }
 
 export function ShellBand({
   sessionId, cwd, lang, theme, harness, placement = 'docked', onOpenFullscreen,
   barEntries, onBarPick, studioSeen = true, bottomOccupant = null, shellEnabled = true,
   shellCapable = true, onShellEnabledChange, taskControl,
-  onMoveToRight, columnHeight = 0,
+  onMoveToRight, columnHeight = 0, open: openSeed, onOpenChange,
 }: ShellBandProps) {
   const t = TXT[lang]
   const isMobile = useIsMobile()
@@ -338,7 +362,11 @@ export function ShellBand({
   // the `placement` doc comment above. Kept as one boolean because every rule that follows from
   // "this is the whole box, not a collapsible band" is the same for both.
   const dedicated = placement === 'dedicated' || placement === 'aside'
-  const [prefs, setPrefs] = useState(() => readBandPrefs())
+  // SEEDED FROM `openSeed` WHEN GIVEN (docked placement) — see `seedBandOpen`'s own header. Read
+  // ONCE, like `target` below is seeded from `bottomOccupant`: a fresh mount must show what the
+  // slot was JUST told to do, never a stale flag the LAST panel in this band happened to leave
+  // behind.
+  const [prefs, setPrefs] = useState(() => seedBandOpen(readBandPrefs(), openSeed))
   /**
    * WHICH terminal this band is showing. It is the band's own state and not the session's, because
    * the band is now the door to BOTH panes: the header's `Conversa | Terminal` toggle is gone, a
@@ -373,8 +401,11 @@ export function ShellBand({
   // collapsed would show an empty screen with no way to fill it.
   const bandOpen = dedicated || prefs.open
   // THE MACHINE, not a pile of flags. See `shellBandState.ts` for the rule it enforces.
+  // Reads the ALREADY-SEEDED `prefs.open` (computed just above, same render) rather than a second,
+  // independent `readBandPrefs()` call — two reads of the same flag at mount is two chances for
+  // them to disagree about whether `openSeed` applies.
   const [band, dispatch] = useReducer(shellBandReducer, INITIAL_SHELL_BAND, init =>
-    dedicated || readBandPrefs().open ? shellBandReducer(init, { type: 'openBand' }) : init)
+    dedicated || prefs.open ? shellBandReducer(init, { type: 'openBand' }) : init)
   const shell = band.shell
   /**
    * RELEASE A LIVE SHELL'S LOCAL STATE the moment the switch narrows underneath a band that is
@@ -425,16 +456,26 @@ export function ShellBand({
 
   const setBand = useCallback((next: Partial<{ open: boolean; height: number; full: boolean }>) => {
     setPrefs(p => {
-      const merged: BandPrefs = { ...p, ...next }
-      // `full: false` is written by OMISSION, matching `readBandPrefs`'s own convention — a
-      // literal `false` and an absent key must read identically to every caller.
-      if (merged.full === false) delete merged.full
+      let merged: BandPrefs = { ...p }
+      if (next.open !== undefined) merged.open = next.open
+      if (next.height !== undefined) merged.height = next.height
+      // FULL SCREEN IS A PROPERTY OF THE PANEL THIS BAND IS CURRENTLY SHOWING (`target`, 'cli' or
+      // 'shell'), NOT OF THIS SLOT — `withBandPanelFull` touches only that one entry, leaving
+      // whatever the Studio or Contents/Hardware left behind untouched, and vice versa. See
+      // `BandPrefs.full`'s own header in `shellBand.ts`.
+      if (next.full !== undefined) merged = withBandPanelFull(merged, target, next.full)
       writeBandPrefs(merged)
       return merged
     })
     if (next.open === true) dispatch({ type: 'openBand' })
     if (next.open === false) dispatch({ type: 'closeBand' })
-  }, [])
+    // KEEP `slotLayout.bottomOpen` IN STEP — see `open`'s own header on `ShellBandProps`. Without
+    // this, collapsing or restoring THIS band through its own chevron or tab only ever touched the
+    // shared `agentistics-shell-band` record, leaving the NEXT panel to take the bottom slot (should
+    // this one move or close) to seed itself from whatever `slotLayout.bottomOpen` was last told —
+    // which, unsynced, is a second stale flag exactly like the one this fix already closed at mount.
+    if (next.open !== undefined) onOpenChange?.(next.open)
+  }, [target, onOpenChange])
 
   /**
    * Resolve THIS session's shell: reuse the one already running for it, else open one.
@@ -678,7 +719,7 @@ export function ShellBand({
    *  A drag's start point has to be THIS, never the stored `prefs.height` alone: while full, that
    *  field is stale (see `BandPrefs.full`'s own doc comment), and starting the drag from it would
    *  have the band jump the instant the pointer moved at all. */
-  const renderedHeight = prefs.full && columnHeight > 0 ? columnHeight : prefs.height
+  const renderedHeight = bandPanelFull(prefs, target) && columnHeight > 0 ? columnHeight : prefs.height
   // THE SAME SHARED `useBandDrag` (`bandControls.tsx`) `StudioBand`/`SimpleDockedBand` drive their
   // own handle through. `enabled: !isMobile` reproduces this band's own former `if (isMobile) return`
   // guard — the mobile sheet renders no handle at all (see the `dedicated`/mobile branches below), so
@@ -1144,10 +1185,11 @@ export function ShellBand({
       // `flex-grow: 1` siblings (this root and the conversation's own `flex: 1` above it) split the
       // column by CONTENT size rather than handing the whole thing to the one that asked to fill it,
       // so the band silently rendered at roughly half the column instead of all of it. `renderedHeight`
-      // already resolves to the measured `columnHeight` while `prefs.full` is true, and the content
-      // box below spends it via its own `flex: '1 1 auto'` — never both on the same box. Gated on
-      // `prefs.open`: collapsed, this must stay auto-sized to its header row alone.
-      ...(prefs.open && prefs.full ? { height: renderedHeight, flexShrink: 0 } : { flexShrink: 0 }),
+      // already resolves to the measured `columnHeight` while THIS panel's own `full` entry is
+      // true, and the content box below spends it via its own `flex: '1 1 auto'` — never both on
+      // the same box. Gated on `prefs.open`: collapsed, this must stay auto-sized to its header
+      // row alone.
+      ...(prefs.open && bandPanelFull(prefs, target) ? { height: renderedHeight, flexShrink: 0 } : { flexShrink: 0 }),
       display: 'flex', flexDirection: 'column',
       borderTop: '1px solid var(--border)', background: 'var(--bg-surface)',
     }}>
@@ -1195,7 +1237,7 @@ export function ShellBand({
       </div>
       {prefs.open && (
         <div style={{
-          ...(prefs.full
+          ...(bandPanelFull(prefs, target)
             ? { flex: '1 1 auto', minHeight: 0 }
             : { height: Math.max(BAND_MIN_PX, renderedHeight), flexShrink: 0 }),
           display: 'flex', flexDirection: 'column', gap: 6, padding: '0 12px 10px',
