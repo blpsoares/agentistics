@@ -30,7 +30,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  Ban, ChevronLeft, Plus, Rocket, Settings, SquarePen, Trash2, Users, XCircle,
+  Ban, ChevronLeft, Eye, Plus, Rocket, Settings, SquarePen, Trash2, Users, XCircle,
 } from 'lucide-react'
 import type { TaskStatusDef } from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -67,6 +67,13 @@ export interface SubtaskActionsMenuProps {
     onCompose: () => void
     onEdit: () => void
     onFire: () => void
+    /** A read-only summary of the draft — offered whenever `onEdit` is (a draft exists), never
+     *  requiring the person to open the editable form just to remember what it says. */
+    onView: () => void
+    /** Discard the draft outright, from the menu — gated by its own `ConfirmModal` one level up
+     *  (`SubtaskTable.tsx`), since this is reachable without ever opening the compose dialog at
+     *  all and is a destructive act on request t-918cc82233. */
+    onDelete: () => void
   }
 }
 
@@ -277,6 +284,12 @@ export function SubtaskActionsMenu(p: SubtaskActionsMenuProps) {
                       </button>
                       <button onClick={() => { close(); p.staged!.onEdit() }} style={rowButtonStyle(isMobile)}>
                         <SquarePen size={13} /> {pt ? 'Editar sessão preparada' : 'Edit staged session'}
+                      </button>
+                      <button onClick={() => { close(); p.staged!.onView() }} style={rowButtonStyle(isMobile)}>
+                        <Eye size={13} /> {pt ? 'Ver sessão preparada' : 'View staged session'}
+                      </button>
+                      <button onClick={() => { close(); p.staged!.onDelete() }} style={rowButtonStyle(isMobile, true)}>
+                        <Trash2 size={13} /> {pt ? 'Excluir sessão em espera' : 'Delete staged session'}
                       </button>
                     </>
                   ) : (
