@@ -27,6 +27,12 @@ export interface BoardPrefs {
   view: BoardView
   /** How the rows are ordered — the table's headers and the kanban's picker write the same field. */
   sort: SortSpec
+  /**
+   * A kanban column's OWN order, by status id — set by clicking the column's title. A status absent
+   * here follows `sort`. Kept apart from `sort` because it is the smaller, later statement: the
+   * board's picker is the default for every column nobody touched.
+   */
+  columnSort: Record<string, SortSpec>
   /** The kanban's own arrangement: what the swimlanes are, and the per-column WIP limit. */
   lanes: LaneKey
   wip: Record<string, number>
@@ -42,7 +48,7 @@ export interface BoardPrefs {
 
 /** The metrics view is the default, because "what did it cost" is the question the board answers. */
 export const DEFAULT_PREFS: BoardPrefs = {
-  view: 'overview', sort: DEFAULT_SORT, lanes: 'none', wip: {},
+  view: 'overview', sort: DEFAULT_SORT, columnSort: {}, lanes: 'none', wip: {},
   columns: null, groups: null, collapsed: [], rail: {},
 }
 
@@ -77,6 +83,17 @@ function readSort(v: unknown): SortSpec {
   return typeof s.key === 'string' ? { key: s.key as SortSpec['key'], dir } : DEFAULT_SORT
 }
 
+/** A stored per-column record: every entry goes through `readSort`, and anything else is dropped. */
+function readColumnSort(v: unknown): Record<string, SortSpec> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {}
+  return Object.fromEntries(
+    Object.entries(v as Record<string, unknown>)
+      .filter(([, spec]) => spec && typeof spec === 'object'
+        && typeof (spec as Record<string, unknown>).key === 'string')
+      .map(([status, spec]) => [status, readSort(spec)]),
+  )
+}
+
 // A stored 'agents' value (the view existed once and could still be sitting in a browser's
 // localStorage) falls back to the default rather than naming a view this build no longer has —
 // the same rule `readSort` and `statuses` already apply to a stale key.
@@ -100,6 +117,7 @@ export function readBoardPrefs(): BoardPrefs {
     return {
       view: isView(p.view) ? p.view : DEFAULT_PREFS.view,
       sort: readSort(p.sort),
+      columnSort: readColumnSort(p.columnSort),
       lanes: isLane(p.lanes) ? p.lanes : 'none',
       // A WIP limit is a number per column; anything else in the stored object is dropped rather
       // than rendered as a limit nobody set.

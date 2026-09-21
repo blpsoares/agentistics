@@ -38,6 +38,7 @@ import {
   readBoardPrefs, writeBoardPrefs, type BoardView as ViewId, type LaneKey,
 } from '../components/tasks/boardPrefs'
 import { BoardArrange } from '../components/tasks/BoardArrange'
+import type { ColumnSorts } from '../components/tasks/columnSort'
 import { DeliveryDetail } from '../components/tasks/DeliveryDetail'
 import { useMoney } from '../components/tasks/money'
 import { RailSection } from '../components/tasks/RailSection'
@@ -155,6 +156,10 @@ function TaskList() {
   // in the columns is two boards, and the reader has to hold both.
   const [sort, setSortState] = useState<SortSpec>(stored.sort)
   const setSort = (v: SortSpec) => { setSortState(v); writeBoardPrefs({ sort: v }) }
+  // A column's OWN order (set by clicking its title), by status id — persisted beside the board's
+  // own, in `localStorage` for the same reason: it is one viewer's arrangement.
+  const [columnSort, setColumnSortState] = useState<ColumnSorts>(stored.columnSort)
+  const setColumnSort = (v: ColumnSorts) => { setColumnSortState(v); writeBoardPrefs({ columnSort: v }) }
   const [lanes, setLanesState] = useState<LaneKey>(stored.lanes)
   const setLanes = (v: LaneKey) => { setLanesState(v); writeBoardPrefs({ lanes: v }) }
   const [wip, setWipState] = useState<Record<string, number>>(stored.wip)
@@ -337,6 +342,7 @@ function TaskList() {
         <>
           <BoardArrange
             sort={sort} onSort={setSort}
+            columnSorts={columnSort} onColumnSorts={setColumnSort}
             lanes={lanes} onLanes={setLanes}
             wip={wip} onWip={setWip}
             // The board and the table share ONE set of visible columns: they are the LIVE statuses,
@@ -352,6 +358,8 @@ function TaskList() {
           lang={lang}
             rows={shown}
             sort={sort}
+            columnSort={columnSort}
+            onColumnSort={setColumnSort}
             lanes={lanes}
             wip={wip}
             columns={boardColumns}
