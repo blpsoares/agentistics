@@ -179,6 +179,32 @@ export interface BoardCopy {
     attachFailed: string
     attachNetworkError: string
   }
+  /**
+   * The lists' own controls: Select mode, the open-the-task button, and sorting by a column title.
+   * `{column}` / `{key}` are replaced by the caller — a sentence built by concatenating a translated
+   * word onto an English frame is the bug this file exists to end.
+   */
+  list: {
+    select: string
+    selectTitle: string
+    selectAllInGroup: string
+    selectRow: string
+    openTask: string
+    showSubtasks: string
+    hideSubtasks: string
+    sortBy: string
+    sortByColumn: string
+    sortDefault: string
+    sortAsc: string
+    sortDesc: string
+    handOrder: string
+    /** The kanban column title's sort menu. */
+    columnSortTitle: string
+    columnReorderOff: string
+    columnUseHand: string
+    /** Every key a list can be ordered by, in words. */
+    keys: Record<string, string>
+  }
 }
 
 const EN: BoardCopy = {
@@ -311,6 +337,31 @@ const EN: BoardCopy = {
     pasteTooLarge: 'The pasted text was too large to type into the session, so it was attached as a file.',
     attachFailed: 'The attachment failed.',
     attachNetworkError: 'Network error uploading the attachment.',
+  },
+  list: {
+    select: 'Select',
+    selectTitle: 'Show checkboxes to pick several tasks at once',
+    selectAllInGroup: 'Select every task in this group',
+    selectRow: 'Select this task',
+    openTask: 'Open task',
+    showSubtasks: 'Show the subtasks',
+    hideSubtasks: 'Hide the subtasks',
+    sortBy: 'Sort by',
+    sortByColumn: 'Sort by {column}',
+    sortDefault: 'Default order',
+    sortAsc: 'Ascending',
+    sortDesc: 'Descending',
+    handOrder: 'Hand order',
+    columnSortTitle: 'Order the cards in this column',
+    columnReorderOff: 'Ordered by {key}. Dragging to reorder is off in this column.',
+    columnUseHand: 'Use hand order',
+    keys: {
+      manual: 'Hand order', priority: 'Priority', title: 'Title', status: 'Status',
+      created: 'Newest', updated: 'Last touched', due: 'Due date', assignee: 'Owner',
+      cost: 'Cost', tokens: 'Tokens', rounds: 'Your prompts', sessions: 'Sessions',
+      attempts: 'Attempts', comments: 'Comments', subtasks: 'Subtasks', progress: 'Progress', harnesses: 'Harnesses',
+      delivered: 'Delivered', start: 'Start',
+    },
   },
 }
 
@@ -446,6 +497,31 @@ const PT: BoardCopy = {
     pasteTooLarge: 'O texto colado era grande demais para digitar na sessão, então foi anexado como arquivo.',
     attachFailed: 'O anexo falhou.',
     attachNetworkError: 'Erro de rede ao enviar o anexo.',
+  },
+  list: {
+    select: 'Selecionar',
+    selectTitle: 'Mostrar as caixas de seleção para escolher várias tarefas de uma vez',
+    selectAllInGroup: 'Selecionar todas as tarefas deste grupo',
+    selectRow: 'Selecionar esta tarefa',
+    openTask: 'Abrir tarefa',
+    showSubtasks: 'Mostrar as subtarefas',
+    hideSubtasks: 'Esconder as subtarefas',
+    sortBy: 'Ordenar por',
+    sortByColumn: 'Ordenar por {column}',
+    sortDefault: 'Ordem padrão',
+    sortAsc: 'Crescente',
+    sortDesc: 'Decrescente',
+    handOrder: 'Ordem manual',
+    columnSortTitle: 'Ordenar os cards desta coluna',
+    columnReorderOff: 'Ordenada por {key}. Arrastar para reordenar está desligado nesta coluna.',
+    columnUseHand: 'Usar ordem manual',
+    keys: {
+      manual: 'Ordem manual', priority: 'Prioridade', title: 'Título', status: 'Status',
+      created: 'Mais recentes', updated: 'Última alteração', due: 'Prazo', assignee: 'Responsável',
+      cost: 'Custo', tokens: 'Tokens', rounds: 'Seus prompts', sessions: 'Sessões',
+      attempts: 'Tentativas', comments: 'Comentários', subtasks: 'Subtarefas', progress: 'Progresso', harnesses: 'Harnesses',
+      delivered: 'Entregue em', start: 'Início',
+    },
   },
 }
 
