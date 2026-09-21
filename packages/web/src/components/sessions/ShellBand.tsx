@@ -49,8 +49,8 @@ import { useElementWidth } from '../../hooks/useElementWidth'
 import { keyStripShown } from '../../lib/terminalSurface'
 import { dockedShowsTarget, usePanelSlots } from '../../lib/panelSlots'
 import {
-  resolveDockedTarget, shellTargetUnavailable, targetLabel, targetScope, targetStreamId,
-  type TerminalTarget,
+  followBottomOccupant, resolveDockedTarget, shellTargetUnavailable, targetLabel, targetScope,
+  targetStreamId, type TerminalTarget,
 } from '../../lib/terminalTarget'
 import { Watermark } from './Studio'
 import {
@@ -448,10 +448,25 @@ export function ShellBand({
    * DEFAULT, `bottomOccupant` is never a guess: it is an explicit slot placement, so `'shell'` here
    * is always a GENUINE record and is exactly what the disabled-shell empty state is drawn on when
    * the switch is off. See `resolveDockedTarget`'s own header for the distinction.
+   *
+   * COMPARED AGAINST ITS OWN PREVIOUS VALUE, NEVER AGAINST `target` — that was the bug (owner
+   * report: the mobile "Which terminal" segment could not be switched). `chooseTarget` (the
+   * segment's own click handler, below) is entirely local — it never writes `panelSlots` — so
+   * `bottomOccupant` sits exactly where it was on every ordinary tap, and judging it against
+   * `target` read that as a fact to catch up to: the tap landed for one render and this same
+   * effect, seeing the two disagree, called `chooseTarget(bottomOccupant)` right back. A person's
+   * pick is authoritative until `bottomOccupant` ITSELF changes for another reason — see
+   * `followBottomOccupant`'s own header (`lib/terminalTarget.ts`) for the rule, kept there and
+   * unit-tested because this component mounts no DOM in this repo's test runner.
+   * `prevBottomOccupantRef` is the one thing that tells "genuinely moved" apart from "still here,
+   * a local pick just diverged from it".
    */
+  const prevBottomOccupantRef = useRef(bottomOccupant)
   useEffect(() => {
-    if (!bottomOccupant) return
-    if (bottomOccupant !== target) chooseTarget(bottomOccupant)
+    const prevBottomOccupant = prevBottomOccupantRef.current
+    prevBottomOccupantRef.current = bottomOccupant
+    const follow = followBottomOccupant(bottomOccupant, prevBottomOccupant, target)
+    if (follow) chooseTarget(follow)
   }, [bottomOccupant, target, chooseTarget])
 
   const setBand = useCallback((next: Partial<{ open: boolean; height: number; full: boolean }>) => {
