@@ -1,29 +1,38 @@
 /**
- * StagedSessionCompose — write (or edit) a subtask/group's staged session draft (t-918cc82233).
+ * StagedSessionCompose — write (or edit) a subtask/group's staged session draft (t-918cc82233), as
+ * a THREE-STEP WIZARD.
  *
- * A dialog, not an inline row: composing a prompt plus attachments needs room a table cell cannot
- * give it, and the same shape serves both "new draft" and "edit the existing one" (`initial`).
+ * It shipped as one long scrolling form and grew past what a single column can hold without
+ * cramming: message, attachments, assistant, model, effort, folder, all fighting for one narrow
+ * dialog. Direct product feedback — "tem mt info no mesmo modal e ele ta mt fino" — is the same
+ * complaint `NewSessionModal`'s own header records for the ordinary new-session form, so this
+ * dialog now follows that ESTABLISHED wizard's own chrome (a numbered step track, one question's
+ * worth of fields per screen, Back/Continue in the footer) rather than inventing a second one — see
+ * `NewSessionModal.tsx` and `wizardSteps.ts`. The steps here are NOT `wizardSteps.ts`'s own
+ * `StepId`s: that module's gating is built around the ordinary wizard's shape (a REQUIRED title, a
+ * REQUIRED folder, a task-picker step) which does not describe this draft at all — see
+ * `stagedSession.ts`'s own header on why every field but `prompt` is optional here. What is shared
+ * is the visual language and the harness-shape helpers (`toWizardHarness`/`unsetText`/
+ * `visibleQuestions`), never the step enum itself.
  *
- * THE ASSISTANT/FOLDER/MODEL/EFFORT FIELDS ARE THE NEW-SESSION WIZARD'S OWN PICKERS
- * (`HarnessPicker`, `ProjectPicker`, `ModelSelect`, `EffortPicker`), not a second, hand-rolled set —
- * this dialog shipped with a native `<select>` for the harness and raw free-text `<input>`s for the
- * folder/model/effort, which is exactly the anti-pattern `formBits.tsx`'s own header warns about: a
- * second dialog that restates a control instead of importing it reads as a different product one
- * click away from the one that got it right, and a typed model/effort id the harness does not
- * recognise fails at spawn with nothing on screen explaining why. `useFleetNewOptions` is the same
- * fetch `NewSessionModal` runs, shared rather than duplicated. What is DELIBERATELY skipped from the
- * wizard: the delivery/task-picker step and the title question — this dialog is already scoped to
- * one exact subtask/group of one exact delivery, so there is nothing to ask about either.
+ * THE THREE STEPS, in the order a person actually decides them: what to say (message +
+ * attachments), who should do it (assistant/model/effort), where (folder). The dialog widened from
+ * 560px to 640px alongside the split — a wizard with one question per screen still needs room for
+ * that question's own controls (the harness cards, the folder picker's search field) not to wrap
+ * awkwardly, the same "grid blowout" class of bug this file's own history already recorded once.
  *
- * Model and effort are ABSENT (not merely disabled) until a harness is chosen and that harness
- * actually names some — `visibleQuestions`, the same gate `NewSessionModal` renders its own step 1
- * through — because a free-text field a person can type garbage into is worse than no field at all.
- *
- * Attachments reuse the board's own file store — never a second one. Picking "Attach" uploads a
+ * ATTACHMENTS reuse the board's own file store — never a second one. Picking "Attach" uploads a
  * fresh file exactly the way `TaskFiles.tsx`'s own picker does (`onUpload`, which the caller wires to
  * `uploadFile()`), and the result is referenced by id; "Add an existing file" lets the draft point at
- * something already on the delivery (a spec somebody else attached) without uploading it twice. Only
- * the harness/model/effort/cwd fields are optional here (unlike `SessionPreset`, whose harness is
+ * something already on the delivery (a spec somebody else attached) without uploading it twice.
+ * PASTING works the same way the session composer's own prompt field does (`SessionChat.tsx`'s
+ * `onPaste`, sharing `pastePlan.ts`): a clipboard FILE uploads directly, and pasted TEXT past
+ * `PASTE_TEXT_LIMIT` becomes a `.txt` attachment instead of being typed inline — a 4.000-character
+ * paste is a file somebody had copied, not a message. Every attachment chip OPENS
+ * (`AttachmentLightbox`, shared with the chat and the gallery) rather than only naming itself, since
+ * a chip is unreadable once enough time has passed that nobody remembers what it held.
+ *
+ * Only the harness/model/effort/cwd fields are optional here (unlike `SessionPreset`, whose harness is
  * required) — see `@agentistics/core`'s `stagedSession.ts` for why: firing a draft missing one of
  * these falls back to the ordinary wizard, pre-filled, rather than demanding everything up front —
  * which is also why nothing here validates model/effort against the harness's closed set: that check
@@ -32,16 +41,20 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Paperclip, Plus, Trash2, X } from 'lucide-react'
+import { Check, ChevronLeft, ChevronRight, Paperclip, Plus, Trash2, X } from 'lucide-react'
 import { validateStagedSessionDraft, type StagedSessionDraft } from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useFleetNewOptions } from '../../hooks/useFleetNewOptions'
+import { useDismissOverlay } from '../../lib/dismissOverlay'
+import { overlayPadding } from '../../lib/mobileOverlay'
+import { attachmentRoom, MAX_ATTACHMENTS, planPaste } from '../../lib/pastePlan'
 import { HarnessPicker } from '../sessions/HarnessPicker'
 import { ProjectPicker } from '../sessions/ProjectPicker'
 import { ModelSelect } from '../sessions/ModelSelect'
 import { EffortPicker } from '../sessions/EffortPicker'
+import { AttachmentLightbox } from '../sessions/AttachmentLightbox'
 import { toWizardHarness, unsetText, visibleQuestions } from '../../lib/wizardSteps'
-import { type TaskFile } from '../../lib/tasks'
+import { fileIdFromLightboxPath, fileLightboxPath, fileUrl, type TaskFile } from '../../lib/tasks'
 import { button, field, microLabel, pill, surface } from './board'
 import { boardCopy, type Lang } from './copy'
 
@@ -59,6 +72,10 @@ export interface StagedSessionComposeProps {
   onClose: () => void
 }
 
+type ComposeStep = 'message' | 'assistant' | 'folder'
+
+const STEP_ORDER: ComposeStep[] = ['message', 'assistant', 'folder']
+
 export function StagedSessionCompose(p: StagedSessionComposeProps) {
   const pt = p.lang === 'pt'
   const copy = boardCopy(p.lang).staged
@@ -71,6 +88,7 @@ export function StagedSessionCompose(p: StagedSessionComposeProps) {
   const [effort, setEffort] = useState(p.initial?.effort ?? '')
   const [cwd, setCwd] = useState(p.initial?.cwd ?? '')
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [pickingExisting, setPickingExisting] = useState(false)
@@ -78,6 +96,13 @@ export function StagedSessionCompose(p: StagedSessionComposeProps) {
   /** The model picker's own open state — held here for the same reason `NewSessionModal` holds it:
    *  `esc` must close the popover before it closes the dialog. */
   const [modelOpen, setModelOpen] = useState(false)
+  /** Which question is on screen. */
+  const [step, setStep] = useState<ComposeStep>('message')
+  /** Index into `attached` (not `p.taskFiles`) — `AttachmentLightbox` steps through what THIS
+   *  draft holds, not the whole delivery's file store. */
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
+
+  const dismiss = useDismissOverlay(() => { if (!saving) p.onClose() })
 
   // The harnesses/folders THIS machine can start/reach — the SAME `/api/fleet/new` fetch the
   // ordinary new-session wizard runs, so a draft can never name an assistant this machine cannot
@@ -107,12 +132,13 @@ export function StagedSessionCompose(p: StagedSessionComposeProps) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      if (lightboxIndex !== null) return // AttachmentLightbox handles its own Escape.
       if (modelOpen) setModelOpen(false)
       else if (!saving) p.onClose()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [modelOpen, saving, p])
+  }, [modelOpen, saving, lightboxIndex, p])
 
   const attached = useMemo(
     () => attachmentIds.map(id => p.taskFiles.find(f => f.id === id)).filter((f): f is TaskFile => !!f),
@@ -123,14 +149,54 @@ export function StagedSessionCompose(p: StagedSessionComposeProps) {
     [p.taskFiles, attachmentIds],
   )
 
-  async function upload(files: FileList | null) {
-    if (!files || files.length === 0) return
+  async function upload(files: readonly File[]) {
+    if (files.length === 0) return
     setUploading(true)
-    for (const f of Array.from(files)) {
+    for (const f of files) {
       const id = await p.onUpload(f)
       if (id) setAttachmentIds(ids => [...ids, id])
+      else setNotice(copy.attachFailed)
     }
     setUploading(false)
+  }
+
+  /** The "Attach" control's own picker — capped the same way the session composer's is, from the
+   *  same module, so a wizard here and a composer there cannot silently accept a different count. */
+  async function pickNew(list: FileList | null) {
+    if (!list || list.length === 0) return
+    const room = attachmentRoom(attachmentIds.length)
+    const files = Array.from(list).slice(0, room)
+    if (files.length < list.length) {
+      setNotice(pt ? `No máximo ${MAX_ATTACHMENTS} anexos.` : `At most ${MAX_ATTACHMENTS} attachments.`)
+    }
+    await upload(files)
+  }
+
+  /**
+   * A paste is three different things and `planPaste` decides which — see that module. Mirrors
+   * `SessionChat.tsx`'s own `onPaste` exactly: files upload directly, ordinary text falls through to
+   * the textarea (which handles the caret and the undo stack better than a manual insert), and text
+   * too large to type becomes a `.txt` attachment instead.
+   */
+  function onPastePrompt(e: React.ClipboardEvent<HTMLTextAreaElement>): void {
+    const plan = planPaste({
+      files: Array.from(e.clipboardData.files),
+      text: e.clipboardData.getData('text/plain'),
+      existing: attachmentIds.length,
+    })
+    if (plan.kind === 'text') return
+    e.preventDefault()
+    if (plan.kind === 'files') { void upload(plan.files); return }
+    if (plan.kind === 'textFile') {
+      void upload([new File([plan.text], plan.name, { type: 'text/plain' })])
+      setNotice(copy.pasteTooLarge)
+    }
+  }
+
+  function onDropPrompt(e: React.DragEvent<HTMLTextAreaElement>): void {
+    if (e.dataTransfer.files.length === 0) return
+    e.preventDefault()
+    void pickNew(e.dataTransfer.files)
   }
 
   async function save() {
@@ -145,6 +211,9 @@ export function StagedSessionCompose(p: StagedSessionComposeProps) {
     const check = validateStagedSessionDraft(draft)
     if (!check.ok) {
       setError(check.issue === 'prompt' ? copy.promptRequired : copy.cwdInvalid)
+      // The only way `issue === 'prompt'` can still fire is going back to step 1 and clearing it
+      // after already reaching this one — send the reader back to the field the message names.
+      if (check.issue === 'prompt') setStep('message')
       return
     }
     setSaving(true)
@@ -159,20 +228,36 @@ export function StagedSessionCompose(p: StagedSessionComposeProps) {
     }
   }
 
+  const promptEmpty = prompt.trim() === ''
+  const stepIndex = STEP_ORDER.indexOf(step)
+  const canContinue = step !== 'message' || !promptEmpty
+  const blockedBecause = step === 'message' && promptEmpty
+    ? (pt ? 'Escreva a primeira mensagem para continuar.' : 'Write the first message to continue.')
+    : null
+
+  const STEP_TITLE: Record<ComposeStep, string> = {
+    message: pt ? 'Mensagem' : 'Message',
+    assistant: pt ? 'Assistente' : 'Assistant',
+    folder: pt ? 'Pasta' : 'Folder',
+  }
+
   return createPortal(
     <div
       role="dialog" aria-modal="true" aria-label={p.initial ? copy.edit : copy.compose}
-      onClick={e => { if (e.target === e.currentTarget && !saving) p.onClose() }}
+      {...dismiss}
       style={{
         position: 'fixed', inset: 0, zIndex: 420,
         background: 'var(--ag-scrim)', backdropFilter: 'blur(3px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: overlayPadding(isMobile, 20),
       }}
     >
       <div style={{
         background: 'var(--bg-surface)', border: '1px solid var(--border)',
-        borderRadius: 16, width: '100%', maxWidth: 560, maxHeight: '90vh',
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        ...(isMobile
+          ? { width: '100%', height: '100%', borderRadius: 0 }
+          : { borderRadius: 16, width: '100%', maxWidth: 640, maxHeight: '90vh' }),
       }}>
         <header style={{
           display: 'flex', alignItems: 'center', gap: 10,
@@ -194,90 +279,79 @@ export function StagedSessionCompose(p: StagedSessionComposeProps) {
           ><X size={16} /></button>
         </header>
 
-        {/*
-          * `display: 'flex', flexDirection: 'column'` — the same shape `NewSessionModal`'s own step
-          * content uses, and NOT `display: 'grid'` (what this div used to be). A grid item's
-          * `min-width` defaults to `auto`, so a flex-wrap row nested inside one (the harness cards,
-          * the folder picker's tab strip) is measured at its UNWRAPPED width and is allowed to
-          * overflow its track rather than shrink — "grid blowout". Measured at 390px: the harness
-          * row rendered 459px wide inside a 348px column, `Gemini CLI`'s right edge at x=430, cut
-          * off by the dialog's own `overflow: hidden` rather than wrapping onto a second line. A
-          * flex COLUMN container does not have this failure mode — its children are stretched to
-          * the container's own width on the cross axis by `align-items: stretch`, which the nested
-          * flex-wrap row then genuinely wraps inside.
-          */}
+        {/* THE STEP TRACK — the same visual language `NewSessionModal` uses for its own four
+            questions: a numbered dot per step, filled and checked once passed, the line between two
+            dots carrying the state of the passage. A step already visited is clickable (changing an
+            earlier answer is ordinary); a step ahead is not, because it may be gated by an answer
+            this one has not given yet (`canContinue`). */}
+        <nav aria-label={pt ? 'Etapas' : 'Steps'} style={{
+          display: 'flex', alignItems: 'flex-start',
+          padding: '14px 20px 12px', borderBottom: '1px solid var(--border)',
+        }}>
+          {STEP_ORDER.map((id, i) => {
+            const done = i < stepIndex
+            const here = id === step
+            return (
+              <div key={id} style={{ display: 'flex', alignItems: 'flex-start', flex: i === STEP_ORDER.length - 1 ? '0 0 auto' : 1, minWidth: 0 }}>
+                <button
+                  onClick={() => { if (done) setStep(id) }}
+                  disabled={!done && !here}
+                  aria-current={here ? 'step' : undefined}
+                  style={{
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5,
+                    border: 'none', background: 'transparent', padding: 0, flexShrink: 0,
+                    cursor: done ? 'pointer' : 'default', fontFamily: 'inherit',
+                  }}
+                >
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 24, height: 24, borderRadius: 999, fontSize: 11.5, fontWeight: 700,
+                    boxSizing: 'border-box',
+                    background: done ? 'var(--anthropic-orange)'
+                      : here ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+                    border: here ? '1.5px solid var(--anthropic-orange)' : '1.5px solid transparent',
+                    color: done ? '#fff' : here ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                    transition: 'background 0.18s, color 0.18s, border-color 0.18s',
+                  }}>
+                    {done ? <Check size={12} strokeWidth={3} /> : i + 1}
+                  </span>
+                  <span style={{
+                    fontSize: 10.5, whiteSpace: 'nowrap',
+                    fontWeight: here ? 700 : 500,
+                    color: here ? 'var(--text-primary)' : done ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+                  }}>
+                    {STEP_TITLE[id]}
+                  </span>
+                </button>
+                {i < STEP_ORDER.length - 1 && (
+                  <span aria-hidden style={{
+                    flex: 1, height: 2, margin: '11px 8px 0', borderRadius: 2, minWidth: 12,
+                    background: done ? 'var(--anthropic-orange)' : 'var(--border)',
+                    opacity: done ? 0.55 : 1,
+                    transition: 'background 0.18s',
+                  }} />
+                )}
+              </div>
+            )
+          })}
+        </nav>
+
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* STEP 1 — the message and everything attached to it. */}
+          {step === 'message' && (<>
           <div>
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 5 }}>
               {copy.prompt}
             </div>
             <textarea
-              value={prompt} onChange={e => setPrompt(e.target.value)} rows={4}
+              value={prompt} onChange={e => setPrompt(e.target.value)}
+              onPaste={onPastePrompt}
+              onDragOver={e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault() }}
+              onDrop={onDropPrompt}
+              rows={6}
               placeholder={copy.promptPlaceholder}
-              style={{ ...field(isMobile), resize: 'vertical', minHeight: 84, fontFamily: 'inherit' }}
+              style={{ ...field(isMobile), resize: 'vertical', minHeight: 140, fontFamily: 'inherit' }}
             />
-          </div>
-
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 5 }}>
-              {copy.harness}
-            </div>
-            <HarnessPicker lang={p.lang} harnesses={harnesses} value={harnessId} onChange={selectHarness} />
-            {!harnessId && (
-              <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>{copy.harnessAsk}</div>
-            )}
-          </div>
-
-          {/* ABSENT, not disabled, until the harness names some — a closed dropdown whose only
-              entry is "the assistant's default" is a control nobody can use, and a raw text field
-              here is the exact bug this dialog is being fixed for. */}
-          {questions.model && (
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 5 }}>
-                {copy.model}
-              </div>
-              <ModelSelect
-                lang={p.lang}
-                open={modelOpen}
-                onOpenChange={setModelOpen}
-                value={model}
-                onChange={setModel}
-                options={wizardHarness!.models}
-                unsetLabel={modelUnset}
-              />
-            </div>
-          )}
-
-          {questions.effort && (
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 5 }}>
-                {copy.effort}
-              </div>
-              <EffortPicker efforts={wizardHarness!.efforts} value={effort} onChange={setEffort} />
-              <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>
-                {pt ? `Sem escolha: ${effortUnset}.` : `Left unset: ${effortUnset}.`}
-              </div>
-            </div>
-          )}
-
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 5 }}>
-              {copy.cwd}
-            </div>
-            <ProjectPicker
-              lang={p.lang}
-              isMobile={isMobile}
-              projects={projects}
-              projectTotals={projectTotals}
-              query={query}
-              onQueryChange={setQuery}
-              searching={searching}
-              value={cwd}
-              onChange={setCwd}
-            />
-            {!cwd.trim() && (
-              <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>{copy.cwdAsk}</div>
-            )}
           </div>
 
           <div>
@@ -322,7 +396,7 @@ export function StagedSessionCompose(p: StagedSessionComposeProps) {
                 <Paperclip size={12} /> {copy.attach}
                 <input
                   type="file" multiple disabled={uploading} style={{ display: 'none' }}
-                  onChange={e => { void upload(e.target.files); e.target.value = '' }}
+                  onChange={e => { void pickNew(e.target.files); e.target.value = '' }}
                 />
               </label>
             </div>
@@ -330,9 +404,17 @@ export function StagedSessionCompose(p: StagedSessionComposeProps) {
               <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>{copy.noFiles}</div>
             ) : (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {attached.map(f => (
+                {attached.map((f, i) => (
                   <span key={f.id} style={{ ...pill(), display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                    {f.name}
+                    <button
+                      type="button" onClick={() => setLightboxIndex(i)}
+                      title={pt ? 'Abrir' : 'Open'}
+                      style={{
+                        background: 'none', border: 'none', padding: 0, color: 'inherit',
+                        font: 'inherit', cursor: 'pointer',
+                        maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}
+                    >{f.name}</button>
                     <button
                       type="button" onClick={() => setAttachmentIds(ids => ids.filter(id => id !== f.id))}
                       aria-label={pt ? 'Remover' : 'Remove'}
@@ -343,13 +425,87 @@ export function StagedSessionCompose(p: StagedSessionComposeProps) {
               </div>
             )}
           </div>
+          </>)}
 
+          {/* STEP 2 — who should do it. */}
+          {step === 'assistant' && (<>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 5 }}>
+              {copy.harness}
+            </div>
+            <HarnessPicker lang={p.lang} harnesses={harnesses} value={harnessId} onChange={selectHarness} />
+            {!harnessId && (
+              <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>{copy.harnessAsk}</div>
+            )}
+          </div>
+
+          {/* ABSENT, not disabled, until the harness names some — a closed dropdown whose only
+              entry is "the assistant's default" is a control nobody can use, and a raw text field
+              here is the exact bug this dialog is being fixed for. */}
+          {questions.model && (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 5 }}>
+                {copy.model}
+              </div>
+              <ModelSelect
+                lang={p.lang}
+                open={modelOpen}
+                onOpenChange={setModelOpen}
+                value={model}
+                onChange={setModel}
+                options={wizardHarness!.models}
+                unsetLabel={modelUnset}
+              />
+            </div>
+          )}
+
+          {questions.effort && (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 5 }}>
+                {copy.effort}
+              </div>
+              <EffortPicker efforts={wizardHarness!.efforts} value={effort} onChange={setEffort} />
+              <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>
+                {pt ? `Sem escolha: ${effortUnset}.` : `Left unset: ${effortUnset}.`}
+              </div>
+            </div>
+          )}
+          </>)}
+
+          {/* STEP 3 — where. */}
+          {step === 'folder' && (<>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 5 }}>
+              {copy.cwd}
+            </div>
+            <ProjectPicker
+              lang={p.lang}
+              isMobile={isMobile}
+              projects={projects}
+              projectTotals={projectTotals}
+              query={query}
+              onQueryChange={setQuery}
+              searching={searching}
+              value={cwd}
+              onChange={setCwd}
+            />
+            {!cwd.trim() && (
+              <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>{copy.cwdAsk}</div>
+            )}
+          </div>
           {error && <p role="alert" style={{ margin: 0, fontSize: 12, color: 'var(--accent-red)' }}>{error}</p>}
+          </>)}
+
+          {notice && (
+            <p role="status" style={{ margin: 0, fontSize: 12, lineHeight: 1.55, color: 'var(--anthropic-orange)' }}>
+              {notice}
+            </p>
+          )}
         </div>
 
         <div style={{
           display: 'flex', gap: 8, padding: '14px 20px', borderTop: '1px solid var(--border)',
-          alignItems: 'center', flexDirection: isMobile ? 'column-reverse' : 'row',
+          alignItems: 'center', flexDirection: isMobile ? 'column-reverse' : 'row', flexWrap: 'wrap',
         }}>
           {p.onDiscard && (
             <button
@@ -364,31 +520,73 @@ export function StagedSessionCompose(p: StagedSessionComposeProps) {
               }}
             ><Trash2 size={13} /> {copy.discard}</button>
           )}
+          {blockedBecause && (
+            <span role="status" style={{
+              fontSize: 11.5, color: 'var(--text-tertiary)',
+              ...(isMobile ? { width: '100%', textAlign: 'center' } : { marginLeft: p.onDiscard ? 8 : 0 }),
+            }}>{blockedBecause}</span>
+          )}
           <span style={{ flex: 1 }} />
           <button
-            type="button" onClick={p.onClose} disabled={saving}
+            type="button"
+            onClick={() => (stepIndex === 0 ? p.onClose() : setStep(STEP_ORDER[stepIndex - 1]!))}
+            disabled={saving}
             style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
               padding: isMobile ? '0 14px' : '8px 14px', minHeight: isMobile ? 44 : undefined,
               width: isMobile ? '100%' : undefined,
               borderRadius: 8, border: '1px solid var(--border)', background: 'transparent',
               color: 'var(--text-secondary)', fontSize: 13, fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer',
               fontFamily: 'inherit',
             }}
-          >{copy.cancel}</button>
-          <button
-            type="button" onClick={() => void save()} disabled={saving}
-            style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              padding: isMobile ? '0 16px' : '8px 16px', minHeight: isMobile ? 44 : undefined,
-              width: isMobile ? '100%' : undefined,
-              borderRadius: 8, border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange)',
-              color: '#1a1008', fontSize: 13, fontWeight: 700, cursor: saving ? 'not-allowed' : 'pointer',
-              fontFamily: 'inherit', opacity: saving ? 0.75 : 1,
-            }}
-          >{copy.save}</button>
+          >
+            {stepIndex > 0 && <ChevronLeft size={14} />}
+            {stepIndex === 0 ? copy.cancel : (pt ? 'Voltar' : 'Back')}
+          </button>
+          {step !== 'folder' ? (
+            <button
+              type="button"
+              onClick={() => { if (canContinue) setStep(STEP_ORDER[stepIndex + 1]!) }}
+              disabled={!canContinue}
+              style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                padding: isMobile ? '0 16px' : '8px 16px', minHeight: isMobile ? 44 : undefined,
+                width: isMobile ? '100%' : undefined,
+                borderRadius: 8, border: 'none',
+                background: canContinue ? 'var(--anthropic-orange)' : 'var(--bg-elevated)',
+                color: canContinue ? '#1a1008' : 'var(--text-tertiary)', fontSize: 13, fontWeight: 700,
+                cursor: canContinue ? 'pointer' : 'default', fontFamily: 'inherit',
+              }}
+            >
+              {pt ? 'Continuar' : 'Continue'}
+              <ChevronRight size={14} />
+            </button>
+          ) : (
+            <button
+              type="button" onClick={() => void save()} disabled={saving}
+              style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                padding: isMobile ? '0 16px' : '8px 16px', minHeight: isMobile ? 44 : undefined,
+                width: isMobile ? '100%' : undefined,
+                borderRadius: 8, border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange)',
+                color: '#1a1008', fontSize: 13, fontWeight: 700, cursor: saving ? 'not-allowed' : 'pointer',
+                fontFamily: 'inherit', opacity: saving ? 0.75 : 1,
+              }}
+            >{copy.save}</button>
+          )}
         </div>
       </div>
+
+      {lightboxIndex !== null && attached.length > 0 && (
+        <AttachmentLightbox
+          paths={attached.map(fileLightboxPath)}
+          index={Math.min(lightboxIndex, attached.length - 1)}
+          onIndexChange={setLightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+          lang={p.lang}
+          srcFor={path => fileUrl(fileIdFromLightboxPath(path))}
+        />
+      )}
 
       {confirmDiscard && p.onDiscard && (
         <div

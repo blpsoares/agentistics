@@ -169,6 +169,15 @@ export interface BoardCopy {
     launching: string
     preparing: string
     networkError: string
+    /** The read-only summary — the gear menu's own row label, and that dialog's own title prefix. */
+    view: string
+    /** The gear menu's destructive row — distinct wording from `discard` (which lives INSIDE the
+     *  compose dialog, closing it as a side effect); this one is reachable without opening the
+     *  dialog at all, and its `ConfirmModal` reuses `discardTitle`/`discardMessage`/`discard`. */
+    deleteRow: string
+    pasteTooLarge: string
+    attachFailed: string
+    attachNetworkError: string
   }
 }
 
@@ -297,6 +306,11 @@ const EN: BoardCopy = {
     launching: 'Starting…',
     preparing: 'Preparing attachments…',
     networkError: 'Network error talking to this machine.',
+    view: 'View staged session',
+    deleteRow: 'Delete staged session',
+    pasteTooLarge: 'The pasted text was too large to type into the session, so it was attached as a file.',
+    attachFailed: 'The attachment failed.',
+    attachNetworkError: 'Network error uploading the attachment.',
   },
 }
 
@@ -427,6 +441,11 @@ const PT: BoardCopy = {
     launching: 'Iniciando…',
     preparing: 'Preparando anexos…',
     networkError: 'Erro de rede ao falar com esta máquina.',
+    view: 'Ver sessão em espera',
+    deleteRow: 'Excluir sessão em espera',
+    pasteTooLarge: 'O texto colado era grande demais para digitar na sessão, então foi anexado como arquivo.',
+    attachFailed: 'O anexo falhou.',
+    attachNetworkError: 'Erro de rede ao enviar o anexo.',
   },
 }
 
