@@ -9,10 +9,10 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { Bot, CalendarClock, MessageSquare, Paperclip, Terminal } from 'lucide-react'
+import { Activity, Bot, CalendarClock, CircleCheck, ListChecks, MessageSquare, Paperclip, Terminal } from 'lucide-react'
 import { sortRows, type SortSpec, type TaskStatusDef } from '@agentistics/core'
 import {
-  PRIORITY, SESSION_STATE, cardStyle, claimLeft, fmtInt, fmtTokens, liveStatusOrder, microLabel,
+  PRIORITY, cardStyle, claimLeft, fmtInt, fmtTokens, liveStatusOrder, microLabel,
   numeric, pill, statusStyle, surface, type BoardStatus,
 } from './board'
 import type { LaneKey } from './boardPrefs'
@@ -148,13 +148,20 @@ function Card({ row, onOpen, live, nowMs, statuses }: {
   )
 }
 
+/** A session counts as "on" while it could still be doing something — the same set
+ *  `SessionPicker`/`TaskComposer`/`BlockedSubtaskResolve` already use for "this session is live". */
+const ACTIVE_SESSION_STATES = new Set(['working', 'waiting', 'waiting-approval'])
+
 /**
- * Who is ON this card right now, and who holds it.
+ * Who is ON this card right now, and how it is progressing — as COUNTS, never a pill per session.
  *
- * Two different facts and they are drawn differently on purpose: a CLAIM is a statement somebody
- * made ("this is mine until 14:20"), a live SESSION is something observed on the machine this
- * second. A card can carry either, both, or neither, and conflating them would let "an agent said
- * it would" read as "an agent is".
+ * A card used to grow a pill for every session the task had EVER had filed under it — a delivery
+ * with 42 historical sessions rendered 42 pills, most of them `finished`/`lost` from weeks ago. The
+ * only things worth a glance here are: is somebody claiming it, how many subtasks does it have, how
+ * many sessions are actually live right now, and how many subtasks are already done (which, by the
+ * server's own `done_needs_session` rule, can only be true once a session was linked to them). A
+ * CLAIM is still drawn as its own pill — it is a statement somebody made ("this is mine until
+ * 14:20"), one fact and one pill, unlike the live fleet which is a count.
  */
 function Agents({ row, live, nowMs }: {
   row: TaskListRow
@@ -163,9 +170,13 @@ function Agents({ row, live, nowMs }: {
 }) {
   const claim = row.task.claim
   const lease = claim ? claimLeft(claim.expiresAt, nowMs) : null
-  if (!claim && live.length === 0) return null
+  const counts = row.counts
+  const sessionsOn = live.filter(s => ACTIVE_SESSION_STATES.has(s.state)).length
+  const hasSubtasks = counts && counts.subtasks > 0
+  const hasDone = counts && counts.subtasksDone > 0
+  if (!claim && !hasSubtasks && sessionsOn === 0 && !hasDone) return null
   return (
-    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
       {claim && (
         <span
           style={pill(lease!.expired ? 'var(--text-tertiary)' : 'var(--accent-green)')}
@@ -176,20 +187,30 @@ function Agents({ row, live, nowMs }: {
           <Bot size={10} /> {claim.by}{lease!.expired ? ' · lapsed' : ''}
         </span>
       )}
-      {live.map(s => {
-        const st = SESSION_STATE[s.state]
-        return (
-          <span key={s.id} style={pill(st?.color)} title={`${s.title} · ${s.harness}`}>
-            {/* The dot is the fleet's own signal for "this one wants a person". */}
-            {s.state === 'waiting-approval' && (
-              <span style={{
-                width: 6, height: 6, borderRadius: 3, background: 'var(--anthropic-orange)',
-              }} />
-            )}
-            {st?.label ?? s.state}
-          </span>
-        )
-      })}
+      {hasSubtasks && (
+        <span
+          style={{ ...microLabel, display: 'inline-flex', alignItems: 'center', gap: 3 }}
+          title={`${counts.subtasks} subtask${counts.subtasks === 1 ? '' : 's'}`}
+        >
+          <ListChecks size={11} /> {counts.subtasks}
+        </span>
+      )}
+      {sessionsOn > 0 && (
+        <span
+          style={{ ...microLabel, display: 'inline-flex', alignItems: 'center', gap: 3, color: 'var(--anthropic-orange)' }}
+          title={`${sessionsOn} session${sessionsOn === 1 ? '' : 's'} live right now`}
+        >
+          <Activity size={11} /> {sessionsOn}
+        </span>
+      )}
+      {hasDone && (
+        <span
+          style={{ ...microLabel, display: 'inline-flex', alignItems: 'center', gap: 3, color: 'var(--accent-green)' }}
+          title={`${counts.subtasksDone} subtask${counts.subtasksDone === 1 ? '' : 's'} done, with a session linked`}
+        >
+          <CircleCheck size={11} /> {counts.subtasksDone}
+        </span>
+      )}
     </div>
   )
 }

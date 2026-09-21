@@ -5,8 +5,10 @@ import {
 } from 'lucide-react'
 import { studioLocationLabel, type PanelBarEntry, type PanelBarId } from '../../lib/panelBar'
 import type { PanelMenuIconId } from '../../lib/panelMenu'
+import { resolveBandDrag, resolveBandHeight } from '../../lib/shellBand'
 import { targetLabel } from '../../lib/terminalTarget'
 import { HarnessMark } from './HarnessMark'
+import { ResizeGrip } from '../ResizeGrip'
 
 /**
  * bandControls.tsx — ONE height, ONE padding, ONE icon/label size for every control drawn on the
@@ -32,6 +34,151 @@ import { HarnessMark } from './HarnessMark'
  * wrapper's height explicitly and giving its tabs `height: '100%'` is what makes
  * `getBoundingClientRect().height` agree across every control this file exports.
  */
+
+/**
+ * BandResizeHandle — THE ONE GRIP, ALWAYS THE BAND'S FIRST CHILD, ALWAYS ITS TOP EDGE.
+ *
+ * Owner report: "dependendo da aba q eu to o item de indicacao de reposicionamento muda de lugar,
+ * ele deveria estar SEMPRE no topo, na borda superior da barra inferior." Measured: `ShellBand`'s
+ * own desktop branch already rendered its `role="separator"` handle as the ROOT's first child, above
+ * the bar row — correct, and why Claude Code/Shell always looked right. `StudioBand` and
+ * `SimpleDockedBand` (Contents/Hardware) each rendered their OWN copy of the same markup, but as the
+ * bar row's SIBLING placed AFTER it, inside a `{open && (…)}` fragment — one row lower, level with
+ * the toolbar, because that is genuinely where it sat in the DOM. Three copies that happened to
+ * agree only for one of the three panels is not a rule, it is a coincidence; this component is the
+ * rule, and every caller now renders it before its own bar row (see `StudioBand`/`SimpleDockedBand`/
+ * `ShellBand`'s own docked branch).
+ *
+ * Presentation only — `useBandDrag` below is the one state machine that decides WHAT a drag on it
+ * means; this component never reads `columnHeight` or persists anything itself, so a caller cannot
+ * forget to gate it on `open`/`fullscreen` and get away with a HANDLE that draws but does nothing.
+ */
+export function BandResizeHandle({ label, onMouseDown, onTouchStart, onKeyDown }: {
+  /** The full sentence — this handle's accessible name, band-specific ("Resize the Studio", "Resize
+   *  Contents", `ShellBand`'s own `t.resize`). */
+  label: string
+  onMouseDown: (e: React.MouseEvent) => void
+  onTouchStart: (e: React.TouchEvent) => void
+  onKeyDown: (e: React.KeyboardEvent) => void
+}) {
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label={label}
+      tabIndex={0}
+      className="ag-resize-handle"
+      onMouseDown={onMouseDown}
+      onTouchStart={onTouchStart}
+      onKeyDown={onKeyDown}
+      // Hit area UNCHANGED from before this fix (6px tall, full band width — well over the 44px
+      // mobile floor already) — only the visual grip inside it is drawn by `ResizeGrip`, which adds
+      // no size of its own. Never narrower than this.
+      style={{ height: 6, cursor: 'ns-resize', background: 'transparent' }}
+    ><ResizeGrip orientation="horizontal" /></div>
+  )
+}
+
+/**
+ * useBandDrag — the ONE drag-resize state machine behind every `BandResizeHandle`: track the
+ * pointer, resolve the wanted height against `resolveBandDrag`, apply it, and escalate to the
+ * band's own "full screen" the instant the drag crosses `BAND_FULLSCREEN_OVERSHOOT_PX` past the
+ * column's ceiling. `StudioBand`, `SimpleDockedBand` and `ShellBand`'s own docked branch drove this
+ * by hand — three copies of the identical mouse/touch machinery (`shellBand.ts`'s own header already
+ * says the RESOLVER must be shared "or a second, hand-rolled copy … is exactly the drift this
+ * repository's own CLAUDE.md exists to prevent"; this closes the gesture that drives it too),
+ * differing only in what `apply`/`onFullscreen` do once resolved.
+ *
+ * Returns ready-made handlers to spread onto a `BandResizeHandle` — never a bag of refs a caller has
+ * to wire up three ways, which is what let the three copies drift from each other in the first
+ * place (`ShellBand` alone remembered the `!fullscreen` re-entry guard; it turns out to be
+ * unnecessary — the SAME PIXEL of nulling `dragRef` after the first escalation already stops every
+ * later `move` from doing anything at all, including a second `apply`/`onFullscreen` call).
+ */
+export function useBandDrag({
+  renderedHeight, columnHeight, apply, onFullscreen, enabled = true,
+}: {
+  /** What is ACTUALLY on screen right now — the drag's own start point (never the persisted
+   *  preference alone, which is stale while `full`; see each caller's own `renderedHeight`). */
+  renderedHeight: number
+  /** The centre column's own measured height — `0` reads as "never snap", exactly as
+   *  `resolveBandHeight` already treats it. */
+  columnHeight: number
+  /** Applies (and, per caller, persists) the resolved `{height, full}` — `StudioBand`'s/
+   *  `SimpleDockedBand`'s shared `applyHeight`, or `ShellBand`'s own `setBand`. */
+  apply: (next: { height: number; full: boolean }) => void
+  /**
+   * The escalation once the drag crosses the overshoot threshold — `StudioBand`'s/
+   * `SimpleDockedBand`'s `() => onFullscreenChange(true)`, or `ShellBand`'s own
+   * `() => onOpenFullscreen(target)`.
+   *
+   * ABSENT where the band has nowhere to escalate TO — `ShellBand`'s own `onOpenFullscreen` is
+   * optional, and a caller with no dedicated screen to navigate to must not have its drag SPENT the
+   * instant the column fills: `resolveBandDrag` keeps clamping at `full: true` and the band simply
+   * cannot grow further, exactly as before this hook existed.
+   */
+  onFullscreen?: () => void
+  /** `false` on a placement that never shows this handle at all (`ShellBand`'s own mobile sheet) —
+   *  the effect still runs every render (hooks run unconditionally), it just attaches no listeners,
+   *  mirroring `ShellBand`'s own former `if (isMobile) return` guard. */
+  enabled?: boolean
+}): {
+  onMouseDown: (e: React.MouseEvent) => void
+  onTouchStart: (e: React.TouchEvent) => void
+  onKeyDown: (e: React.KeyboardEvent) => void
+} {
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null)
+  // The drag's own start height must read whatever is on screen AT THE MOMENT THE GESTURE BEGINS,
+  // never a value captured once at mount — a ref kept current on every render is what lets
+  // `onMouseDown`/`onTouchStart` (plain callbacks, not effects) read it without becoming a dependency
+  // that would tear the drag's own `useEffect` down and rebuild it on every pixel of movement.
+  const startRef = useRef(renderedHeight)
+  startRef.current = renderedHeight
+  useEffect(() => {
+    if (!enabled) return
+    const move = (clientY: number) => {
+      const d = dragRef.current
+      if (!d) return
+      // Grows UPWARD: every band this hook serves is docked at the bottom, so dragging up must
+      // make it taller.
+      const resolved = resolveBandDrag(d.startH + (d.startY - clientY), columnHeight)
+      apply(resolved)
+      if (resolved.fullscreen && onFullscreen) {
+        onFullscreen()
+        // The gesture is SPENT — nulling here is what makes every later `move` in this same drag a
+        // no-op, so neither `apply` nor `onFullscreen` fires twice for one crossing.
+        dragRef.current = null
+      }
+    }
+    const onMouse = (e: MouseEvent) => move(e.clientY)
+    const onTouch = (e: TouchEvent) => { const p = e.touches[0]; if (p) move(p.clientY) }
+    const end = () => { dragRef.current = null }
+    window.addEventListener('mousemove', onMouse)
+    window.addEventListener('mouseup', end)
+    window.addEventListener('touchmove', onTouch)
+    window.addEventListener('touchend', end)
+    return () => {
+      window.removeEventListener('mousemove', onMouse)
+      window.removeEventListener('mouseup', end)
+      window.removeEventListener('touchmove', onTouch)
+      window.removeEventListener('touchend', end)
+    }
+  }, [enabled, columnHeight, apply, onFullscreen])
+  return {
+    onMouseDown: e => { e.preventDefault(); dragRef.current = { startY: e.clientY, startH: startRef.current } },
+    onTouchStart: e => {
+      const p = e.touches[0]
+      if (p) dragRef.current = { startY: p.clientY, startH: startRef.current }
+    },
+    // The keyboard step never escalates to full screen — same as every caller's own handler before
+    // this fix, and consistent with `resolveBandHeight` (no `fullscreen` field) rather than
+    // `resolveBandDrag` (which the pointer path alone uses).
+    onKeyDown: e => {
+      if (e.key === 'ArrowUp') { e.preventDefault(); apply(resolveBandHeight(startRef.current + 24, columnHeight)) }
+      if (e.key === 'ArrowDown') { e.preventDefault(); apply(resolveBandHeight(startRef.current - 24, columnHeight)) }
+    },
+  }
+}
 
 /** The one height every desktop control in this family shares. Mobile targets are always 44px
  *  (the house rule), never this figure — every component below takes `isMobile` and switches. */

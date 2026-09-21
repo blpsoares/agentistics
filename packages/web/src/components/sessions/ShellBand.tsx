@@ -46,7 +46,6 @@ import {
 } from 'lucide-react'
 import { useDocumentVisible } from '../../hooks/useDocumentVisible'
 import { useElementWidth } from '../../hooks/useElementWidth'
-import { ResizeGrip } from '../ResizeGrip'
 import { keyStripShown } from '../../lib/terminalSurface'
 import { dockedShowsTarget, usePanelSlots } from '../../lib/panelSlots'
 import {
@@ -61,9 +60,9 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { useTerminalStream } from '../../hooks/useTerminalStream'
 import { useTerminalWrite } from '../../hooks/useTerminalWrite'
 import {
-  BAND_MIN_PX, bandPanelFull, readBandPrefs, resolveBandDrag, resolveBandHeight, seedBandOpen, shellApiUrl,
-  shellErrorText, shellWatching, bandGeometry, shellWhere, withBandPanelFull, writeBandGeometry,
-  writeBandPrefs, type BandPrefs,
+  BAND_MIN_PX, bandPanelFull, readBandPrefs, resolveBandDrag, resolveBandHeight, seedBandOpen,
+  shellApiUrl, shellErrorText, shellWatching, bandGeometry, shellWhere, withBandPanelFull,
+  writeBandGeometry, writeBandPrefs, type BandPrefs,
 } from '../../lib/shellBand'
 import {
   INITIAL_SHELL_BAND, shellBandReducer, shellResolveWanted, type OpenShell,
@@ -76,8 +75,8 @@ import { bandSegmentEntries } from '../../lib/bandSegment'
 import { bandBarCompact, type PanelBarEntry, type PanelBarId } from '../../lib/panelBar'
 import { panelMenuEntries } from '../../lib/panelMenu'
 import {
-  BAND_CONTROL_H, BandSegment, BandSegmentTab, PanelBar, PanelFixedControls, panelMenuIconFor,
-  type BandOverflowEntry,
+  BAND_CONTROL_H, BandResizeHandle, BandSegment, BandSegmentTab, PanelBar, PanelFixedControls,
+  panelMenuIconFor, useBandDrag, type BandOverflowEntry,
 } from './bandControls'
 
 const SessionTerminal = lazy(() => import('../SessionTerminal'))
@@ -721,44 +720,20 @@ export function ShellBand({
    *  field is stale (see `BandPrefs.full`'s own doc comment), and starting the drag from it would
    *  have the band jump the instant the pointer moved at all. */
   const renderedHeight = bandPanelFull(prefs, target) && columnHeight > 0 ? columnHeight : prefs.height
-  const dragRef = useRef<{ startY: number; startH: number } | null>(null)
-  const onDragStart = (clientY: number) => { dragRef.current = { startY: clientY, startH: renderedHeight } }
-  useEffect(() => {
-    if (isMobile) return
-    const move = (clientY: number) => {
-      const d = dragRef.current
-      if (!d) return
-      // The band grows UPWARD: it is docked at the bottom, so dragging up must make it taller.
-      // `resolveBandDrag` — the ONE resolver `StudioBand` also drives its own resize through, see
-      // that function's own header in `shellBand.ts`. Past the overshoot this band has no overlay
-      // of its own to switch into (unlike the Studio's `position: fixed` full screen), so the SAME
-      // gesture escalates to this pane's DEDICATED screen instead, when the caller offers one — the
-      // identical "past here, nothing short of the whole thing will do" reading, aimed at whichever
-      // full screen this band actually has.
-      const resolved = resolveBandDrag(d.startH + (d.startY - clientY), columnHeight)
-      setBand({ height: resolved.height, full: resolved.full })
-      if (resolved.fullscreen && onOpenFullscreen) {
-        onOpenFullscreen(target)
-        // The gesture is SPENT — see `StudioBand`'s own identical comment: once past the threshold
-        // there is nothing left a further pixel of movement could mean, and this band is about to
-        // navigate away regardless.
-        dragRef.current = null
-      }
-    }
-    const onMouse = (e: MouseEvent) => move(e.clientY)
-    const onTouch = (e: TouchEvent) => { const p = e.touches[0]; if (p) move(p.clientY) }
-    const end = () => { dragRef.current = null }
-    window.addEventListener('mousemove', onMouse)
-    window.addEventListener('mouseup', end)
-    window.addEventListener('touchmove', onTouch)
-    window.addEventListener('touchend', end)
-    return () => {
-      window.removeEventListener('mousemove', onMouse)
-      window.removeEventListener('mouseup', end)
-      window.removeEventListener('touchmove', onTouch)
-      window.removeEventListener('touchend', end)
-    }
-  }, [isMobile, setBand, columnHeight, onOpenFullscreen, target])
+  // THE SAME SHARED `useBandDrag` (`bandControls.tsx`) `StudioBand`/`SimpleDockedBand` drive their
+  // own handle through. `enabled: !isMobile` reproduces this band's own former `if (isMobile) return`
+  // guard — the mobile sheet renders no handle at all (see the `dedicated`/mobile branches below), so
+  // there is nothing for the listeners to serve there. `onFullscreen` is OMITTED, never a bare
+  // callback, when this placement offers no dedicated screen to escalate to (`onOpenFullscreen`
+  // absent) — past the overshoot this band has no overlay of its own to switch into (unlike the
+  // Studio's `position: fixed` full screen), so the SAME gesture escalates to this pane's DEDICATED
+  // screen instead, when the caller offers one — the identical "past here, nothing short of the whole
+  // thing will do" reading, aimed at whichever full screen this band actually has.
+  const grip = useBandDrag({
+    renderedHeight, columnHeight, enabled: !isMobile,
+    apply: next => setBand({ height: next.height, full: next.full }),
+    ...(onOpenFullscreen ? { onFullscreen: () => onOpenFullscreen(target) } : {}),
+  })
 
   /**
    * THE ONE CONTROL THAT PICKS A TERMINAL. It replaced the header's `Conversa | Terminal` toggle —
@@ -1218,24 +1193,13 @@ export function ShellBand({
       display: 'flex', flexDirection: 'column',
       borderTop: '1px solid var(--border)', background: 'var(--bg-surface)',
     }}>
-      {/* The drag handle sits on the band's TOP edge — the VS Code geometry, where the panel is
-          always the bottom-most strip. It is `role="separator"` and takes the arrow keys, so the
-          band is resizable without a pointer. `ResizeGrip` (design item 6) marks it. */}
-      {prefs.open && (
-        <div
-          role="separator"
-          aria-orientation="horizontal"
-          aria-label={t.resize}
-          tabIndex={0}
-          className="ag-resize-handle"
-          onMouseDown={e => { e.preventDefault(); onDragStart(e.clientY) }}
-          onKeyDown={e => {
-            if (e.key === 'ArrowUp') { e.preventDefault(); setBand(resolveBandHeight(renderedHeight + 24, columnHeight)) }
-            if (e.key === 'ArrowDown') { e.preventDefault(); setBand(resolveBandHeight(renderedHeight - 24, columnHeight)) }
-          }}
-          style={{ height: 6, cursor: 'ns-resize', background: 'transparent' }}
-        ><ResizeGrip orientation="horizontal" /></div>
-      )}
+      {/* THE GRIP — ALWAYS THE ROOT'S FIRST CHILD, ABOVE THE TAB ROW — the VS Code geometry, where
+          the panel is always the bottom-most strip, and the ONE POSITION `StudioBand`/
+          `SimpleDockedBand` now match rather than rendering their own copy one row lower, level
+          with their bar (see `BandResizeHandle`'s own header in `bandControls.tsx`). It is
+          `role="separator"` and takes the arrow keys, so the band is resizable without a pointer;
+          `ResizeGrip` (design item 6) marks it. */}
+      {prefs.open && <BandResizeHandle label={t.resize} {...grip} />}
       {/* THE COMPACT BAR (design item 7): task control · panel segment (icon+label, collapsing to
           icons below ~1100px) · spacer · the FIXED trio (full screen, minimize, gear). Everything
           that used to widen this row on its own — the leading terminal icon, the uppercase target

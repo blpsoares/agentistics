@@ -24,7 +24,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import { getCentralMachine } from '../../lib/centralMachinePick'
-import { ResizeGrip } from '../ResizeGrip'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useElementWidth } from '../../hooks/useElementWidth'
 import { useViewportWidth } from '../../hooks/useViewportWidth'
@@ -50,7 +49,8 @@ import {
   writeBandPrefs,
 } from '../../lib/shellBand'
 import {
-  BAND_CONTROL_H, PanelBar, PanelFixedControls, panelMenuIconFor, type BandOverflowEntry,
+  BAND_CONTROL_H, BandResizeHandle, PanelBar, PanelFixedControls, panelMenuIconFor, useBandDrag,
+  type BandOverflowEntry,
 } from './bandControls'
 
 export type SessionView = 'chat' | 'terminal'
@@ -695,44 +695,14 @@ function StudioBand({
     writeBandPrefs(withBandPanelFull({ ...readBandPrefs(), height: next.height }, 'studio', next.full))
   }, [])
   const renderedHeight = heightPrefs.full && columnHeight > 0 ? columnHeight : heightPrefs.height
-  const dragRef = useRef<{ startY: number; startH: number } | null>(null)
-  const onDragStart = (clientY: number) => { dragRef.current = { startY: clientY, startH: renderedHeight } }
-  useEffect(() => {
-    const move = (clientY: number) => {
-      const d = dragRef.current
-      if (!d) return
-      // Grows UPWARD, exactly like `ShellBand`'s own handle: docked at the bottom, so dragging up
-      // must make it taller.
-      const resolved = resolveBandDrag(d.startH + (d.startY - clientY), columnHeight)
-      // `height`/`full` are ALWAYS applied — never skipped in favour of only flipping `fullscreen`
-      // — because they stay exactly what the ORDINARY snap would have answered (see
-      // `resolveStudioBandDrag`'s own header): this is what leaves a SANE, column-filling record
-      // behind for `renderedHeight` to fall back to the moment full screen is left, rather than
-      // whatever the drag's own raw, unbounded number happened to be.
-      applyHeight(resolved)
-      if (resolved.fullscreen && !fullscreen) {
-        onFullscreenChange(true)
-        // The gesture is SPENT: once past the threshold there is nothing left a further pixel of
-        // mouse movement could mean, and continuing to track it would just keep calling
-        // `applyHeight`/`onFullscreenChange` on every subsequent move for no visible effect (the
-        // band's own box no longer reads either value once `fullscreen` takes over the layout).
-        dragRef.current = null
-      }
-    }
-    const onMouse = (e: MouseEvent) => move(e.clientY)
-    const onTouch = (e: TouchEvent) => { const p = e.touches[0]; if (p) move(p.clientY) }
-    const end = () => { dragRef.current = null }
-    window.addEventListener('mousemove', onMouse)
-    window.addEventListener('mouseup', end)
-    window.addEventListener('touchmove', onTouch)
-    window.addEventListener('touchend', end)
-    return () => {
-      window.removeEventListener('mousemove', onMouse)
-      window.removeEventListener('mouseup', end)
-      window.removeEventListener('touchmove', onTouch)
-      window.removeEventListener('touchend', end)
-    }
-  }, [applyHeight, columnHeight, fullscreen, onFullscreenChange])
+  // THE DRAG — `bandControls.tsx`'s shared `useBandDrag`, the one state machine `StudioBand`,
+  // `SimpleDockedBand` and `ShellBand`'s own docked branch all drive their handle through now. See
+  // its own header for why `onFullscreen` needs no `!fullscreen` re-entry guard: nulling the drag's
+  // own ref on the first crossing already makes every later `move` in the same gesture a no-op.
+  const grip = useBandDrag({
+    renderedHeight, columnHeight, apply: applyHeight,
+    onFullscreen: () => onFullscreenChange(true),
+  })
 
   // COLLAPSING EXITS FULL SCREEN TOO — a band collapsed while fullscreen would otherwise leave the
   // flag standing with nothing on screen it still describes, so the NEXT expand would silently
@@ -773,6 +743,20 @@ function StudioBand({
       display: 'flex', flexDirection: 'column',
       borderTop: '1px solid var(--border)', background: 'var(--bg-surface)',
     }}>
+      {/* THE GRIP — ALWAYS THE ROOT'S FIRST CHILD, ABOVE THE TAB ROW (owner report: "o item de
+          reposicionamento muda de lugar, deveria estar SEMPRE no topo, na borda superior"). See
+          `BandResizeHandle`'s own header in `bandControls.tsx` for why this used to sit AFTER the bar
+          here (one row lower, level with the toolbar) while `ShellBand`'s own handle never did.
+          FREE-RESIZING, no low ceiling, and it SNAPS to fill the centre column within
+          `BAND_SNAP_THRESHOLD_PX` of its top (`resolveBandHeight`) — the height/full record is
+          SHARED with `ShellBand`, so a reader who learned the gesture there gets the identical feel
+          here. ABSENT in true full screen — there is nothing left to negotiate a HEIGHT for once the
+          band covers the whole viewport, and a handle that visually does nothing is worse than none:
+          the way back is the chevron below, the gear menu, or Esc, never this drag. ABSENT while
+          collapsed too — nothing is on screen for it to resize. */}
+      {open && !fullscreen && (
+        <BandResizeHandle label={pt ? 'Redimensionar o Studio' : 'Resize the Studio'} {...grip} />
+      )}
       {/* THE COMPACT BAR (design item 7) — the exact same shape `ShellBand`'s desktop bar takes:
           task control · panel segment (collapsing to icons below ~1100px) · spacer · ONE "⋯"
           overflow menu · the collapse chevron as a plain icon button. The leading "STUDIO" icon and
@@ -831,59 +815,33 @@ function StudioBand({
         >{open ? <ChevronDown size={14} /> : <ChevronUp size={14} />}</button>
       </div>
       {open && (
-        // A FRAGMENT, NOT A DIV — this is the freeze's root cause and the whole fix.
-        //
-        // The handle and the content box below used to sit inside an extra `<div style={{display:
-        // 'flex', flexDirection: 'column'}}>` wrapper, with no `flex`/`minHeight` of its own — so it
-        // took only the height its CONTENT asked for (default `flex: 0 1 auto`) instead of growing
-        // to fill whatever the ROOT above it (which DOES flex-stretch when `full`) actually had to
-        // give it. The content box's own `flex: '1 1 auto'` then had nothing to grow INTO — a
-        // flex-grow child cannot exceed a non-growing parent — so both handle and content collapsed
-        // to their minimum size and the root's remaining ~400px sat empty below them: the drag
-        // reached the top, the band's OWN box did grow (confirmed by measuring it directly), and
-        // everything inside it rendered into a sliver at the top, which is what read as "the band
-        // went empty… and never became full screen." `ShellBand` never had this bug — its own
-        // handle and content box are direct children of ITS root, with no such wrapper — and this
-        // fragment makes `StudioBand` match that shape exactly rather than inventing a second one.
-        <>
-          {/* THE DRAG HANDLE (design item 7) — free-resizing, no low ceiling, and it SNAPS to fill
-              the centre column within `BAND_SNAP_THRESHOLD_PX` of its top; see `resolveBandHeight`
-              and this component's own header for why the height/full record is SHARED with
-              `ShellBand`. Same geometry as that band's own handle: on the TOP edge, grows upward.
-              ABSENT in true full screen — there is nothing left to negotiate a HEIGHT for once the
-              band covers the whole viewport, and a handle that visually does nothing is worse than
-              none: the way back is the chevron above, the gear menu, or Esc, never this drag. */}
-          {!fullscreen && (
-            <div
-              role="separator"
-              aria-orientation="horizontal"
-              aria-label={pt ? 'Redimensionar o Studio' : 'Resize the Studio'}
-              tabIndex={0}
-              className="ag-resize-handle"
-              onMouseDown={e => { e.preventDefault(); onDragStart(e.clientY) }}
-              onTouchStart={e => { const p = e.touches[0]; if (p) onDragStart(p.clientY) }}
-              onKeyDown={e => {
-                if (e.key === 'ArrowUp') { e.preventDefault(); applyHeight(resolveBandHeight(renderedHeight + 24, columnHeight)) }
-                if (e.key === 'ArrowDown') { e.preventDefault(); applyHeight(resolveBandHeight(renderedHeight - 24, columnHeight)) }
-              }}
-              style={{ height: 6, cursor: 'ns-resize', background: 'transparent' }}
-            ><ResizeGrip orientation="horizontal" /></div>
-          )}
-          <div style={{
-            // NOT full/fullscreen: an explicit pixel height, because the ROOT above is auto-sized
-            // (content decides it) and has no box of its own to hand this one a share of. FULL OR
-            // FULLSCREEN: the ROOT is itself stretched (`flex: 1 1 auto` or `position: fixed;
-            // inset: 0` — see its own style, above), so this box in turn just takes `flex: 1` of
-            // THAT — the same two-step every other flexed box in this file uses. This only works
-            // because it is now a DIRECT child of the root — see the fragment above.
-            ...(heightPrefs.full || fullscreen
-              ? { flex: '1 1 auto', minHeight: 0 }
-              : { height: Math.max(BAND_MIN_PX, renderedHeight), flexShrink: 0 }),
-            display: 'flex', flexDirection: 'column', padding: '0 12px 10px',
-          }}>
-            <div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} />
-          </div>
-        </>
+        // A DIRECT CHILD OF THE ROOT — this is the freeze's root cause and the whole fix, kept exactly
+        // as it was won. This box used to sit inside an extra `<div style={{display: 'flex',
+        // flexDirection: 'column'}}>` wrapper (together with the handle, back when the two shared a
+        // fragment), with no `flex`/`minHeight` of its own — so it took only the height its CONTENT
+        // asked for (default `flex: 0 1 auto`) instead of growing to fill whatever the ROOT above it
+        // (which DOES flex-stretch when `full`) actually had to give it. The content box's own
+        // `flex: '1 1 auto'` then had nothing to grow INTO — a flex-grow child cannot exceed a
+        // non-growing parent — so it collapsed to its minimum size and the root's remaining ~400px sat
+        // empty below it: the drag reached the top, the band's OWN box did grow (confirmed by
+        // measuring it directly), and everything inside it rendered into a sliver at the top, which is
+        // what read as "the band went empty… and never became full screen." `ShellBand` never had this
+        // bug — its own content box is a direct child of ITS root, with no such wrapper — and this box
+        // being a direct sibling of the handle and the bar row (never wrapped with either of them)
+        // makes `StudioBand` match that shape exactly rather than inventing a second one.
+        <div style={{
+          // NOT full/fullscreen: an explicit pixel height, because the ROOT above is auto-sized
+          // (content decides it) and has no box of its own to hand this one a share of. FULL OR
+          // FULLSCREEN: the ROOT is itself stretched (`flex: 1 1 auto` or `position: fixed;
+          // inset: 0` — see its own style, above), so this box in turn just takes `flex: 1` of
+          // THAT — the same two-step every other flexed box in this file uses.
+          ...(heightPrefs.full || fullscreen
+            ? { flex: '1 1 auto', minHeight: 0 }
+            : { height: Math.max(BAND_MIN_PX, renderedHeight), flexShrink: 0 }),
+          display: 'flex', flexDirection: 'column', padding: '0 12px 10px',
+        }}>
+          <div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} />
+        </div>
       )}
     </div>
   )
@@ -945,33 +903,12 @@ function SimpleDockedBand({
     writeBandPrefs(withBandPanelFull({ ...readBandPrefs(), height: next.height }, panel, next.full))
   }, [panel])
   const renderedHeight = heightPrefs.full && columnHeight > 0 ? columnHeight : heightPrefs.height
-  const dragRef = useRef<{ startY: number; startH: number } | null>(null)
-  const onDragStart = (clientY: number) => { dragRef.current = { startY: clientY, startH: renderedHeight } }
-  useEffect(() => {
-    const move = (clientY: number) => {
-      const d = dragRef.current
-      if (!d) return
-      const resolved = resolveBandDrag(d.startH + (d.startY - clientY), columnHeight)
-      applyHeight(resolved)
-      if (resolved.fullscreen && !fullscreen) {
-        onFullscreenChange(true)
-        dragRef.current = null
-      }
-    }
-    const onMouse = (e: MouseEvent) => move(e.clientY)
-    const onTouch = (e: TouchEvent) => { const p = e.touches[0]; if (p) move(p.clientY) }
-    const end = () => { dragRef.current = null }
-    window.addEventListener('mousemove', onMouse)
-    window.addEventListener('mouseup', end)
-    window.addEventListener('touchmove', onTouch)
-    window.addEventListener('touchend', end)
-    return () => {
-      window.removeEventListener('mousemove', onMouse)
-      window.removeEventListener('mouseup', end)
-      window.removeEventListener('touchmove', onTouch)
-      window.removeEventListener('touchend', end)
-    }
-  }, [applyHeight, columnHeight, fullscreen, onFullscreenChange])
+  // THE DRAG — the SAME shared `useBandDrag` `StudioBand` drives its own handle through; see that
+  // component's own comment for why `onFullscreen` needs no `!fullscreen` re-entry guard.
+  const grip = useBandDrag({
+    renderedHeight, columnHeight, apply: applyHeight,
+    onFullscreen: () => onFullscreenChange(true),
+  })
   useEffect(() => {
     if (!open && fullscreen) onFullscreenChange(false)
   }, [open, fullscreen, onFullscreenChange])
@@ -997,6 +934,13 @@ function SimpleDockedBand({
       display: 'flex', flexDirection: 'column',
       borderTop: '1px solid var(--border)', background: 'var(--bg-surface)',
     }}>
+      {/* THE GRIP — ALWAYS THE ROOT'S FIRST CHILD, ABOVE THE TAB ROW — see `StudioBand`'s own
+          identical comment, and `BandResizeHandle`'s header in `bandControls.tsx`, for why this used
+          to sit AFTER the bar here instead (Contents/Hardware read one row lower than Claude
+          Code/Shell, the bug this fix closes). */}
+      {open && !fullscreen && (
+        <BandResizeHandle label={pt ? `Redimensionar ${panelName}` : `Resize ${panelName}`} {...grip} />
+      )}
       <div
         ref={barWidthRef}
         style={{
@@ -1022,34 +966,16 @@ function SimpleDockedBand({
         />
       </div>
       {open && (
-        <>
-          {!fullscreen && (
-            <div
-              role="separator"
-              aria-orientation="horizontal"
-              aria-label={pt ? `Redimensionar ${panelName}` : `Resize ${panelName}`}
-              tabIndex={0}
-              className="ag-resize-handle"
-              onMouseDown={e => { e.preventDefault(); onDragStart(e.clientY) }}
-              onTouchStart={e => { const p = e.touches[0]; if (p) onDragStart(p.clientY) }}
-              onKeyDown={e => {
-                if (e.key === 'ArrowUp') { e.preventDefault(); applyHeight(resolveBandHeight(renderedHeight + 24, columnHeight)) }
-                if (e.key === 'ArrowDown') { e.preventDefault(); applyHeight(resolveBandHeight(renderedHeight - 24, columnHeight)) }
-              }}
-              style={{ height: 6, cursor: 'ns-resize', background: 'transparent' }}
-            ><ResizeGrip orientation="horizontal" /></div>
-          )}
-          <div style={{
-            ...(heightPrefs.full || fullscreen
-              ? { flex: '1 1 auto', minHeight: 0 }
-              : { height: Math.max(BAND_MIN_PX, renderedHeight), flexShrink: 0 }),
-            display: 'flex', flexDirection: 'column', padding: '0 12px 10px', overflow: 'hidden',
-          }}>
-            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'auto' }}>
-              {children}
-            </div>
+        <div style={{
+          ...(heightPrefs.full || fullscreen
+            ? { flex: '1 1 auto', minHeight: 0 }
+            : { height: Math.max(BAND_MIN_PX, renderedHeight), flexShrink: 0 }),
+          display: 'flex', flexDirection: 'column', padding: '0 12px 10px', overflow: 'hidden',
+        }}>
+          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'auto' }}>
+            {children}
           </div>
-        </>
+        </div>
       )}
     </div>
   )
