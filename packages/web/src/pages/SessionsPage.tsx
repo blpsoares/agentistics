@@ -23,15 +23,18 @@ import {
 } from 'react'
 import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import {
-  ChevronLeft, Cpu, FileText, FolderTree, MessagesSquare, Plus, TerminalSquare,
+  ChevronLeft, FileText, FolderTree, MessagesSquare, Plus, TerminalSquare,
   X as XIcon,
 } from 'lucide-react'
 import { StudioHost, type StudioHostProps } from '../components/sessions/StudioHost'
 import { ResizeGrip } from '../components/ResizeGrip'
 import {
-  isPanelShown, mountPanel, resolveForGates, resolveForViewport, rightSlotShowing, usePanelSlots,
-  type PanelGates,
+  isPanelShown, isTabPanelId, mountPanel, railPanels, resolveForGates,
+  resolveForViewport, usePanelSlots, type PanelGates, type PanelId, type TabPanelId,
 } from '../lib/panelSlots'
+import { panelIconFor } from '../lib/panelIcons'
+import { panelTitle } from '../lib/panelMeta'
+import { PanelRail } from '../components/sessions/PanelRail'
 import { MENTION_ADDED_TOAST } from '../lib/mentionInsert'
 import type { HarnessId, SessionPreset } from '@agentistics/core'
 import { getCentralMachine } from '../lib/centralMachinePick'
@@ -57,14 +60,14 @@ import { UnsavedChangesGuard } from '../components/sessions/UnsavedChangesGuard'
 import { PanelFixedControls, panelMenuIconFor } from '../components/sessions/bandControls'
 import { fullscreenModeFor, panelMenuEntries } from '../lib/panelMenu'
 import {
-  artifactsPanelMax, ASIDE_ANIM_MS, ASIDE_EASE, edgeHint, PANEL_MIN_WIDTH, panelWidth,
+  artifactsPanelMax, ASIDE_ANIM_MS, ASIDE_EASE, currentAction, edgeHint, PANEL_MIN_WIDTH, panelWidth,
   resolveArtifactLayout, type ArtifactLayout,
 } from '../lib/artifactLayout'
 import {
-  closeArtifacts, openArtifacts, setArtifactCount, useArtifacts,
+  openArtifacts, setArtifactCount, setArtifactLive, usePanelFocusRequest,
 } from '../lib/artifactsStore'
 import { studioMenuRow } from '../lib/studioMenuRow'
-import { restingLeftEdge, setRightAsideEdge } from '../lib/rightAsideEdge'
+import { RAIL_WIDTH_PX, restingLeftEdge, setRightAsideEdge } from '../lib/rightAsideEdge'
 import type { SessionDrilldownProps } from '../components/SessionDrilldown'
 import type { Artifact } from '../lib/sessionArtifacts'
 import { liveEvents, type LiveTurn } from '../lib/artifactTabs'
@@ -607,7 +610,6 @@ export default function SessionsPage() {
     window.addEventListener('mouseup', up)
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
   }, [artWidth])
-  const art = useArtifacts()
   /**
    * WHERE THE STUDIO, CLI AND SHELL SIT — `lib/panelSlots.ts`, design §1. `resolveForViewport` is
    * the phone reading: a stored `bottom: 'studio'` becomes the fullscreen right sheet without
@@ -622,17 +624,21 @@ export default function SessionsPage() {
    * resolution rewrites storage; turning the gate back on restores the layout exactly as it was left.
    */
   const {
-    layout: rawSlotLayout, openPanel: openSlotPanel, closePanel: closeSlotPanel, setRightOpen,
+    layout: rawSlotLayout, openPanel: openSlotPanel, closePanel: closeSlotPanel,
+    movePanel: moveSlotPanel, setRightOpen,
   } = usePanelSlots()
+  const panelFocus = usePanelFocusRequest()
   const panelGates: PanelGates = { editorEnabled, shellEnabled, relayed }
   const slotLayout = resolveForGates(resolveForViewport(rawSlotLayout, isMobile), panelGates)
   const rightIsStudio = slotLayout.right === 'studio'
   const rightIsCli = slotLayout.right === 'cli'
   const rightIsShell = slotLayout.right === 'shell'
   const rightIsHardware = slotLayout.right === 'hardware'
-  const rightIsContents = rightSlotShowing(slotLayout, art.open) === 'contents'
+  /** Is the right slot showing one of the ten former Contents tabs right now? Replaces the old
+   *  `rightIsContents` — every one of the ten now carries its own occupancy directly. */
+  const rightIsTab = slotLayout.right !== null && isTabPanelId(slotLayout.right)
   const bottomIsStudio = slotLayout.bottom === 'studio'
-  const bottomIsContents = slotLayout.bottom === 'contents'
+  const bottomIsTab = slotLayout.bottom !== null && isTabPanelId(slotLayout.bottom)
   const bottomIsHardware = slotLayout.bottom === 'hardware'
   const [rightSlotEl, setRightSlotEl] = useState<HTMLDivElement | null>(null)
   const [bottomStudioEl, setBottomStudioEl] = useState<HTMLDivElement | null>(null)
@@ -668,20 +674,23 @@ export default function SessionsPage() {
   }, [rightIsStudio, bottomIsStudio])
 
   /**
-   * TRUE FULL SCREEN for Contents/Hardware (owner, 2026-09-19 — same request as the Studio's own:
-   * "botões que ficaram fixos... tela cheia"). Neither panel has a dedicated screen of its own to
-   * navigate to (`fullscreenModeFor` — `'overlay'`), so this is the exact same in-place viewport
-   * overlay the Studio already uses, applied to whichever slot each of them currently occupies.
-   * Reset the moment the panel is shown nowhere, for the same reason `studioFullscreen` resets.
+   * TRUE FULL SCREEN for any of the ten former Contents tabs, or Hardware (owner, 2026-09-19 — same
+   * request as the Studio's own: "botões que ficaram fixos... tela cheia"). None of these panels has
+   * a dedicated screen of its own to navigate to (`fullscreenModeFor` — `'overlay'`), so this is the
+   * exact same in-place viewport overlay the Studio already uses.
+   *
+   * ONE SHARED FLAG, exactly like `studioFullscreen` ("OFFERED IN EITHER SLOT... The SAME flag
+   * drives both") — widened here from "one flag per fixed panel type" to "one flag for the whole
+   * eleven-panel domain", since only one of them is ever meaningfully full screen at a time from a
+   * reader's perspective. Reset the moment NEITHER slot shows one of them, for the same reason
+   * `studioFullscreen` resets.
    */
-  const [contentsFullscreen, setContentsFullscreen] = useState(false)
+  const [tabFullscreen, setTabFullscreen] = useState(false)
   useEffect(() => {
-    if (!rightIsContents && !bottomIsContents) setContentsFullscreen(false)
-  }, [rightIsContents, bottomIsContents])
-  const [hardwareFullscreen, setHardwareFullscreen] = useState(false)
-  useEffect(() => {
-    if (!rightIsHardware && !bottomIsHardware) setHardwareFullscreen(false)
-  }, [rightIsHardware, bottomIsHardware])
+    const rightIsTabOrHardware = rightIsTab || rightIsHardware
+    const bottomIsTabOrHardware = bottomIsTab || bottomIsHardware
+    if (!rightIsTabOrHardware && !bottomIsTabOrHardware) setTabFullscreen(false)
+  }, [rightIsTab, rightIsHardware, bottomIsTab, bottomIsHardware])
   const onArtifacts = useCallback((a: { artifacts: Artifact[]; loading: boolean; unavailable?: string; older?: string; unlisted: boolean; turns: readonly LiveTurn[] }) => {
     setArtifacts(a.artifacts)
     setArtifactTurns(a.turns)
@@ -689,8 +698,31 @@ export default function SessionsPage() {
     setArtifactsUnavailable(a.unavailable)
     setArtifactsOlder(a.older)
     setArtifactsUnlisted(a.unlisted)
-    if (selected) setArtifactCount(selected.id, a.artifacts.length)
+    if (selected) {
+      setArtifactCount(selected.id, a.artifacts.length)
+      // WHAT THE SESSION IS DOING NOW, for the metrics card's Live reference — drawn from `App.tsx`,
+      // outside this page, so it cannot read these turns. Published from HERE because this callback
+      // carries the turns of the conversation that is actually mounted: reading `artifactTurns`
+      // state in an effect would publish the PREVIOUS session's turns under the new one's id for
+      // the first poll after a switch.
+      setArtifactLive(selected.id, currentAction(liveEvents(a.turns)))
+    }
   }, [selected])
+  /**
+   * NOBODY IS READING THE CONVERSATION, SO NOBODY CAN SAY WHAT IT IS DOING.
+   *
+   * The Terminal view unmounts the chat that publishes the live fact, and leaving the page unmounts
+   * this one; either would leave the last "running bun test" in the store for as long as the page is
+   * away. A stale claim of activity on the metrics card is worse than none, so the fact is cleared
+   * whenever its reader goes — and a chat that mounts afterwards publishes again on its own first
+   * report (child effects run after this cleanup).
+   */
+  const selectedId = selected?.id
+  useEffect(() => {
+    if (selectedId === undefined) return
+    if (sessionView !== 'chat') setArtifactLive(selectedId, null)
+    return () => setArtifactLive(selectedId, null)
+  }, [selectedId, sessionView])
 
   /**
    * NOTHING OPENS THIS PANEL BUT A PERSON.
@@ -738,7 +770,7 @@ export default function SessionsPage() {
     // (`panelMenu.ts`'s own `panelMinimizeAction`), which already reads as "not occupying the slot"
     // through the flags above, so `slotLayout.rightOpen` only ever narrows the ONE case those flags
     // cannot already see: the Studio still assigned to the slot, parked rather than shown.
-    open: (art.open || rightIsStudio || rightIsCli || rightIsShell || rightIsHardware)
+    open: slotLayout.right !== null
       && (!rightIsStudio || slotLayout.rightOpen) && selected !== undefined
       && !dedicatedRightRedundant,
     width: typeof window === 'undefined' ? 1440 : window.innerWidth,
@@ -818,7 +850,9 @@ export default function SessionsPage() {
    * saying; this only draws it.
    */
   const hint = edgeHint({
-    open: art.open,
+    // Is ONE of the ten former Contents tabs already visible somewhere — the reader can already
+    // see what is happening, so the hint has nothing left to announce.
+    open: rightIsTab || bottomIsTab,
     events: liveEvents(artifactTurns),
     isMobile,
   })
@@ -878,9 +912,22 @@ export default function SessionsPage() {
     </button>
   )
 
-  const artifactsPane = selected === undefined ? null : (
+  /**
+   * ONE OF THE TEN FORMER CONTENTS TABS, AS ITS OWN PANEL — the function every mount site (the
+   * right slot, and the bottom band when a different one of the ten is docked there) calls, bound
+   * to the one tab id it is showing (`ArtifactsAsideProps.activeTab`). Two mounts can exist at
+   * once, each fetching only for its own tab — see `ArtifactsAside`'s own module header.
+   *
+   * `key={selected.id}` alone, deliberately NOT keyed on `id` too: switching WHICH tab is active in
+   * one slot reuses the same mounted instance (matching the historical behaviour, before each tab
+   * was its own panel, where switching the internal `tab` state never remounted anything); switching
+   * SESSION does reset it, since every per-session cache/effect in `ArtifactsAside` is keyed there.
+   */
+  const tabPane = (id: TabPanelId): ReactNode => selected === undefined ? null : (
     <ArtifactsAside
+      key={selected.id}
       sessionId={selected.id}
+      activeTab={id}
       // The MCP tab's per-directory scopes are resolved against this; with no directory they are
       // absent from the picker rather than silently widened to "this machine".
       {...(selected.cwd ? { cwd: selected.cwd } : {})}
@@ -896,7 +943,10 @@ export default function SessionsPage() {
       unlistedWrites={artifactsUnlisted}
       {...(outsideNote ? { outsideNote } : {})}
       turns={artifactTurns}
-      tabRequest={art.tabRequest}
+      // A REQUEST for a DIFFERENT tab than `id` is not this mount's concern — see
+      // `artifactsStore.ts`'s own `PanelFocusRequest` header.
+      focusRequest={panelFocus && panelFocus.tab === id
+        ? { ...(panelFocus.ref ? { ref: panelFocus.ref } : {}), at: panelFocus.at } : null}
       // The session itself, for the TASKS tab: what it is filed under, and the composer that files
       // it somewhere new without leaving the session you are sitting in.
       session={{
@@ -911,9 +961,13 @@ export default function SessionsPage() {
       // See `sessionMetrics`: present exactly when the store has a record, which is the same fact
       // that decides whether the metrics card offers its link.
       {...(sessionMetrics ? { metrics: sessionMetrics } : {})}
-      onClose={closeArtifacts}
+      onClose={() => closeSlotPanel(id)}
     />
   )
+  const rightTabPane = slotLayout.right !== null && isTabPanelId(slotLayout.right)
+    ? tabPane(slotLayout.right) : null
+  const bottomTabPane = slotLayout.bottom !== null && isTabPanelId(slotLayout.bottom)
+    ? tabPane(slotLayout.bottom) : null
 
   /**
    * THE SAME `HardwarePanel` ELEMENT, reused for the BOTTOM band too (owner, 2026-09-19: "o hardware
@@ -937,8 +991,19 @@ export default function SessionsPage() {
    * was (`hardwareOffered`).
    */
   const hardwareOffered = !isCentral
-  const rightActivePanel: 'studio' | 'cli' | 'shell' | 'hardware' | null = rightIsStudio
-    ? 'studio' : rightIsCli ? 'cli' : rightIsShell ? 'shell' : rightIsHardware ? 'hardware' : null
+  /**
+   * THE RAIL'S OWN LIST (spec §2) — `panelSlots.railPanels` already sorts by the stored order;
+   * this narrows it by the same server/per-session gates `panelBarEntries` applies to the bottom
+   * band's tabs, so a panel this machine cannot actually serve never gets a clickable icon.
+   */
+  const gatedRailPanels = railPanels(slotLayout).filter(id => {
+    if (id === 'studio') return editorEnabled === true
+    if (id === 'cli') return !relayed
+    if (id === 'shell') return shellEnabled === true && !relayed
+    if (id === 'hardware') return hardwareOffered
+    return true
+  })
+  const rightActivePanel: PanelId | null = slotLayout.right
   // The 44px mobile touch target is PROJECTED by the `.ag-tap-icon` class already on both buttons
   // below (`index.css`'s invisible-hitbox rule), never painted here — a literal `width/height:
   // isMobile ? 44` on an icon button is the exact shape `touchTarget.lint.test.ts` refuses: the
@@ -949,43 +1014,50 @@ export default function SessionsPage() {
     border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
     color: 'var(--text-secondary)', cursor: 'pointer',
   }
+  /**
+   * THE MOBILE PANEL MENU (spec §8: "No rail at 390px. The fourteen panels stay reachable through
+   * the existing mobile panel menu"). Before the rail this offered three entries — Conteúdo/Studio/
+   * Hardware — because `contents` covered the other ten under one button with its own internal
+   * strip. That strip is gone everywhere now, so this switcher is what replaces it on a viewport
+   * with no rail to replace it WITH: every panel but `cli`/`shell` (which keep the session panel's
+   * own self-contained toggle, untouched by this pass) gets its own entry here, built from the same
+   * shared `panelMeta.ts`/`panelIcons.tsx` tables the rail itself reads.
+   */
   const rightSwitcherMobile = (isMobile && selected) ? (
     <div role="tablist" aria-label={pt ? 'O que mostrar' : 'What to show'} style={{
       display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, flexWrap: 'wrap',
       padding: '4px 6px', borderBottom: '1px solid var(--border)',
     }}>
-      {(
-        [
-          { id: 'contents' as const, label: pt ? 'Conteúdo' : 'Contents', icon: <FileText key="c" size={12} />, on: rightSlotShowing(slotLayout, art.open) === 'contents', shown: true },
-          { id: 'studio' as const, label: 'Studio', icon: <FolderTree key="s" size={12} />, on: rightIsStudio, shown: editorEnabled === true },
-          { id: 'hardware' as const, label: pt ? 'Hardware' : 'Hardware', icon: <Cpu key="hw" size={12} />, on: rightIsHardware, shown: hardwareOffered },
-        ]
-      ).filter(entry => entry.shown).map(({ id, label, icon, on }) => (
-        <button
-          key={id}
-          role="tab"
-          aria-selected={on}
-          onClick={() => {
-            // `openArtifacts()` itself displaces a right-slot panel, asking first when it is the
-            // Studio and dirty (`lib/artifactsStore.ts`) — a separate `closeSlotPanel` here would
-            // ask a second, redundant question and could open Contents before the first is answered.
-            if (id === 'contents') openArtifacts()
-            else openSlotPanel(id, 'right')
-          }}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 5,
-            minHeight: 44, padding: '0 14px',
-            borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-            fontSize: 11.5, fontWeight: on ? 700 : 500,
-            background: on ? 'var(--bg-elevated)' : 'transparent',
-            color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
-          }}
-        >{icon}{label}</button>
-      ))}
+      {([
+        'live', 'gallery', 'skills', 'agents', 'forks', 'workflows', 'mcps', 'prs', 'tasks',
+        'metrics', 'studio', 'hardware',
+      ] as PanelId[])
+        .filter(id => id !== 'studio' || editorEnabled === true)
+        .filter(id => id !== 'hardware' || hardwareOffered)
+        .filter(id => id !== 'metrics' || sessionMetrics !== undefined)
+        .map(id => {
+          const on = slotLayout.right === id
+          return (
+            <button
+              key={id}
+              role="tab"
+              aria-selected={on}
+              onClick={() => openSlotPanel(id)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 5,
+                minHeight: 44, padding: '0 14px',
+                borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                fontSize: 11.5, fontWeight: on ? 700 : 500,
+                background: on ? 'var(--bg-elevated)' : 'transparent',
+                color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
+              }}
+            >{panelIconFor(id, 12, selected.harness)}{panelTitle(id, pt)}</button>
+          )
+        })}
       <span style={{ flex: 1 }} />
-      {/* CLOSE — a phone has no fixed header to close this from any other way (item 2's merged
-          tab group is desktop-only), so this stays the one door out here. Closing the Studio asks
-          first when dirty, through the very `hidePanel` `closeSlotPanel` already calls. */}
+      {/* CLOSE — a phone has no fixed header to close this from any other way, so this stays the
+          one door out here. Closing the Studio asks first when dirty, through the very `hidePanel`
+          `closeSlotPanel` already calls. */}
       {rightActivePanel && (
         <button className="ag-tap-icon"
           onClick={() => closeSlotPanel(rightActivePanel)}
@@ -1021,18 +1093,17 @@ export default function SessionsPage() {
    * way — released from view, restored with one click on the panel bar's own tab.
    */
   const rightSlotBar = (
-    panel: 'contents' | 'hardware' | 'cli' | 'shell', panelName: string, onMinimize: () => void,
+    panel: Exclude<PanelId, 'studio'>, panelName: string, onMinimize: () => void,
   ) => {
     if (isMobile || !selected) return null
     const gearEntries = panelMenuEntries({
-      panel, slot: 'right', lang: pt ? 'pt' : 'en', panelName,
+      panel, placement: 'rail', lang: pt ? 'pt' : 'en', panelName,
     }).filter(e => e.id === 'move-bottom').map(e => ({
       id: e.id, label: e.label, icon: panelMenuIconFor(e.iconId),
-      // `contents` FIRST calls `closeArtifacts()` when it is the one moving — it is tracked on the
-      // right through the legacy `artifactsStore` flag alone (`panelSlots.ts`'s own header), which
-      // `openSlotPanel` never touches, so skipping this would leave it lit as BOTH the right slot's
-      // occupant (via that flag) and the bottom's (via `panelSlots`) at once.
-      onSelect: () => { if (panel === 'contents') closeArtifacts(); openSlotPanel(panel, 'bottom') },
+      // A genuine placement change — `movePanel`, not `openPanel` — or a panel whose placement was
+      // already `'rail'` (every one of these got here by being the rail's own active occupant)
+      // would simply reopen on the rail it is already leaving.
+      onSelect: () => moveSlotPanel(panel, 'bottom'),
     }))
     const fullscreen = fullscreenModeFor(panel) === 'navigate'
       ? {
@@ -1040,8 +1111,8 @@ export default function SessionsPage() {
         onToggle: () => navigate(dedicatedTerminalPath(selected.id, panel === 'cli' ? 'assistant' : 'shell')),
       }
       : {
-        active: panel === 'contents' ? contentsFullscreen : hardwareFullscreen,
-        onToggle: () => (panel === 'contents' ? setContentsFullscreen : setHardwareFullscreen)(f => !f),
+        active: tabFullscreen,
+        onToggle: () => setTabFullscreen(f => !f),
       }
     return (
       <div style={{
@@ -1064,20 +1135,20 @@ export default function SessionsPage() {
 
   /**
    * IS THE RIGHT SLOT'S OWN CONTENT CURRENTLY FULL SCREEN — `fullscreenModeFor`'s `'overlay'` mode
-   * (Studio/Contents/Hardware) applied to whichever of the three actually occupies the right slot
-   * right now. `cli`/`shell` are never included: their full screen NAVIGATES to a dedicated screen
-   * instead (`rightSlotBar`'s own `fullscreen` object), so there is no "currently overlaying" state
-   * for them to read here.
+   * (Studio, or any of the ten former Contents tabs, or Hardware) applied to whichever of them
+   * actually occupies the right slot right now. `cli`/`shell` are never included: their full screen
+   * NAVIGATES to a dedicated screen instead (`rightSlotBar`'s own `fullscreen` object), so there is
+   * no "currently overlaying" state for them to read here.
    */
   const rightSlotFullscreen =
-    (rightIsStudio && studioFullscreen) || (rightIsContents && contentsFullscreen)
-    || (rightIsHardware && hardwareFullscreen)
+    (rightIsStudio && studioFullscreen) || ((rightIsTab || rightIsHardware) && tabFullscreen)
 
   /** What the right box actually shows: the Studio's own target (StudioHost re-parents its carrier
    *  into it) while `panelSlots` says so; `cli`/`shell` render their own `TerminalRegion`/`ShellBand`
    *  with `placement="aside"` (design §1.5) — ordinary mounts, no persistent carrier needed since
-   *  neither holds a buffer that must survive the move; `hardware` its own `HardwarePanel` (design
-   *  item 3, sharing its content with the modal); `ArtifactsAside` otherwise. */
+   *  neither holds a buffer that must survive the move; `hardware` its own `HardwarePanel`; any of
+   *  the ten former Contents tabs its own `ArtifactsAside` mount (`rightTabPane`, bound to
+   *  `slotLayout.right`). */
   const rightSlotContentRaw = rightIsStudio ? (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
       {rightSlotHeader}
@@ -1121,25 +1192,30 @@ export default function SessionsPage() {
       {rightSlotBar('hardware', pt ? 'Hardware' : 'Hardware', () => closeSlotPanel('hardware'))}
       {hardwarePaneEl}
     </div>
-  ) : (
+  ) : slotLayout.right !== null && isTabPanelId(slotLayout.right) ? (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
       {rightSlotHeader}
-      {rightSlotBar('contents', pt ? 'Conteúdo' : 'Contents', closeArtifacts)}
-      {artifactsPane}
+      {rightSlotBar(slotLayout.right, panelTitle(slotLayout.right, pt), () => closeSlotPanel(slotLayout.right!))}
+      {rightTabPane}
     </div>
-  )
+  ) : null
 
   /**
    * THE RIGHT SLOT'S OWN "COVER THE VIEWPORT" WRAPPER — the exact same technique `SessionPanel.tsx`'s
    * `StudioBand` already uses for the bottom band (`PANEL_FULLSCREEN_Z`, `position: fixed; inset:
-   * 0`), applied here so Studio/Contents/Hardware can ALSO go full screen while sitting on the right
-   * (2026-09-19 — they never could before this). `background: var(--bg-surface)` because the raw
-   * content underneath assumes it is painted over the page's own surface, which a `position: fixed`
-   * escape hatch no longer guarantees on its own.
+   * 0`), applied here so Studio and every former Contents tab (or Hardware) can ALSO go full screen
+   * while sitting on the right. `background: var(--bg-surface)` because the raw content underneath
+   * assumes it is painted over the page's own surface, which a `position: fixed` escape hatch no
+   * longer guarantees on its own.
+   *
+   * STOPS SHORT OF THE RAIL (spec §2: "full screen respects the rail") — `right` follows
+   * `RAIL_WIDTH_PX` on desktop rather than reaching `inset: 0`'s own viewport edge, or the overlay
+   * would paint straight over the one control that could get the reader back out of it.
    */
   const rightSlotContent = rightSlotFullscreen ? (
     <div style={{
-      position: 'fixed', inset: 0, zIndex: PANEL_FULLSCREEN_Z,
+      position: 'fixed', top: 0, left: 0, bottom: 0, right: isMobile ? 0 : RAIL_WIDTH_PX,
+      zIndex: PANEL_FULLSCREEN_Z,
       display: 'flex', flexDirection: 'column', background: 'var(--bg-surface)',
     }}>
       {rightSlotContentRaw}
@@ -1201,15 +1277,12 @@ export default function SessionsPage() {
       // TRUE full screen for the Studio's bottom band — see `studioFullscreen`'s own header above.
       studioFullscreen={studioFullscreen}
       onStudioFullscreenChange={setStudioFullscreen}
-      // Contents/Hardware, docked at the bottom (owner, 2026-09-19) — the SAME reused content
-      // elements the right slot renders, plus their own full-screen state (see those states' own
-      // header above `rightIsContents`/`rightIsHardware`).
-      contentsPane={artifactsPane}
-      contentsFullscreen={contentsFullscreen}
-      onContentsFullscreenChange={setContentsFullscreen}
-      hardwarePane={hardwarePaneEl}
-      hardwareFullscreen={hardwareFullscreen}
-      onHardwareFullscreenChange={setHardwareFullscreen}
+      // Any of the ten former Contents tabs, or Hardware, docked at the bottom — the SAME reused
+      // content elements the right slot renders (`tabPane`/`hardwarePaneEl`), plus the ONE shared
+      // full-screen state (see `tabFullscreen`'s own header above).
+      bottomTabPane={bottomIsHardware ? hardwarePaneEl : bottomTabPane}
+      bottomTabFullscreen={tabFullscreen}
+      onBottomTabFullscreenChange={setTabFullscreen}
       // The terminal's own screen. A route, so it survives a reload and can be sent to somebody.
       onOpenTerminal={() => navigate(dedicatedTerminalPath(selected.id))}
       // WHICHEVER PANE the band is showing right now (`target`) — never a fixed `'shell'`. See
@@ -1386,7 +1459,7 @@ export default function SessionsPage() {
    * it, and reopening reads the tree again.
    */
   const artShell: 'fullscreen' | 'overlay' | 'split' | 'none' =
-    artifactsPane === null || !asideAlive || !panel || (isMobile && (creating || finishing))
+    selected === undefined || !asideAlive || !panel || (isMobile && (creating || finishing))
       ? 'none'
       : isMobile
         ? 'fullscreen'
@@ -1730,6 +1803,10 @@ export default function SessionsPage() {
             // costs no id lookup — see `lib/sessionTaskLink.ts`.
             {...(selected.task ? { task: selected.task } : {})}
             onOpenTask={ref => navigate(`/tasks/${encodeURIComponent(ref)}`)}
+            // The Live tab, on the running step when there is one — read from the artifacts store
+            // under this row's id, published by `onArtifacts` below.
+            rowId={selected.id}
+            onOpenLive={ref => openArtifacts('live', ref)}
             // The full reading is a TAB in the aside, not a second dialog over the session —
             // withheld when there is no record, exactly as the tab is.
             {...(sessionMetrics ? { onOpenFull: () => openArtifacts('metrics') } : {})}
@@ -1802,8 +1879,16 @@ export default function SessionsPage() {
                 id: 'artifacts',
                 label: pt ? 'Conteúdos da sessão' : 'Session contents',
                 icon: <FileText size={15} />,
-                on: art.open,
-                onSelect: () => (art.open ? closeArtifacts() : openArtifacts()),
+                // Reflects whether one of the ten former Contents tabs is the right slot's own
+                // active occupant right now — `panelSlots.isTabPanelId` names that domain, the
+                // in-panel switcher (`rightSwitcherMobile`) below already lets the reader pick a
+                // SPECIFIC one; this row is the quick "some content is showing" shortcut.
+                on: rightActivePanel !== null && isTabPanelId(rightActivePanel),
+                onSelect: () => {
+                  if (rightActivePanel !== null && isTabPanelId(rightActivePanel)) {
+                    closeSlotPanel(rightActivePanel)
+                  } else openSlotPanel('live')
+                },
               },
               /* AGENTISTICS STUDIO, on a phone. The desktop entry is a button on the sessions
                  strip (`App.tsx`), which this layout does not render — the actions live in this
@@ -2005,11 +2090,22 @@ export default function SessionsPage() {
   /**
    * `splitRef` measures the room the pane is clamped against (`panelWidth`), so it belongs on the
    * element the pane is actually laid out in — which is now this one, in every layout.
+   *
+   * THE ROW LAYOUT ALSO HOSTS THE RAIL NOW, and the rail must sit beside the chat WHETHER OR NOT a
+   * rail panel is currently open — `split` alone (`artShell === 'split'`) used to be the right test
+   * for "row vs column" because the content box was NEVER genuinely empty while `split` failed (the
+   * pre-rail fallback always rendered Contents there). Post-rail that is no longer true: a freshly
+   * opened session opens nothing by default, `artShell` reads `'none'`, and `split` alone would
+   * collapse the whole row — carrying the rail down into a COLUMN below the chat instead of beside
+   * it (measured live: the rail landed flush left at x=288, 422px tall, stacked under the chat).
+   * `railDesktop` is the wider test: any desktop viewport with a session selected keeps the row,
+   * regardless of what the content box itself currently has to show.
    */
+  const railDesktop = !isMobile && selected !== undefined
   return (
     <div
       ref={splitRef}
-      style={split
+      style={split || railDesktop
         ? { display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }
         // `relative` for the overlay to resolve against, and it is the one position value that does
         // NOT become a containing block for a `position: fixed` descendant — so the phone's
@@ -2048,6 +2144,20 @@ export default function SessionsPage() {
         <div style={artOuter} ref={rightAsideRef}>
           <div style={artInner}>{rightSlotContent}</div>
         </div>
+      )}
+      {/* THE RAIL (spec §2) — a SIBLING of the pane above, never inside its `artShell === 'none'`
+          branch: "the rail exists even when every panel is at the bottom" (design §2), so a
+          session with nothing open on the right still shows it, with its own config area (a later
+          pass) to drop things back onto. Desktop only — mobile has no rail at all (spec §8), and
+          the mobile switcher (`rightSwitcherMobile`) already covers the same ground there. */}
+      {!isMobile && selected && (
+        <PanelRail
+          panels={gatedRailPanels}
+          active={slotLayout.right}
+          lang={pt ? 'pt' : 'en'}
+          {...(selected.harness ? { harness: selected.harness } : {})}
+          onOpen={openSlotPanel}
+        />
       )}
       {/* THE STUDIO'S OWN PERSISTENT HOST — a SIBLING of the pane above, never nested inside its
           `artShell === 'none'` branch: the Studio can be shown in the BOTTOM band while the right
@@ -2096,7 +2206,7 @@ export default function SessionsPage() {
         // panel (owner, 2026-09-19). `rightIsStudio`/`bottomIsStudio` are already mutually
         // exclusive wherever `shown` is true, the same fact `studioTarget` above rests on.
         slot: rightIsStudio ? 'right' : 'bottom',
-        onMove: () => openSlotPanel('studio', rightIsStudio ? 'bottom' : 'right'),
+        onMove: () => moveSlotPanel('studio', rightIsStudio ? 'bottom' : 'rail'),
         // THE ALWAYS-VISIBLE MINIMIZE ICON — right-slot only; at the bottom `StudioBand`'s own
         // collapse chevron already is this control (`panelMenu.ts`'s own `panelMinimizeAction`).
         onMinimizeRight: rightIsStudio ? () => setRightOpen(false) : undefined,

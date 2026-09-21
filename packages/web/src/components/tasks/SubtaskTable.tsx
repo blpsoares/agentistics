@@ -56,6 +56,7 @@ import { useState } from 'react'
 import { Plus } from 'lucide-react'
 import type { StagedSessionDraft, TaskStatusDef } from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { ConfirmModal } from '../../pages/settings/primitives'
 import {
   fmtTokens, liveStatusMap, liveStatusOrder, microLabel, numeric, pill, statusStyle, surface,
   type BoardStatus,
@@ -71,6 +72,7 @@ import {
 } from './subtaskGroups'
 import { SessionRef } from './SessionRef'
 import { StagedSessionCompose } from './StagedSessionCompose'
+import { StagedSessionView } from './StagedSessionView'
 import { boardCopy, statusLabel, type Lang } from './copy'
 import { useMoney, type Money } from './money'
 import { costCaveat, costCellFor, subtaskRollupOf, tokensCellFor, type CostCell, type TokensCell } from './subtaskRollup'
@@ -219,6 +221,11 @@ export function SubtaskTable(p: SubtaskTableProps) {
   const [doneRefusal, setDoneRefusal] = useState<{ id: string; title: string } | null>(null)
   /** The subtask/group whose staged-session compose dialog is open — see `StagedSessionCompose`. */
   const [composing, setComposing] = useState<Subtask | null>(null)
+  /** The subtask/group whose read-only staged-session summary is open — see `StagedSessionView`. */
+  const [viewing, setViewing] = useState<Subtask | null>(null)
+  /** The subtask/group whose draft is being confirmed for deletion, from the menu directly — never
+   *  requires opening `StagedSessionCompose` first. */
+  const [deleting, setDeleting] = useState<Subtask | null>(null)
   const [stagedError, setStagedError] = useState<string | null>(null)
   const staged = boardCopy(p.lang).staged
 
@@ -318,6 +325,8 @@ export function SubtaskTable(p: SubtaskTableProps) {
                     onCompose: () => setComposing(t),
                     onEdit: () => setComposing(t),
                     onFire: () => p.onFireStagedSession(t),
+                    onView: () => setViewing(t),
+                    onDelete: () => setDeleting(t),
                   }}
                 />
               </td>
@@ -537,6 +546,35 @@ export function SubtaskTable(p: SubtaskTableProps) {
           onClose={() => setComposing(null)}
         />
       )}
+
+      {viewing && viewing.stagedSession && (
+        <StagedSessionView
+          lang={p.lang}
+          subtaskTitle={viewing.title}
+          draft={viewing.stagedSession}
+          taskFiles={p.taskFiles}
+          onEdit={() => { const t = viewing; setViewing(null); setComposing(t) }}
+          onClose={() => setViewing(null)}
+        />
+      )}
+
+      {/* Reachable straight from the gear menu — never requires opening `StagedSessionCompose`
+          first. Product ask, verbatim: "deletar eh acao destrutiva entao precisa de modal de
+          confirmacao" — the same `ConfirmModal` every other destructive act in this app uses,
+          rather than a second bespoke dialog for this one. */}
+      <ConfirmModal
+        open={deleting !== null}
+        title={staged.discardTitle}
+        message={staged.discardMessage}
+        confirmLabel={staged.discard}
+        cancelLabel={staged.cancel}
+        onCancel={() => setDeleting(null)}
+        onConfirm={() => {
+          if (!deleting) return
+          void p.onClearStagedSession(deleting.id)
+          setDeleting(null)
+        }}
+      />
 
       {stagedError && (
         <div

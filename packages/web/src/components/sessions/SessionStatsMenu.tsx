@@ -17,12 +17,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { sessionTime } from '../../lib/sessionTime'
 import { asideCache, asideKey } from '../../lib/asideCache'
-import { BarChart3, ChevronDown, ChevronRight, ChevronUp, ListChecks, PanelRight, X } from 'lucide-react'
+import { Activity, BarChart3, ChevronDown, ChevronRight, ChevronUp, ListChecks, PanelRight, X } from 'lucide-react'
 import { fmt, fmtCost, type CostBasis, type HarnessId, type SessionMeta } from '@agentistics/core'
 import { HARNESS_LABELS } from '../../lib/harness'
 import { sessionStats, statReason } from '../../lib/sessionStats'
 import { costBasisLabel, viewCost } from '../../lib/costBasis'
-import { sessionTaskLink } from '../../lib/sessionTaskLink'
+import { sessionReferences, type SessionReference } from '../../lib/sessionReferences'
+import { useArtifactLive } from '../../lib/artifactsStore'
 
 /**
  * The trigger button's own percentage colour — a THREE-tier ramp, deliberately not the same as the
@@ -126,11 +127,28 @@ export interface SessionStatsMenuProps {
    * delivery is NAMED rather than offered as a control that does nothing.
    */
   onOpenTask?: (ref: string) => void
+  /**
+   * Open the aside's LIVE tab, on the step `ref` names when there is one.
+   *
+   * A CALLBACK for the same reason the two above are. Absent where the aside cannot be opened, and
+   * then the "Live" reference is ABSENT rather than inert.
+   */
+  onOpenLive?: (ref?: string) => void
+  /**
+   * The id the artifacts store describes this session under — the FLEET ROW's id, which is not
+   * `sessionId` (that one is the conversation's, when it has one).
+   *
+   * The card reads what the session is doing right now from `artifactsStore` itself rather than
+   * having every caller subscribe: the desktop card is drawn from `App.tsx`, a very large component
+   * that would otherwise re-render each time a tool call starts. Absent, the Live reference is a
+   * plain link to the feed.
+   */
+  rowId?: string
 }
 
 export function SessionStatsMenu({
   harness, sessionId, meta, lang, currency, brlRate, startedModel, startedEffort, touch = false,
-  variant = 'button', panelMaxWidth, costBasis = 'api', planFactor = null, onOpenFull, task, onOpenTask,
+  variant = 'button', panelMaxWidth, costBasis = 'api', planFactor = null, onOpenFull, task, onOpenTask, onOpenLive, rowId,
 }: SessionStatsMenuProps) {
   const pt = lang === 'pt'
   const [open, setOpen] = useState(false)
@@ -185,6 +203,33 @@ export function SessionStatsMenu({
     }
   }, [open])
 
+  /**
+   * THE PANEL'S OWN HEIGHT CEILING — genuinely measured, never a fixed guess. The card is
+   * `position: absolute` with a `top` offset relative to `boxRef`'s own box, so how much of the
+   * viewport is actually left below it depends on where the TRIGGER sits on the page, not on this
+   * file's own `top` constant alone — a trigger sitting low in a short window can have almost no
+   * room under it at all. Left unbounded, the panel's last sections ("No repositório", the "Ver
+   * tudo no painel" link) simply clip off the bottom of the viewport with no way to reach them —
+   * reported: "o card dos stats da sessao estao passando pra baixo da pagina e nao ta exibindo
+   * tudo corretamente." Measured when the card opens, and again on every `resize` while it stays
+   * open (the same reactive shape `useViewportWidth` already uses for the sibling Filtros panel),
+   * because the trigger's own position on the page is not something this component can know from a
+   * CSS constant alone. Floored well above zero so a trigger pushed off-screen never yields a
+   * negative or unusably thin panel.
+   */
+  const [maxPanelHeight, setMaxPanelHeight] = useState<number | null>(null)
+  useEffect(() => {
+    if (!open) return
+    const measure = () => {
+      const triggerTop = boxRef.current?.getBoundingClientRect().top ?? 0
+      const panelTop = triggerTop + (touch ? 48 : 36)
+      setMaxPanelHeight(Math.max(160, window.innerHeight - panelTop - 16))
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [open, touch])
+
   const h = harness as HarnessId
   const s = sessionStats(h, sessionId, meta)
   const money = (usd: number) => fmtCost(usd, currency, brlRate)
@@ -225,6 +270,24 @@ export function SessionStatsMenu({
     </>
   )
 
+  /**
+   * THE REFERENCES — what the session is doing right now comes off the artifacts store (the page
+   * that reads the conversation publishes it; see `ArtifactsState.live`), and everything else is
+   * this card's own props. The Live row is offered only where the caller can open that tab.
+   */
+  const live = useArtifactLive(rowId)
+  const references = sessionReferences({
+    pt, task, canOpenTask: Boolean(onOpenTask), canOpenLive: Boolean(onOpenLive), live,
+    canOpenFull: Boolean(onOpenFull),
+  })
+  const press = (r: SessionReference) => {
+    const a = r.action
+    if (a === null) return
+    if (a.type === 'task') onOpenTask?.(a.ref)
+    else if (a.type === 'live') onOpenLive?.(a.ref)
+    else onOpenFull?.()
+  }
+
   // THE DROPDOWN — computed ONCE, read by BOTH triggers below. Its CONTENT never changes with
   // `variant` (design item 4 — "keeping its existing dropdown unchanged"); only its HORIZONTAL
   // ANCHOR does, and only because the trigger itself moved. The `'button'` trigger sits at the
@@ -251,6 +314,9 @@ export function SessionStatsMenu({
           padding: 12, borderRadius: 12,
           background: 'var(--bg-elevated)', border: '1px solid var(--border)',
           boxShadow: '0 12px 32px rgba(0,0,0,0.4)',
+          // See `maxPanelHeight`'s own comment: a card that does not fit between its trigger and
+          // the bottom of the viewport scrolls internally instead of silently clipping.
+          ...(maxPanelHeight !== null ? { maxHeight: maxPanelHeight, overflowY: 'auto' as const } : {}),
         }}>
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10 }}>
             <span style={{
@@ -267,48 +333,6 @@ export function SessionStatsMenu({
               }}
             ><X size={13} /></button>
           </div>
-
-          {/* WHICH DELIVERY THIS SESSION BELONGS TO — first, because it is the only line here that
-              is about the WORK rather than about the spend, and it is the one you follow out of
-              this card. Absent entirely for a session filed under nothing: the alternative is a row
-              saying "—", which is the confident zero in another costume. */}
-          {(() => {
-            const link = sessionTaskLink(task, Boolean(onOpenTask))
-            if (link.kind === 'none') return null
-            return (
-              <Block title={pt ? 'Entrega' : 'Delivery'}>
-                {link.kind === 'link' ? (
-                  <button
-                    onClick={() => { onOpenTask?.(link.title); setOpen(false) }}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 6, width: '100%',
-                      // 44px is the MOBILE number, and this is a control, not a read-only line.
-                      minHeight: touch ? 44 : 0, padding: 0,
-                      border: 'none', background: 'transparent', color: 'var(--anthropic-orange)',
-                      fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
-                      cursor: 'pointer', textAlign: 'left',
-                    }}
-                  >
-                    <ListChecks size={12} style={{ flexShrink: 0 }} />
-                    <span style={{
-                      minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}>{link.title}</span>
-                    <ChevronRight size={12} style={{ marginLeft: 'auto', flexShrink: 0 }} />
-                  </button>
-                ) : (
-                  <div style={{
-                    display: 'flex', alignItems: 'center', gap: 6,
-                    fontSize: 11.5, lineHeight: 1.7, color: 'var(--text-primary)', fontWeight: 600,
-                  }}>
-                    <ListChecks size={12} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
-                    <span style={{
-                      minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}>{link.title}</span>
-                  </div>
-                )}
-              </Block>
-            )
-          })()}
 
           {/* HOW THIS SESSION IS RUNNING — before the numbers, because it is what the numbers are
               OF. `model` has two sources and they are not the same claim: what agentop was asked to
@@ -454,7 +478,7 @@ export function SessionStatsMenu({
             ) : <Absent text={na('agents')} />}
           </Block>
 
-          <Block title={pt ? 'No repositório' : 'In the repository'} last>
+          <Block title={pt ? 'No repositório' : 'In the repository'} last={references.length === 0}>
             {s.git ? (
               <>
                 <Line k="Commits" v={fmt(s.git.commits)} />
@@ -464,32 +488,21 @@ export function SessionStatsMenu({
             ) : <Absent text={na('gitLines')} />}
           </Block>
 
-          {/* THE WAY TO THE FULL READING. This card is what a 300px popover can hold; the panel
-              holds the rest, and saying so here is what stops the two being built twice. It names
-              WHERE it opens — a link that moves something on the other side of the screen without
-              saying so reads as a control that did nothing. */}
-          {onOpenFull && (
-            <button
-              onClick={() => { onOpenFull(); setOpen(false) }}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6, width: '100%',
-                marginTop: 10, paddingTop: 10,
-                // 44px is the MOBILE number — this is the one CONTROL in a card of read-only
-                // lines, so it is the one thing here that has to be a target.
-                minHeight: touch ? 44 : 0,
-                borderTop: '1px solid var(--border-subtle)', borderLeft: 'none',
-                borderRight: 'none', borderBottom: 'none',
-                background: 'transparent', color: 'var(--anthropic-orange)',
-                fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
-                cursor: 'pointer', textAlign: 'left',
-              }}
-            >
-              <PanelRight size={12} style={{ flexShrink: 0 }} />
-              <span style={{ minWidth: 0 }}>
-                {pt ? 'Ver tudo no painel' : 'See everything in the panel'}
-              </span>
-              <ChevronRight size={12} style={{ marginLeft: 'auto', flexShrink: 0 }} />
-            </button>
+          {/* EVERY LINK OUT OF THIS CARD, TOGETHER, AT THE FOOT. They used to be scattered — the
+              delivery at the top, "see everything in the panel" at the bottom — which meant the
+              card had two different places to look for "where does this go", each with its own
+              styling. Which rows exist, in what order and with what words is `sessionReferences`
+              (pure, tested); this only draws them. Empty means NO heading at all: a title over
+              nothing is the dead control this product refuses. */}
+          {references.length > 0 && (
+            <Block title={pt ? 'Referências' : 'References'} last>
+              {references.map(r => (
+                <ReferenceRow
+                  key={r.id} r={r} touch={touch}
+                  onPress={() => { press(r); setOpen(false) }}
+                />
+              ))}
+            </Block>
           )}
         </div>
   )
@@ -566,6 +579,67 @@ function Line({ k, v }: { k: string; v: string }) {
       <span style={{ color: 'var(--text-tertiary)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k}</span>
       <span style={{ marginLeft: 'auto', color: 'var(--text-primary)', fontWeight: 600, whiteSpace: 'nowrap' }}>{v}</span>
     </div>
+  )
+}
+
+const REF_ICON: Record<SessionReference['id'], React.ReactNode> = {
+  task: <ListChecks size={12} style={{ flexShrink: 0 }} />,
+  live: <Activity size={12} style={{ flexShrink: 0 }} />,
+  full: <PanelRight size={12} style={{ flexShrink: 0 }} />,
+}
+
+/**
+ * ONE reference: icon, the row's name, a second line, and a chevron when pressing does something.
+ *
+ * The same visual language the delivery link always had — orange, 11.5px, a trailing chevron — with
+ * a second line added, because "Live" and "Delivery" are names for a KIND of place and what the
+ * reader needs is which one. A row with nowhere to go (a delivery on a surface that cannot
+ * navigate) is drawn as a quiet line without the chevron, not as a control that does nothing.
+ */
+function ReferenceRow({ r, touch, onPress }: { r: SessionReference; touch: boolean; onPress: () => void }) {
+  const inner = (
+    <>
+      <span style={{ display: 'flex', flexShrink: 0, paddingTop: 2, color: r.action ? 'var(--anthropic-orange)' : 'var(--text-tertiary)' }}>
+        {REF_ICON[r.id]}
+      </span>
+      <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1, gap: 1 }}>
+        <span style={{
+          fontSize: 11.5, fontWeight: 600, lineHeight: 1.4,
+          color: r.action ? 'var(--anthropic-orange)' : 'var(--text-primary)',
+        }}>{r.label}</span>
+        {(r.detail || r.detailVerb) && (
+          <span style={{
+            display: 'flex', gap: 5, minWidth: 0, fontSize: 10.5, lineHeight: 1.4,
+            color: 'var(--text-tertiary)', fontWeight: 400,
+          }}>
+            {r.detailVerb && (
+              <span style={{ flexShrink: 0, fontWeight: 700, color: 'var(--anthropic-orange)' }}>{r.detailVerb}</span>
+            )}
+            {r.detail && (
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {r.detail}
+              </span>
+            )}
+          </span>
+        )}
+      </span>
+      {r.action && <ChevronRight size={12} style={{ flexShrink: 0, color: 'var(--anthropic-orange)' }} />}
+    </>
+  )
+  const base: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: 8, width: '100%', boxSizing: 'border-box',
+    padding: '4px 0', textAlign: 'left', fontFamily: 'inherit',
+    // 44px is the MOBILE number, and a reference is a control, not a read-only line.
+    minHeight: touch ? 44 : 0,
+  }
+  return r.action ? (
+    <button
+      onClick={onPress}
+      data-reference={r.id}
+      style={{ ...base, border: 'none', background: 'transparent', cursor: 'pointer', color: 'inherit' }}
+    >{inner}</button>
+  ) : (
+    <div data-reference={r.id} style={base}>{inner}</div>
   )
 }
 

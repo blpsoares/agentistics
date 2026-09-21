@@ -1472,7 +1472,13 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
               onUnfile={sessionId => run(() => detachSession(id, sessionId))}
               onOpenSession={sid => navigate(sessionPath(sid))}
               taskFiles={detail.files}
-              onUploadFile={f => uploadFile(id, f, 'you')}
+              // A reload after — never before — returning the id: the compose wizard's own chip
+              // reads `taskFiles` by id (see `StagedSessionCompose.tsx`'s `attached`), and without
+              // this the freshly uploaded file uploaded fine (the id is real, the draft can still
+              // reference it) but stayed invisible as a chip until some UNRELATED action happened to
+              // reload the delivery — the same class of bug `onSaveStagedSession` below already
+              // guards against for a saved draft.
+              onUploadFile={f => uploadFile(id, f, 'you').then(fid => { void reload(); return fid })}
               onSaveStagedSession={(sid, d) => saveStagedSession(id, sid, d).then(r => { void reload(); return r })}
               onClearStagedSession={sid => run(() => clearStagedSession(id, sid))}
               onFireStagedSession={t => void startFire(t)}

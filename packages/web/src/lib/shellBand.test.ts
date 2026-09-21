@@ -296,7 +296,7 @@ describe('the band prefs are a per-viewer convenience and never a hard dependenc
       writeBandPrefs(withBandPanelFull(readBandPrefs(s), 'studio', true), s)
       const prefs = readBandPrefs(s)
       expect(bandPanelFull(prefs, 'studio')).toBe(true)
-      expect(bandPanelFull(prefs, 'contents')).toBe(false)
+      expect(bandPanelFull(prefs, 'live')).toBe(false)
       expect(bandPanelFull(prefs, 'hardware')).toBe(false)
       expect(bandPanelFull(prefs, 'cli')).toBe(false)
       expect(bandPanelFull(prefs, 'shell')).toBe(false)
@@ -304,9 +304,9 @@ describe('the band prefs are a per-viewer convenience and never a hard dependenc
 
     it('two panels can each be full at once — a per-panel fact, not a single slot-wide switch', () => {
       let prefs = withBandPanelFull(DEFAULT_BAND_PREFS, 'studio', true)
-      prefs = withBandPanelFull(prefs, 'contents', true)
+      prefs = withBandPanelFull(prefs, 'live', true)
       expect(bandPanelFull(prefs, 'studio')).toBe(true)
-      expect(bandPanelFull(prefs, 'contents')).toBe(true)
+      expect(bandPanelFull(prefs, 'live')).toBe(true)
       expect(bandPanelFull(prefs, 'hardware')).toBe(false)
     })
 
@@ -349,7 +349,7 @@ describe('the band prefs are a per-viewer convenience and never a hard dependenc
       s.setItem('agentistics-shell-band', JSON.stringify({ open: true, height: 900, full: true }))
       const prefs = readBandPrefs(s)
       expect('full' in prefs).toBe(false)
-      for (const panel of ['studio', 'contents', 'hardware', 'cli', 'shell'] as const) {
+      for (const panel of ['studio', 'live', 'hardware', 'cli', 'shell'] as const) {
         expect(bandPanelFull(prefs, panel)).toBe(false)
       }
     })

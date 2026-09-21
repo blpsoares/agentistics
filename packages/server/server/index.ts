@@ -1677,13 +1677,34 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       }
       const got = await mod.fetchFile(fileId)
       if (!got) return json({ error: 'no_such_file' }, 404)
+      // A KNOWN kind (image/video/pdf/text — `task-file-media.ts`) is served `inline` under its own
+      // mime, so `AttachmentLightbox`'s `<iframe>` can actually render a PDF or a pasted-text
+      // attachment instead of the browser downloading it — `Content-Disposition: attachment`
+      // forces a save on an iframe navigation on every major browser, whatever the bytes are, which
+      // is what made the staged-session compose wizard's own attachment chips undownloadable-as-a-
+      // preview: clicking one saved a file instead of opening the viewer. Anything the table does
+      // not name (a `.docx`, a `.zip`) keeps the original `application/octet-stream` +
+      // `attachment` fallback — a route that guesses a type for an unrecognised upload is exactly
+      // what this table exists to refuse. `TaskFiles.tsx`'s own "Download" link forces a save
+      // regardless, via the anchor's own `download` attribute, so this changes nothing about it.
+      const { taskFileMediaType } = await import('./sessions/task-file-media')
+      const media = taskFileMediaType(got.name)
+      const quotedName = got.name.replace(/"/g, '')
+      // Three cases, not two: an unrecognised extension keeps the original unconditional download;
+      // image/video get NO disposition at all (an `<img>`/`<video>` never offers to save under a
+      // name, the same rule `attachment-web.ts` applies to its own image/video kinds); pdf/text get
+      // `inline` so a preview can actually render one.
+      const disposition = media === null
+        ? `attachment; filename="${quotedName}"`
+        : media.inline
+          ? `inline; filename="${quotedName}"`
+          : null
       // `.buffer` rather than the view: a Uint8Array is not a BodyInit in this lib target.
       return new Response(got.bytes.buffer as ArrayBuffer, {
         headers: {
           ...CORS_HEADERS,
-          'Content-Type': 'application/octet-stream',
-          // The name is the one the user gave, quoted — it never reached the filesystem.
-          'Content-Disposition': `attachment; filename="${got.name.replace(/"/g, '')}"`,
+          'Content-Type': media?.mime ?? 'application/octet-stream',
+          ...(disposition ? { 'Content-Disposition': disposition } : {}),
         },
       })
     }

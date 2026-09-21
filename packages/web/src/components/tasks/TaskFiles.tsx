@@ -65,7 +65,7 @@ function Lightbox({ files, index, onIndex, onClose }: {
         </span>
         <span style={{ ...microLabel }}>{index + 1} / {files.length}</span>
         <span style={{ flex: 1 }} />
-        <a href={fileUrl(f.id)} style={{ color: 'var(--text-secondary)', display: 'flex' }} title="Download">
+        <a href={fileUrl(f.id)} download={f.name} style={{ color: 'var(--text-secondary)', display: 'flex' }} title="Download">
           <Download size={17} />
         </a>
         <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex' }}>
@@ -183,7 +183,7 @@ export function TaskFiles({ files, onUpload, onRemove }: {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span style={{ ...microLabel, fontSize: 10 }}>{fmtBytes(f.size)}</span>
                     <span style={{ flex: 1 }} />
-                    <a href={fileUrl(f.id)} style={{ color: 'var(--text-tertiary)', display: 'flex' }} title="Download">
+                    <a href={fileUrl(f.id)} download={f.name} style={{ color: 'var(--text-tertiary)', display: 'flex' }} title="Download">
                       <Download size={12} />
                     </a>
                     <button
@@ -218,7 +218,7 @@ export function TaskFiles({ files, onUpload, onRemove }: {
                 >{f.name}</button>
                 {f.author && <span style={pill('var(--accent-blue)')}>{f.author}</span>}
                 <span style={{ ...microLabel, fontSize: 10.5 }}>{fmtBytes(f.size)}</span>
-                <a href={fileUrl(f.id)} style={{ color: 'var(--text-tertiary)', display: 'flex' }} title="Download">
+                <a href={fileUrl(f.id)} download={f.name} style={{ color: 'var(--text-tertiary)', display: 'flex' }} title="Download">
                   <Download size={13} />
                 </a>
                 <button

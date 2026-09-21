@@ -8,7 +8,7 @@
  * screen, because there the pictures ARE the content and "the next one" plainly means the next one.
  */
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { attachmentUrl } from '../../lib/attachmentUrl'
 import { attachmentKind } from '../../lib/messageAttachments'
@@ -117,10 +117,25 @@ export function AttachmentLightbox({
         </>
       )}
 
-      {/* THREE KINDS, ONE FRAME. The component is named for the picture it began as, and it steps
+      {/* FOUR KINDS, ONE FRAME. The component is named for the picture it began as, and it steps
           across whatever the gallery can show — so what changes here is the ELEMENT, not the
           stepping, the counter or the menu. A video that could only be a still `<img>` was a black
-          rectangle; a PDF was the same rectangle with a filename under it. */}
+          rectangle; a PDF was the same rectangle with a filename under it.
+
+          `'other'` (a `.txt`/`.md`/log — anything `attachmentKind` cannot name by extension) is
+          FETCHED and rendered as text, never framed. It was originally given the PDF branch's own
+          `<iframe>`, and that read right until it was driven against a live server: EVERY `/api/`
+          response here carries `frame-ancestors vscode-webview:` (`securityHeaders`, shared by the
+          whole app), which refuses ANY browser tab that is not that exact scheme — so an iframe
+          pointed at this origin's own attachment route shows "localhost refused to connect" instead
+          of the file, for a PDF exactly as much as for text. That is a pre-existing limitation of
+          the shared response wrapper, not something this component can fix on its own — but text
+          does not NEED a frame: `fetch` is unaffected by `frame-ancestors` (it governs embedding,
+          not requests), so the bytes are read directly and shown in a plain `<pre>`, which is
+          arguably the more honest rendering for a pasted block anyway. A response whose own
+          `Content-Type` does not start with `text/` (a `.docx` misnamed `.txt`, say) is refused
+          rather than dumped as decoded garbage — the "open in a tab" link is the fallback there,
+          exactly as it is for `'pdf'`. */}
       {kind === 'video' ? (
         <video
           src={src}
@@ -131,12 +146,15 @@ export function AttachmentLightbox({
           {...menuProps}
           style={frameStyle}
         />
+      ) : kind === 'other' ? (
+        <TextFrame src={src} lang={lang} frameStyle={frameStyle} />
       ) : kind === 'pdf' ? (
         // The browser's OWN viewer, in an iframe on this origin. `#view=FitH` opens it fitted to
         // the width rather than at whatever zoom the viewer remembers, which on a phone is the
         // difference between a page and a corner of one. iOS Safari renders only the first page
         // inside a frame, which is why the link below it is not a nicety — it is the way to read
-        // the rest, and it says so in words rather than leaving a reader stuck on page one.
+        // the rest, and it says so in words rather than leaving a reader stuck on page one. (See
+        // the `'other'` branch's own note above for the `frame-ancestors` limitation this shares.)
         <div
           onClick={e => e.stopPropagation()}
           style={{ ...frameStyle, width: '90vw', height: '86vh', display: 'flex', flexDirection: 'column', background: 'var(--bg-base)' }}
@@ -179,6 +197,78 @@ export function AttachmentLightbox({
           {index + 1} / {paths.length}
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * A plain-text attachment, fetched and shown as text — see the `'other'` branch's own note above
+ * for why this is not an `<iframe>`.
+ *
+ * Three states, and each is a full sentence rather than a blank frame: loading, the text itself (a
+ * `<pre>` so whitespace and line breaks survive exactly as pasted), or a refusal naming why — a
+ * network error, or a `Content-Type` that does not start with `text/` (this route is never asked to
+ * guess a binary file's encoding).
+ */
+function TextFrame({ src, lang, frameStyle }: {
+  src: string
+  lang: 'pt' | 'en'
+  frameStyle: React.CSSProperties
+}) {
+  const pt = lang === 'pt'
+  const [state, setState] = useState<
+    { kind: 'loading' } | { kind: 'text'; body: string } | { kind: 'refused' }
+  >({ kind: 'loading' })
+
+  useEffect(() => {
+    let cancelled = false
+    setState({ kind: 'loading' })
+    fetch(src)
+      .then(async res => {
+        if (cancelled) return
+        const type = res.headers.get('content-type') ?? ''
+        if (!res.ok || !type.startsWith('text/')) { setState({ kind: 'refused' }); return }
+        const body = await res.text()
+        if (!cancelled) setState({ kind: 'text', body })
+      })
+      .catch(() => { if (!cancelled) setState({ kind: 'refused' }) })
+    return () => { cancelled = true }
+  }, [src])
+
+  return (
+    <div
+      onClick={e => e.stopPropagation()}
+      style={{ ...frameStyle, width: '90vw', height: '86vh', display: 'flex', flexDirection: 'column', background: 'var(--bg-base)' }}
+    >
+      {state.kind === 'text' ? (
+        <pre style={{
+          flex: 1, margin: 0, padding: 16, overflow: 'auto',
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 13, lineHeight: 1.5,
+          color: 'var(--text-primary)',
+        }}>{state.body}</pre>
+      ) : (
+        <div style={{
+          flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: 24, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 13,
+        }}>
+          {state.kind === 'loading'
+            ? (pt ? 'Carregando…' : 'Loading…')
+            : (pt ? 'Não é possível exibir este arquivo aqui.' : 'This file cannot be shown here.')}
+        </div>
+      )}
+      <a
+        href={src}
+        target="_blank"
+        rel="noreferrer"
+        style={{
+          flexShrink: 0, padding: '9px 12px', textAlign: 'center',
+          fontSize: 12.5, fontWeight: 600, color: 'var(--anthropic-orange)',
+          textDecoration: 'none', borderTop: '1px solid var(--border)',
+        }}
+      >
+        {pt ? 'Abrir em uma aba' : 'Open in a tab'}
+      </a>
     </div>
   )
 }

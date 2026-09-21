@@ -584,6 +584,26 @@ export async function deleteFile(fileId: string): Promise<boolean> {
 
 export const fileUrl = (fileId: string) => `/api/task-files/${encodeURIComponent(fileId)}`
 
+/**
+ * A `TaskFile` reduced to the one thing `AttachmentLightbox` reads off a "path" — its extension,
+ * off `attachmentKind()` — while still resolving back to the exact id `fileUrl` needs.
+ *
+ * The lightbox's own contract is a list of PATHS (it was built for the composer's attachment
+ * chips, which really are paths); a task file is keyed by an opaque id with no extension of its
+ * own, so a bare id would always read as `attachmentKind === 'other'` and fall into the broken
+ * `<img>` branch. `id/name` keeps the name's extension where `attachmentKind` looks for it (the
+ * LAST path segment) while the id stays the first — `fileIdFromLightboxPath` reads it back.
+ */
+export function fileLightboxPath(f: Pick<TaskFile, 'id' | 'name'>): string {
+  return `${f.id}/${f.name}`
+}
+
+/** The inverse of `fileLightboxPath` — the id half, for `fileUrl`. */
+export function fileIdFromLightboxPath(path: string): string {
+  const i = path.indexOf('/')
+  return i === -1 ? path : path.slice(0, i)
+}
+
 /** Hours and days, from ms. Null in, null out — an open task has no duration. */
 export function fmtDuration(ms: number | null): string | null {
   if (ms === null) return null

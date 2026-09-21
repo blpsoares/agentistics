@@ -153,16 +153,32 @@ export function metricsTabBounds(
 // ---------------------------------------------------------------------------------------------
 
 /**
+ * The gap kept between the Filtros/metrics tabs and the TRUE viewport edge once the artifacts aside
+ * is closed and there is no aside to hang off instead. Without it `rightEdge` fell back to the bare
+ * `viewportWidth`, so `right` (`viewportWidth - rightEdge`) came out to exactly `0` — the trigger's
+ * own box sat flush against the browser's edge, reproduced live at 1440px with the Filtros button's
+ * measured right edge landing AT x:1441. Same figure as `PAGE_INSET` (`FleetOverview.tsx`) — the
+ * margin this app already reserves at the page's own edges, and the same one this row's LEFT side
+ * already adds when computing `leftAside.right` in `App.tsx` — kept here as its own literal rather
+ * than an import so this pure arithmetic module does not take a dependency on a component file for
+ * one number.
+ */
+export const VIEWPORT_EDGE_MARGIN = 32
+
+/**
  * The RIGHT-anchored mirror of `filtrosPanelBounds`. `right` is a CSS `right` offset — pixels from
  * the viewport's own right edge — not a `left` one; see this module's own header, above, for why
- * the width clamp itself is unchanged.
+ * the width clamp itself is unchanged. The closed-aside fallback edge is inset by
+ * `VIEWPORT_EDGE_MARGIN` from the true viewport width — see that constant's own comment — so both
+ * this panel and `metricsTabBoundsRight`, which is derived from it, keep the same small breathing
+ * room from the browser's edge that an open aside would otherwise provide.
  */
 export function filtrosPanelBoundsRight(
   leftAside: HorizontalEdges,
   rightAside: HorizontalEdges | null,
   viewportWidth: number,
 ): { right: number; width: number } {
-  const rightEdge = rightAside === null ? viewportWidth : rightAside.left
+  const rightEdge = rightAside === null ? viewportWidth - VIEWPORT_EDGE_MARGIN : rightAside.left
   const available = Math.max(0, rightEdge - leftAside.right)
   const width = Math.max(FILTROS_PANEL_MIN_WIDTH, Math.min(FILTROS_PANEL_PREFERRED_WIDTH, available))
   return { right: Math.max(0, viewportWidth - rightEdge), width }

@@ -97,25 +97,26 @@ describe('BandLabeledButton — pressed is optional, and only rendered when give
 })
 
 /**
- * PanelBar — the ONE panel switcher (design item 1), now rendered inside the bottom band's own bar
- * instead of the fixed header. These assertions used to live in `App.test.tsx` against the header's
- * own `SessionHeaderSwitcher`; they moved here with the component — see that file's own header on
- * why. `panelBarEntries` itself is pinned in `lib/panelBar.test.ts`; what is tested here is that the
- * COMPONENT actually threads the computed `on`/`studioAt` into the markup (`aria-selected`, the tag
- * text) rather than, say, always rendering `false`.
+ * PanelBar — the BOTTOM BAND's own tab strip. AFTER THE RIGHT ICON RAIL (2026-09-21) it is scoped to
+ * exactly the panels PLACED AT THE BOTTOM — the rail is now the switcher for every rail-placed panel
+ * (`PanelRail.tsx`), so this bar no longer also offers a "jump to the right slot" reading, and with
+ * it the Studio's old "side"/"bottom" location tag: this bar only ever draws panels that are, by
+ * definition, at the bottom. `panelBarEntries` itself is pinned in `lib/panelBar.test.ts`; what is
+ * tested here is that the COMPONENT actually threads the computed `on` into the markup rather than,
+ * say, always rendering `false`.
  */
 
 const ALL_GATES = { editorEnabled: true, shellEnabled: true, relayed: false, hardwareOffered: true }
 
 function switcher(
-  rightOccupant: 'contents' | 'studio' | 'cli' | 'shell' | 'hardware' | null,
-  bottomOccupant: 'cli' | 'shell' | 'studio' | null,
+  bottomIds: readonly ('studio' | 'cli' | 'shell' | 'hardware' | 'skills')[],
+  activeBottom: 'studio' | 'cli' | 'shell' | 'hardware' | 'skills' | null,
   studioSeen: boolean,
   opts?: { lang?: 'en' | 'pt'; compact?: boolean },
 ): string {
   return renderToStaticMarkup(
     <PanelBar
-      entries={panelBarEntries(rightOccupant, bottomOccupant, ALL_GATES)}
+      entries={panelBarEntries(bottomIds, activeBottom, ALL_GATES)}
       lang={opts?.lang ?? 'en'}
       studioSeen={studioSeen}
       harness="claude"
@@ -125,110 +126,86 @@ function switcher(
   )
 }
 
-describe('PanelBar — exactly one lit tab (two with Studio at the bottom), and the first-open dot', () => {
+describe('PanelBar — exactly one lit tab, and the first-open dot', () => {
   /** Plant: force every entry's `on` to `false` regardless of `entries`. The first assertion then
    *  fails (Studio active should read `aria-selected="true"`); force it to `true` instead and the
    *  second one fails (nothing active should read `aria-selected="true"` nowhere at all). */
   test('aria-selected follows which entry is active, in both directions', () => {
-    expect(switcher('studio', null, true)).toContain('aria-selected="true"')
-    const nothingActive = switcher(null, null, true)
+    expect(switcher(['studio', 'cli', 'shell'], 'studio', true)).toContain('aria-selected="true"')
+    const nothingActive = switcher(['studio', 'cli', 'shell'], null, true)
     expect(nothingActive).not.toContain('aria-selected="true"')
-    expect(nothingActive.match(/aria-selected="false"/g)?.length).toBe(5)
+    expect(nothingActive.match(/aria-selected="false"/g)?.length).toBe(3)
   })
 
-  test('exactly one tab is ever lit, matching the design\'s "never more than one lit control"', () => {
-    const html = switcher('studio', null, true)
+  test('exactly one tab is ever lit', () => {
+    const html = switcher(['studio', 'cli', 'shell'], 'studio', true)
     expect(html.match(/aria-selected="true"/g)?.length).toBe(1)
-    expect(html.match(/aria-selected="false"/g)?.length).toBe(4)
+    expect(html.match(/aria-selected="false"/g)?.length).toBe(2)
   })
 
-  // Design item 1: the band's own occupant switcher merges into this bar, so cli/shell must ALSO
-  // light for the bottom slot (unlike contents/hardware, which stay right-slot-only).
-  test('Claude Code lit as the bottom band\'s own occupant, with nothing on the right', () => {
-    const html = switcher(null, 'cli', true)
-    expect(html.match(/aria-selected="true"/g)?.length).toBe(1)
-    expect(html).toContain('aria-selected="true"')
-  })
-
-  // Owner follow-up: "the Studio must be ACTIVE from the moment it is open... with a small tag
-  // saying where it is open". Studio docked at the bottom while Contents holds the right slot is
-  // the one case two tabs read `on` at once.
-  test('Studio at the bottom, Contents on the right: BOTH lit, Studio carries the "embaixo"/"bottom" tag', () => {
-    const html = switcher('contents', 'studio', true)
-    expect(html.match(/aria-selected="true"/g)?.length).toBe(2)
-    expect(html).toContain('Studio · bottom')
-  })
-
-  test('Studio in the right slot carries the "side" tag', () => {
-    expect(switcher('studio', null, true)).toContain('Studio · side')
-  })
-
-  test('Studio shown nowhere carries no tag at all', () => {
-    const html = switcher('contents', null, true)
-    expect(html).not.toContain('Studio ·')
-    expect(html).toContain('>Studio<')
-  })
-
-  test('the tag is in Portuguese too', () => {
-    const html = switcher('contents', 'studio', true, { lang: 'pt' })
-    expect(html).toContain('Studio · embaixo')
+  test('a panel not among bottomIds is simply absent from the bar, never rendered unlit', () => {
+    const html = switcher(['cli', 'shell'], 'cli', true)
+    expect(html).not.toContain('Studio')
   })
 
   test('the dot is present on a fresh origin (studioSeen false) and gone once it has fired', () => {
-    // Checked with nothing active, where nothing else in the markup draws `--anthropic-orange` — the
-    // ON tokens themselves use it too, which would confound this assertion.
-    expect(switcher(null, null, false)).toContain('var(--anthropic-orange)')
-    expect(switcher(null, null, true)).not.toContain('var(--anthropic-orange)')
+    expect(switcher(['studio'], null, false)).toContain('var(--anthropic-orange)')
+    expect(switcher(['studio'], null, true)).not.toContain('var(--anthropic-orange)')
   })
 
   /** Item 1/3 (previous pass): ONE segmented control, the same visual language as the band's own
    *  `Claude Code | Shell | Studio` segment — `var(--bg-surface)`/`var(--text-primary)` for the lit
    *  tab, never a bespoke orange-bordered pill per entry. */
   test('the ON treatment matches the band segment\'s own tab styling, not a bespoke pill', () => {
-    const html = switcher('studio', null, true)
+    const html = switcher(['studio', 'cli'], 'studio', true)
     expect(html).toContain('background:var(--bg-surface)')
     expect(html).toContain('color:var(--text-primary)')
     expect(html).not.toContain('rgba(232,146,90,0.08)')
   })
 
-  /** Item 1/3: the five entries render inside ONE `role="tablist"` wrapper — never five separate
-   *  bordered pills each carrying their own border/background. */
-  test('one wrapper, one role="tablist" — not five separate pill buttons', () => {
-    const html = switcher('studio', null, true)
+  /** Item 1/3: the entries render inside ONE `role="tablist"` wrapper — never separate bordered
+   *  pills each carrying their own border/background. */
+  test('one wrapper, one role="tablist" — not separate pill buttons', () => {
+    const html = switcher(['studio', 'cli', 'shell'], 'studio', true)
     expect(html.match(/role="tablist"/g)?.length).toBe(1)
-    expect(html.match(/role="tab"/g)?.length).toBe(5)
+    expect(html.match(/role="tab"/g)?.length).toBe(3)
   })
 
-  test('the entries render in the design\'s fixed order — Conteúdo · Studio · Claude Code · Shell · Hardware', () => {
-    const html = switcher('studio', null, true)
+  test('the entries render in exactly the order they are given', () => {
+    const html = switcher(['shell', 'cli', 'studio'], 'studio', true)
     const order = [...html.matchAll(/<span>([^<]+)<\/span>/g)].map(m => m[1])
-    expect(order).toEqual(['Contents', 'Studio · side', 'Claude Code', 'Shell', 'Hardware'])
+    expect(order).toEqual(['Shell', 'Claude Code', 'Studio'])
+  })
+
+  test('a former Contents tab (e.g. skills, moved to the bottom by the gear) renders through the shared panelMeta title', () => {
+    const html = switcher(['skills', 'cli'], 'skills', true)
+    expect(html).toContain('>Skills<')
   })
 })
 
 /**
- * `compact` (design item 7: "below ~1100px wide collapse tab labels to icons with tooltips, the lit
- * tab keeps its label and the Studio location tag"). The full text is asserted via the VISUALLY
- * HIDDEN span (still there for the accessible name) rather than its absence, since the tooltip
- * (`title`) already carries it too and a test that only checked "the visible word is gone" cannot
- * tell an intentional compact icon from a broken label prop.
+ * `compact` (below ~1100px wide, tab labels collapse to icons with tooltips; the lit tab keeps its
+ * label). The full text is asserted via the VISUALLY HIDDEN span (still there for the accessible
+ * name) rather than its absence, since the tooltip (`title`) already carries it too and a test that
+ * only checked "the visible word is gone" cannot tell an intentional compact icon from a broken
+ * label prop.
  */
 describe('PanelBar — compact mode collapses UNLIT labels to icons, never the lit one', () => {
   test('wide (compact false): every entry\'s full text is plainly visible', () => {
-    const html = switcher('studio', null, true, { compact: false })
+    const html = switcher(['studio', 'cli', 'shell'], 'studio', true, { compact: false })
     expect(html).not.toContain('clip:rect(0,0,0,0)')
   })
 
-  test('compact: the four unlit entries each get a visually-hidden label', () => {
-    const html = switcher('studio', null, true, { compact: true })
-    expect(html.match(/clip:rect\(0,0,0,0\)/g)?.length).toBe(4)
+  test('compact: the unlit entries each get a visually-hidden label', () => {
+    const html = switcher(['studio', 'cli', 'shell'], 'studio', true, { compact: true })
+    expect(html.match(/clip:rect\(0,0,0,0\)/g)?.length).toBe(2)
   })
 
   // Plant: drop the `compact && !on` guard so EVERY entry (lit included) hides its label. The lit
   // Studio tab's own text would then be wrapped in the visually-hidden style too, and this fails.
   test('compact: the lit Studio tab\'s label stays a plain, non-hidden span', () => {
-    const html = switcher('studio', null, true, { compact: true })
-    expect(html).toContain('<span>Studio · side</span>')
+    const html = switcher(['studio', 'cli', 'shell'], 'studio', true, { compact: true })
+    expect(html).toContain('<span>Studio</span>')
   })
 })
 
@@ -237,20 +214,19 @@ describe('PanelBar — compact mode collapses UNLIT labels to icons, never the l
  * de terminal repetidos... coloca a logo do harness invés do icone de terminal"). The `cli` tab now
  * carries the session's own `HarnessMark` — the same mark every chat bubble already uses, monogram
  * fallback included — while `shell` keeps the generic `TerminalSquare`, which is then the only tab
- * drawing one.
+ * drawing one. Both icons now come from the shared `panelIcons.tsx`, used identically by this bar
+ * and by `PanelRail.tsx`.
  */
 describe('PanelBar — the CLI tab carries the harness mark, never the generic terminal glyph', () => {
   test('with a known harness, the CLI tab renders that harness\'s own mark asset, not TerminalSquare', () => {
     // `claude` is a FILE mark (`HarnessMark`'s `MARK_FILE`) — its own `<img src="/harness/claude.svg">`
     // is unambiguous markup no lucide icon could ever produce.
-    const html = switcher('studio', null, true) // switcher() always passes harness="claude"
+    const html = switcher(['studio', 'cli'], 'studio', true) // switcher() always passes harness="claude"
     expect(html).toContain('src="/harness/claude.svg"')
   })
 
   test('the SHELL tab is untouched — it still draws the generic terminal glyph', () => {
-    // `TerminalSquare`'s own lucide path data (`M6 16h12` — verified against the installed package)
-    // must still appear at least once, for the Shell tab, even once the CLI tab stopped drawing it.
-    const html = switcher('studio', null, true)
+    const html = switcher(['studio', 'cli', 'shell'], 'studio', true)
     expect(html).toContain('d="m7 11 2-2-2-2"')
   })
 
@@ -258,7 +234,7 @@ describe('PanelBar — the CLI tab carries the harness mark, never the generic t
     'the mark is DECORATIVE — aria-hidden, so a screen reader is not told "Claude Code Claude ' +
     'Code" (the mark\'s own vendor name, then the tab\'s own label, concatenated)',
     () => {
-      const html = switcher('studio', null, true)
+      const html = switcher(['studio', 'cli'], 'studio', true)
       expect(html).toContain('aria-hidden="true"><img src="/harness/claude.svg"')
     },
   )
@@ -266,7 +242,7 @@ describe('PanelBar — the CLI tab carries the harness mark, never the generic t
   test('no `harness` at all — the CLI tab falls back to the generic terminal glyph, never a broken image', () => {
     const html = renderToStaticMarkup(
       <PanelBar
-        entries={panelBarEntries('studio', null, ALL_GATES)}
+        entries={panelBarEntries(['studio', 'cli', 'shell'], 'studio', ALL_GATES)}
         lang="en" studioSeen={true} onPick={() => {}}
       />,
     )
@@ -279,7 +255,7 @@ describe('PanelBar — the CLI tab carries the harness mark, never the generic t
   test('an UNKNOWN harness (no file, no mono, no colour) still resolves through HarnessMark\'s own monogram — never TerminalSquare and never a blank tab', () => {
     const html = renderToStaticMarkup(
       <PanelBar
-        entries={panelBarEntries('studio', null, ALL_GATES)}
+        entries={panelBarEntries(['studio', 'cli', 'shell'], 'studio', ALL_GATES)}
         lang="en" studioSeen={true} harness="a-future-harness-nobody-has-shipped-a-mark-for"
         onPick={() => {}}
       />,
@@ -292,7 +268,7 @@ describe('PanelBar — the CLI tab carries the harness mark, never the generic t
 
   test('the icon-only (compact) bar keeps the SAME distinction — this is exactly the width the ' +
     'owner reported as ambiguous', () => {
-    const html = switcher('studio', null, true, { compact: true })
+    const html = switcher(['studio', 'cli', 'shell'], 'studio', true, { compact: true })
     expect(html).toContain('src="/harness/claude.svg"')
     expect(html.match(/d="m7 11 2-2-2-2"/g)?.length).toBe(1) // Shell alone, now
   })
