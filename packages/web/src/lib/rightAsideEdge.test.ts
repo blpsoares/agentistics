@@ -85,4 +85,18 @@ describe('fullscreenInsetRight', () => {
   test('a narrow viewport with the aside occupying most of it — the overlay is a thin strip', () => {
     expect(fullscreenInsetRight(585, 1024)).toBe(439)
   })
+
+  // THE RAIL (right-icon-rail pass): it sits to the right of the aside and exists even when the
+  // aside itself is closed — see this function's own header.
+  test('aside closed, rail present (default machine, desktop) — the rail alone is respected', () => {
+    expect(fullscreenInsetRight(null, 1440, 44)).toBe(44)
+  })
+
+  test('aside OPEN — the rail is already inside rightAsideEdge’s own arithmetic, railWidth adds nothing more', () => {
+    expect(fullscreenInsetRight(820, 1440, 44)).toBe(620)
+  })
+
+  test('mobile (no rail at all) — omitting railWidth behaves exactly as before this pass', () => {
+    expect(fullscreenInsetRight(null, 390)).toBe(0)
+  })
 })

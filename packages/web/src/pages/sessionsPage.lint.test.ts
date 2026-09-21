@@ -67,22 +67,25 @@ test('the edge strip is rendered INSIDE the wrapper, not as an alternative to it
  * grep: seeing it requires mounting the page against a fleet host and resizing the window, and
  * `packages/web` has no jsdom. The COUNT is what went wrong, so the count is what is asserted.
  *
- * TWO SITES AS OF 2026-09-19, NOT ONE — Contents can now dock at the BOTTOM too (`panelSlots.ts`'s
- * `BOTTOM_PANELS`), and that band lives inside `SessionPanel.tsx`, a different component this page
- * cannot render into directly. The SAME single computed value is instead handed down as a prop
- * (`contentsPane={artifactsPane}`), so the regex now legitimately matches the right slot's own JSX
- * child AND that one prop line. The invariant this test exists to protect is untouched: there is
- * still exactly ONE `const artifactsPane = (...)` in this file (asserted below), and the right and
- * bottom slots are MUTUALLY EXCLUSIVE (`panelSlots.ts`'s "a panel sits in at most one slot"), so at
- * most one of the two textual sites ever actually mounts it into the tree on a given render — never
- * the four-copies-at-once shape this test was written against.
+ * ONE FUNCTION, AS OF THE RIGHT ICON RAIL PASS — `contents` stopped being a single panel, so
+ * `artifactsPane` (one computed VALUE) became `tabPane` (one computed FUNCTION), called once for
+ * whichever tab id the RIGHT slot shows and once for whichever DIFFERENT id the BOTTOM band shows —
+ * `slotLayout.right`/`slotLayout.bottom` can never hold the SAME id at once (a panel sits in exactly
+ * one placement), so this is still "at most one mount per id", not the four-copies-at-once shape
+ * this test was originally written against. The two call sites are each their own single computed
+ * value (`rightTabPane`, `bottomTabPane`), each rendered into the tree from exactly ONE site — the
+ * right slot's own JSX child, and the one prop that threads the bottom occupant to `SessionPanel`.
  */
-test('the artifacts pane is rendered from exactly TWO sites — the right slot\'s own JSX, and the one prop that threads it to the bottom band', () => {
-  expect([...SRC.matchAll(/\{artifactsPane\}/g)]).toHaveLength(2)
+test('tabPane is defined exactly once, and called exactly once per slot', () => {
+  expect([...SRC.matchAll(/const tabPane = /g)]).toHaveLength(1)
+  expect([...SRC.matchAll(/const rightTabPane = /g)]).toHaveLength(1)
+  expect([...SRC.matchAll(/const bottomTabPane = /g)]).toHaveLength(1)
+  expect([...SRC.matchAll(/\btabPane\(/g)]).toHaveLength(2)
 })
 
-test('...and it is still exactly ONE computed value, never reconstructed per site', () => {
-  expect([...SRC.matchAll(/const artifactsPane = /g)]).toHaveLength(1)
+test('...and each of the two is rendered into the tree from exactly ONE site', () => {
+  expect([...SRC.matchAll(/\{rightTabPane\}/g)]).toHaveLength(1)
+  expect([...SRC.matchAll(/bottomTabPane=\{/g)]).toHaveLength(1)
 })
 
 test('...and the layout is a STYLE, not a second copy of the pane', () => {
@@ -95,7 +98,7 @@ test('...and the layout is a STYLE, not a second copy of the pane', () => {
   // object, with a second attribute rather than a second render site.
   expect(has('<div style={artOuter} ref={rightAsideRef}>')).toBe(true)
   // The box renders `rightSlotContent` — the Studio's own target box, `cli`/`shell`'s own region, or
-  // `artifactsPane`, decided by `lib/panelSlots.ts`'s `layout.right` — never the pane directly, or
+  // `rightTabPane`, decided by `lib/panelSlots.ts`'s `layout.right` — never the pane directly, or
   // the Studio's switcher (`rightSwitcher`) would have nowhere to sit above whichever one is showing.
   expect(has('<div style={artInner}>{rightSlotContent}</div>')).toBe(true)
   expect(has('const rightSlotContent =')).toBe(true)
@@ -106,13 +109,13 @@ test('...and the layout is a STYLE, not a second copy of the pane', () => {
 test('the scan still sees a SECOND pane being added back', () => {
   // The plant: the same needle twice is what a second render site looks like, and the scan must
   // count it — including when one of the two is only prose, which must NOT count.
-  const twice = 'a{artifactsPane}b\nc{artifactsPane}d\n'
-  expect([...stripComments(twice).matchAll(/\{artifactsPane\}/g)]).toHaveLength(2)
-  expect([...stripComments('{artifactsPane}\n// {artifactsPane}\n').matchAll(/\{artifactsPane\}/g)])
+  const twice = 'a{rightTabPane}b\nc{rightTabPane}d\n'
+  expect([...stripComments(twice).matchAll(/\{rightTabPane\}/g)]).toHaveLength(2)
+  expect([...stripComments('{rightTabPane}\n// {rightTabPane}\n').matchAll(/\{rightTabPane\}/g)])
     .toHaveLength(1)
-  expect([...stripComments('{artifactsPane}\nconst x = 1 // {artifactsPane}\n').matchAll(/\{artifactsPane\}/g)])
+  expect([...stripComments('{rightTabPane}\nconst x = 1 // {rightTabPane}\n').matchAll(/\{rightTabPane\}/g)])
     .toHaveLength(1)
-  expect([...stripComments('{artifactsPane}\n/* {artifactsPane} */\n').matchAll(/\{artifactsPane\}/g)])
+  expect([...stripComments('{rightTabPane}\n/* {rightTabPane} */\n').matchAll(/\{rightTabPane\}/g)])
     .toHaveLength(1)
 })
 
@@ -172,7 +175,10 @@ test('every Studio entry on this page is gated on that one value', () => {
   // entry and layer (`editorEnabled={editorEnabled}`) is gone with it; these three are what
   // replaced it.
   expect(/\.\.\.\(editorEnabled\s*\n?\s*\?\s*\[studioMenuRow\(/.test(SRC)).toBe(true)
-  expect(has("shown: editorEnabled === true },")).toBe(true)
+  // The mobile in-panel switcher (`rightSwitcherMobile`, post-rail: every panel but cli/shell gets
+  // an entry there now) filters `studio` out of its list when the gate is closed, rather than
+  // carrying a `shown:` flag per entry the way the old three-entry array did.
+  expect(has("filter(id => id !== 'studio' || editorEnabled === true)")).toBe(true)
   expect(has("editorEnabled === true && isPanelShown(slotLayout, 'studio'),")).toBe(true)
 })
 

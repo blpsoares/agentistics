@@ -1,36 +1,60 @@
 /**
- * panelSlots.ts — the pure model behind where the Studio, Claude Code's own pane and the Shell sit,
- * plus the per-browser store that carries it across the app.
+ * panelSlots.ts — the pure model behind every panel in the sessions workspace: the icon RAIL on the
+ * right, the tab strip docked at the BOTTOM, and the per-browser store that carries the layout
+ * across the app.
  *
- * THE DEFECT THIS FIXES. The Studio used to be a MODE of `ArtifactsAside` (`studio` state, a `Layer`
- * over the aside's own chrome). Opening it therefore opened the session-contents panel too: the
- * header's contents button lit up beside the Studio button, and the Studio's own bar carried a way
- * back into a panel the reader never asked for. Two components, one open flag.
+ * THE MODEL, AS OF THE RIGHT-ICON-RAIL PASS (2026-09-21, `sdd/scratch/right-rail-spec.md`).
+ * `contents` stopped existing as a container: its ten former tabs (`live`, `gallery`, `skills`,
+ * `agents`, `forks`, `workflows`, `mcps`, `prs`, `tasks`, `metrics`) are each their own `PanelId`
+ * now, exactly like `studio`/`cli`/`shell`/`hardware` already were. FOURTEEN panels in total.
  *
- * THE MODEL. Four PANELS — `contents` (today's `ArtifactsAside`), `studio`, `cli` (the session's own
- * assistant pane) and `shell` (the per-session utility shell) — and two SLOTS — `right` (the aside
- * box: split / overlay / fullscreen) and `bottom` (the band docked under the composer). A panel sits
- * in AT MOST ONE slot at a time: opening panel P in slot S when P is already in the OTHER slot MOVES
- * it rather than duplicating it, and opening P where panel Q already sits DISPLACES Q — Q simply
- * stops being shown anywhere. `contents` never goes to the bottom: a tabbed list does not fit a band,
- * and nobody asked for it there.
+ * Every panel carries a `Placement` — `'rail'` (an icon on the right rail), `'bottom'` (a tab in the
+ * bottom band) or `'hidden'` (reachable from neither) — plus an `order` within that placement. This
+ * is new: before this pass, "which slot a panel reaches" and "which panel currently occupies a slot"
+ * were the SAME fact (a panel sat in AT MOST one of two slots, one occupant each). They are now two
+ * different questions. PLACEMENT answers "where does this panel's icon/tab live" and is a per-browser
+ * PREFERENCE, changed by the gear's move verbs (this pass), drag, or the hide/restore verbs (a later
+ * pass). OCCUPANCY answers "which panel is the content area / the bottom band showing RIGHT NOW" —
+ * `right`/`bottom` on `SlotLayout`, exactly as before — and only a panel whose placement allows it
+ * (rail → the right content area, bottom → the bottom band) can ever be the occupant of that slot.
  *
- * WHY A SEPARATE PURE CORE. `openPanel` / `closePanel` / `movePanel` / `allowed` / `resolveForViewport`
- * take a `SlotLayout` explicitly and return a new one — no store, no `localStorage`, no React. That is
- * what makes "every panel × slot × occupant" a table a test can walk exhaustively, and it is what a
- * re-parenting host (`StudioHost.tsx`) can reason about without touching a live subscription.
+ * WHY THIS SPLIT MATTERS: the rail can hold many icons at once (the default has twelve), so
+ * "placement" cannot be an occupancy fact the way the old two-slot model had it — only ONE of those
+ * twelve is ever actually showing in the content area at a time, which is what `right`/`bottom`
+ * still track. A panel whose placement is `'hidden'` has no icon and no tab anywhere, so it cannot be
+ * an occupant either — `openPanel` refuses it exactly as the old model refused a panel `allowed()`
+ * said could not reach a slot.
  *
- * EVERY PANEL REACHES BOTH SLOTS (owner, 2026-09-19 — see `BOTTOM_PANELS`'s own doc comment for the
- * decision and the reasoning it replaces). `contents` no longer has a slot it "never goes to";
- * `allowed()` is kept as the one gate every caller still asks, rather than assuming the answer, so a
- * future panel that genuinely cannot reach one slot has somewhere to say so.
+ * `restoreTo` remembers where a HIDDEN panel used to live (`'rail'` or `'bottom'`, never `'hidden'`
+ * itself) so the eye's "put it back" verb (a later pass) has an answer — the direct descendant of the
+ * old model's `lastSlot`, narrowed to the one case that still needs remembering: a panel that is
+ * currently placed (rail or bottom) already states its own placement, so there is nothing left for
+ * `restoreTo` to answer for it that `placement` does not already say.
  *
- * THE STORE, layered on top, is the per-browser preference — like `boardPrefs.ts` / `shellBand.ts`'s
- * own `readBandPrefs`, never `/api/preferences` (shared by everyone signed in on a central). It is
- * guarded exactly like those: a private window, cleared site data or a browser blocking storage costs
- * the memory, never the feature. The panels' CONTENT stays per session — switching session keeps the
- * layout and mounts that session's own Studio / shell in the same slots; nothing here is keyed by
- * session because the layout is a fact about the BROWSER, not about which conversation is open.
+ * EVERY PANEL REACHES EVERY PLACEMENT, continuing the decision recorded here before this pass (see
+ * the previous revision's own note on `BOTTOM_PANELS`): `allowed()` stays the one gate every caller
+ * asks rather than assuming the answer, so a panel added later that genuinely cannot reach one
+ * placement has one place to say so.
+ *
+ * WHY A SEPARATE PURE CORE. `openPanel` / `closePanel` / `movePanel` / `setPlacement` /
+ * `resolveForViewport` take a `SlotLayout` explicitly and return a new one — no store, no
+ * `localStorage`, no React. That is what makes "every panel × placement × slot" a table a test can
+ * walk exhaustively.
+ *
+ * THE STORE, layered on top, is the per-browser preference (`localStorage`, key
+ * `agentistics-panel-slots` — UNCHANGED from before this pass, so an existing reader's layout is
+ * still found), never `/api/preferences` (shared by everyone signed in on a central). Guarded exactly
+ * like `shellBand.ts`'s own `readBandPrefs`: a private window, cleared site data or a browser
+ * blocking storage costs the memory, never the feature.
+ *
+ * MIGRATION. A value written by the OLD model (no `placement` field, a bare `right`/`bottom` id from
+ * the five-id domain, `'contents'` among them) is detected and converted: whatever occupied `bottom`
+ * there STAYS at the bottom (`studio`/`cli`/`shell`/`hardware`); `'contents'`, wherever it was, is
+ * replaced by its ten descendants, all placed on the RAIL — the spec's own words, and deliberately
+ * NOT "wherever contents was" pins the descendants: a `contents` that was docked at the bottom does
+ * not imply the reader wanted ten tabs squeezed into a band which never held more than one occupant
+ * before. An unreadable value, or one from a version this build does not recognise, falls back to the
+ * plain defaults — never throws, never a half-applied layout.
  *
  * CLOSING (or DISPLACING) THE STUDIO ASKS FIRST when it holds unsaved buffers — the same question
  * `artifactsStore.closeArtifacts` already asks, through the same `unsavedBuffers.ts`. A MOVE never
@@ -40,87 +64,124 @@
 import { createElement, useSyncExternalStore, type ComponentType, type ReactElement } from 'react'
 import { holdIfUnsaved } from './unsavedBuffers'
 
-export type PanelId = 'contents' | 'studio' | 'cli' | 'shell' | 'hardware'
+/** The ten panels ArtifactsAside used to render as tabs inside one `contents` container. */
+export type TabPanelId =
+  | 'live' | 'gallery' | 'skills' | 'agents' | 'forks' | 'workflows' | 'mcps' | 'prs' | 'tasks'
+  | 'metrics'
+
+export type PanelId = TabPanelId | 'studio' | 'cli' | 'shell' | 'hardware'
+
+/** In the READING ORDER the rail and the bottom bar fall back to for a panel neither has ever
+ *  explicitly ordered — the same order `ArtifactsAside`'s own tab strip used to draw its tabs in,
+ *  with `studio`/`hardware` (formerly right-slot-only) and `cli`/`shell` (formerly the bottom's
+ *  default occupants) appended after them. */
+export const PANEL_IDS: readonly PanelId[] = [
+  'live', 'gallery', 'skills', 'agents', 'forks', 'workflows', 'mcps', 'prs', 'tasks', 'metrics',
+  'studio', 'hardware', 'cli', 'shell',
+]
+
+export function isTabPanelId(v: unknown): v is TabPanelId {
+  return v === 'live' || v === 'gallery' || v === 'skills' || v === 'agents' || v === 'forks'
+    || v === 'workflows' || v === 'mcps' || v === 'prs' || v === 'tasks' || v === 'metrics'
+}
+
+export function isPanelId(v: unknown): v is PanelId {
+  return isTabPanelId(v) || v === 'studio' || v === 'cli' || v === 'shell' || v === 'hardware'
+}
+
+/** Where a panel's ICON/TAB lives. `'hidden'`: reachable from neither the rail nor the bottom band —
+ *  design item §5, wired here so the model already carries it, though this pass draws no eye/verb
+ *  for it yet. */
+export type Placement = 'rail' | 'bottom' | 'hidden'
+
+/** The two placements a panel can actually be OPENED into — `'hidden'` has no icon or tab to click,
+ *  so `openPanel` refuses a panel sitting there rather than picking a placement for it. */
+export type OpenPlacement = 'rail' | 'bottom'
+
+/** Where a panel's CONTENT is currently shown — the right content area (left of the rail) or the
+ *  bottom band. Kept as its own name distinct from `Placement`: a panel placed on the rail is not
+ *  necessarily the one the content area is showing right now (eleven others could share that rail),
+ *  while at most one bottom-placed panel is ever the bottom band's own active tab. */
 export type SlotId = 'right' | 'bottom'
 
+/** Defaults (spec §1): `cli`/`shell` at the bottom, everything else on the rail, nothing hidden —
+ *  matching where the terminal panes have always lived and giving every other panel a rail icon. */
+export const DEFAULT_PLACEMENT: Record<PanelId, Placement> = {
+  live: 'rail', gallery: 'rail', skills: 'rail', agents: 'rail', forks: 'rail', workflows: 'rail',
+  mcps: 'rail', prs: 'rail', tasks: 'rail', metrics: 'rail', studio: 'rail', hardware: 'rail',
+  cli: 'bottom', shell: 'bottom',
+}
+
+function defaultOrder(): Record<PanelId, number> {
+  const out = {} as Record<PanelId, number>
+  PANEL_IDS.forEach((id, i) => { out[id] = i })
+  return out
+}
+
+/** Where a HIDDEN panel restores to — meaningless for a panel that is not hidden (its own
+ *  `placement` already answers "rail" or "bottom" for it), so this always mirrors `DEFAULT_PLACEMENT`
+ *  for a fresh layout and is updated only by `setPlacement`'s own hide branch. */
+function defaultRestoreTo(): Record<PanelId, OpenPlacement> {
+  const out = {} as Record<PanelId, OpenPlacement>
+  for (const id of PANEL_IDS) out[id] = DEFAULT_PLACEMENT[id] === 'bottom' ? 'bottom' : 'rail'
+  return out
+}
+
 export interface SlotLayout {
+  placement: Record<PanelId, Placement>
+  /** Order within a placement — ascending, ties broken by `PANEL_IDS`'s own order (never truly tied
+   *  in practice; `setPlacement` always assigns a fresh, strictly increasing value). */
+  order: Record<PanelId, number>
+  /** See this module's own header — where a hidden panel goes back to. */
+  restoreTo: Record<PanelId, OpenPlacement>
+  /** Which panel the content area (left of the rail) is currently showing. `null` = nothing open. */
   right: PanelId | null
+  /** Which panel the bottom band is currently showing as its active tab. `null` = nothing open. */
   bottom: PanelId | null
-  /** Is the bottom BAND expanded? Independent of which panel occupies it — collapsing never drops
-   *  the panel, exactly as collapsing the shell band today never ends the shell. */
+  /** Is the bottom BAND expanded? Independent of which panel occupies it. */
   bottomOpen: boolean
-  /**
-   * Is the RIGHT SLOT'S OWN CONTENT visible right now? Independent of which panel occupies it —
-   * the right slot's analogue of `bottomOpen`, added for the always-visible MINIMIZE control (owner,
-   * 2026-09-19): "o painel colapsa para sua entrada na barra... o conteúdo é liberado da tela,
-   * enquanto o que ele contém continua rodando". Unlike `bottomOpen`, it defaults to `true` — the
-   * right slot has never had a "closed while occupied" reading before this, every existing stored
-   * layout is one, and defaulting it to `false` would silently minimize a panel nobody ever asked to
-   * hide. It matters for exactly ONE panel today: the Studio, whose persistent host
-   * (`StudioHost.tsx`) stays MOUNTED (its Monaco buffers untouched) while `right === 'studio'` and
-   * `rightOpen === false` — `SessionsPage`'s own `studioTarget` reads it the same way it already
-   * reads `bottomOpen` to park the Studio's carrier rather than unmount it. Every OTHER right-slot
-   * panel minimizes by a genuine `closePanel` instead (`panelMenu.ts`'s own `panelMinimizeAction`
-   * explains why that is safe for them and not for the Studio), so this flag is read by nobody else
-   * — but it is still tracked here, for every panel, rather than only for the Studio, because a
-   * flag that exists for one occupant and not the others is a flag the NEXT occupant of the slot
-   * would have to specially reason about.
-   */
+  /** Is the RIGHT SLOT'S OWN CONTENT visible right now? Independent of which panel occupies it.
+   *  Defaults to `true` — see the pre-rail revision of this file for the full reasoning (the Studio's
+   *  own park-not-unmount minimize reads this; every other panel closes outright on minimize instead
+   *  and never sees it turn `false`). */
   rightOpen: boolean
-  /** Where each panel was last shown, so `openPanel(panel)` with no explicit slot has an answer. */
-  lastSlot: Record<PanelId, SlotId>
 }
-
-export const PANEL_IDS: readonly PanelId[] = ['contents', 'studio', 'cli', 'shell', 'hardware']
-
-/** Defaults: `contents`/`studio`/`hardware` open on the right; `cli`/`shell` open at the bottom —
- *  matching where each of them has always lived before this feature existed. */
-export const DEFAULT_LAST_SLOT: Record<PanelId, SlotId> = {
-  contents: 'right', studio: 'right', cli: 'bottom', shell: 'bottom', hardware: 'right',
-}
-
-/**
- * What each slot may host — CLOSED sets, so a new panel must be added here on purpose.
- *
- * DECISION (owner, 2026-09-19): "o hardware nao ta com a opcao de abrir no componente inferior e
- * nem o Conteúdo, ambos também deveriam estar aparecendo... assim vamos conseguir unificar melhor
- * as opcoes que temos". `contents`/`hardware` used to be RIGHT-ONLY — the reasoning on record was
- * "a tabbed list does not fit a band" / "no useful shape under the composer, nobody asked for it
- * there" — and the owner is now asking for exactly that, so both join `BOTTOM_PANELS` too. Every
- * panel now reaches BOTH slots, which is what makes "all five panels behave alike" (this feature's
- * own goal) a fact about the model rather than something each caller has to special-case around.
- * The OLD reasoning is kept here, not deleted, because it explains why the sets existed as anything
- * other than "every panel, both slots" in the first place — a future narrowing needs to know what
- * was tried before, not just what the current table says.
- */
-const RIGHT_PANELS: readonly PanelId[] = ['contents', 'studio', 'cli', 'shell', 'hardware']
-const BOTTOM_PANELS: readonly PanelId[] = ['cli', 'shell', 'studio', 'contents', 'hardware']
 
 export const EMPTY_SLOT_LAYOUT: SlotLayout = {
-  right: null, bottom: null, bottomOpen: false, rightOpen: true, lastSlot: { ...DEFAULT_LAST_SLOT },
+  placement: { ...DEFAULT_PLACEMENT },
+  order: defaultOrder(),
+  restoreTo: defaultRestoreTo(),
+  right: null, bottom: null, bottomOpen: false, rightOpen: true,
 }
 
-/** May this panel ever sit in this slot? As of 2026-09-19 every panel reaches both slots (see
- *  `BOTTOM_PANELS`'s own doc comment) — this stays the one gate every caller asks rather than
- *  assuming "yes", so a panel added later that genuinely cannot reach one slot has one place to
- *  say so. */
-export function allowed(slot: SlotId, panel: PanelId): boolean {
-  return slot === 'right' ? RIGHT_PANELS.includes(panel) : BOTTOM_PANELS.includes(panel)
+/** May this panel ever sit in this placement? As of this pass every panel reaches every placement —
+ *  see this module's own header — this stays the one gate every caller asks rather than assuming
+ *  "yes", so a panel added later that genuinely cannot reach one placement has one place to say so. */
+export function allowed(_placement: Placement, _panel: PanelId): boolean {
+  return true
 }
 
-/** The layout with `panel` removed from wherever it sits. A no-op (same values) when it is not
- *  shown anywhere — callers compare against this to detect "nothing changed".
- *
- *  VACATING THE BOTTOM SLOT ALSO CLEARS `bottomOpen` — the same invariant `readLayout` already
- *  enforces on the way IN (`bottomOpen: bottom !== null && r.bottomOpen === true`). Without it,
- *  moving the Studio from the bottom to the right left `{ bottom: null, bottomOpen: true }` sitting
- *  in the live layout (and in storage) until the next full reload silently repaired it.
- *
- *  VACATING THE RIGHT SLOT RESETS `rightOpen` TO `true` — the OPPOSITE convention from
- *  `bottomOpen`'s reset, and deliberately so: `rightOpen` defaults open (see its own doc comment),
- *  so a slot a panel just left reads as "would be open" for whichever panel opens there next,
- *  rather than carrying a stale "minimized" flag left behind by whatever used to occupy it. */
-function withoutPanel(layout: SlotLayout, panel: PanelId): SlotLayout {
+/** The panels currently placed on the rail, in order. */
+export function railPanels(layout: SlotLayout): PanelId[] {
+  return PANEL_IDS.filter(id => layout.placement[id] === 'rail')
+    .sort((a, b) => layout.order[a] - layout.order[b])
+}
+
+/** The panels currently placed at the bottom, in order. */
+export function bottomPanels(layout: SlotLayout): PanelId[] {
+  return PANEL_IDS.filter(id => layout.placement[id] === 'bottom')
+    .sort((a, b) => layout.order[a] - layout.order[b])
+}
+
+/** The panels currently hidden — reachable from neither the rail nor the bottom band. */
+export function hiddenPanels(layout: SlotLayout): PanelId[] {
+  return PANEL_IDS.filter(id => layout.placement[id] === 'hidden')
+    .sort((a, b) => layout.order[a] - layout.order[b])
+}
+
+/** The layout with `panel` removed from wherever it is the ACTIVE occupant — placement untouched.
+ *  A no-op (same object) when it is not the occupant of either slot. */
+function withoutOccupant(layout: SlotLayout, panel: PanelId): SlotLayout {
   if (layout.right !== panel && layout.bottom !== panel) return layout
   const bottomCleared = layout.bottom === panel
   const rightCleared = layout.right === panel
@@ -134,75 +195,47 @@ function withoutPanel(layout: SlotLayout, panel: PanelId): SlotLayout {
 }
 
 /**
- * Put `panel` in `slot` (or in `lastSlot[panel]` when `slot` is omitted).
- *
- * REFUSED, never coerced: an illegal placement (`contents` at the bottom) returns `layout`
- * unchanged — same object, so a caller can tell "nothing happened" by reference. Displacing this
- * slot's current occupant is implicit: that panel simply stops being named by either slot.
+ * Put `panel` in the slot its OWN placement maps to (`'rail'` → the right content area, `'bottom'`
+ * → the bottom band) — REFUSED, never coerced, when the panel is currently `'hidden'` (there is no
+ * icon or tab to have clicked). Displacing this slot's current occupant is implicit: that panel
+ * simply stops being the active occupant, its own placement untouched.
  */
-export function openPanel(layout: SlotLayout, panel: PanelId, slot?: SlotId): SlotLayout {
-  const target = slot ?? layout.lastSlot[panel] ?? DEFAULT_LAST_SLOT[panel]
-  if (!allowed(target, panel)) return layout
-  const cleared = withoutPanel(layout, panel)
-  const placed: SlotLayout = target === 'right'
+export function openPanel(layout: SlotLayout, panel: PanelId): SlotLayout {
+  const placement = layout.placement[panel]
+  if (placement === 'hidden') return layout
+  const cleared = withoutOccupant(layout, panel)
+  return placement === 'rail'
     ? { ...cleared, right: panel, rightOpen: true }
     : { ...cleared, bottom: panel, bottomOpen: true }
-  return { ...placed, lastSlot: { ...placed.lastSlot, [panel]: target } }
 }
 
-/** Remove `panel` from wherever it sits. A no-op (same object) when it was not shown. */
+/** Remove `panel` from wherever it is the active occupant. A no-op (same object) when it was not
+ *  shown — placement untouched, exactly like the old model's `closePanel`. */
 export function closePanel(layout: SlotLayout, panel: PanelId): SlotLayout {
-  return withoutPanel(layout, panel)
+  return withoutOccupant(layout, panel)
 }
 
-/**
- * Move `panel` to slot `to` — a no-op when it is not currently shown anywhere (there is nothing to
- * move) or already sitting in `to`, refused when `to` cannot host it. Implemented as `openPanel`
- * with an explicit slot: the mechanics of "displace whatever is there, remember the new slot" are
- * identical, and a move is simply an open that happens to keep the panel visible throughout.
- */
-export function movePanel(layout: SlotLayout, panel: PanelId, to: SlotId): SlotLayout {
-  if (!allowed(to, panel)) return layout
-  if (layout.right !== panel && layout.bottom !== panel) return layout
-  if ((to === 'right' && layout.right === panel) || (to === 'bottom' && layout.bottom === panel)) return layout
-  return openPanel(layout, panel, to)
-}
-
-/** Is this panel shown in EITHER slot right now? True for a panel sitting in a COLLAPSED bottom
- *  band too — collapsing hides the screen, not the fact that the panel is still there. */
+/** Is this panel the ACTIVE occupant of either slot right now? True for one sitting in a COLLAPSED
+ *  bottom band too — collapsing hides the screen, not the fact that the panel is still there. */
 export function isPanelShown(layout: SlotLayout, panel: PanelId): boolean {
   return layout.right === panel || layout.bottom === panel
 }
 
-/**
- * WHAT THE RIGHT SLOT IS ACTUALLY SHOWING — the one selector every "is this pressed" reading must
- * go through, rather than each caller comparing `layout.right` against `artifactsStore`'s own `open`
- * flag its own way. That duplication is exactly what C2 found: the header's Contents button read
- * `artifacts.open` on its own, so with `cli`/`shell` holding the slot its `aria-pressed` toggled
- * while the screen kept showing the terminal, unmoved.
- *
- * `contents` carries no field of its own in `SlotLayout` — see this module's header on why — so the
- * slot's own occupant (`layout.right`) always wins when there is one; `contentsOpen` (the store's
- * `open` flag) only decides the answer when nothing else occupies the slot.
- */
-export function rightSlotShowing(layout: SlotLayout, contentsOpen: boolean): PanelId | null {
-  return layout.right ?? (contentsOpen ? 'contents' : null)
+/** WHAT THE RIGHT SLOT IS ACTUALLY SHOWING — the one selector every "is this pressed" reading goes
+ *  through. `contents` carried no field of its own in the old model; every panel now does, so this
+ *  is a plain read, kept as a named function so callers do not have to know that. */
+export function rightSlotShowing(layout: SlotLayout): PanelId | null {
+  return layout.right
 }
 
 /**
- * MAY THE DOCKED BAND ACTUALLY SHOW THIS `cli`/`shell` TARGET RIGHT NOW, or has the RIGHT slot
- * already claimed it?
+ * MAY THE DOCKED BAND ACTUALLY SHOW THIS `cli`/`shell` TARGET RIGHT NOW, or has the RAIL's own
+ * content area already claimed it?
  *
- * The docked `ShellBand` keeps its own independent `cli`/`shell` preference (`shellBand.ts`'s own
- * `target`, picked through its segmented control) — it is never written through `openPanel`, so
- * nothing enforced this file's own "a panel sits in at most one slot at a time" for it (C3): nothing
- * stopped the docked band going on streaming — and capturing — the very pane the right slot had just
- * taken, and moving that pane to the right before it was ever explicitly picked in the docked band
- * left `layout.bottom` unset, so the move itself silently did nothing.
- *
- * Applied on the READ side, exactly like `resolveForGates`/`resolveForViewport` — never written back
- * to storage or to the docked band's own stored preference, so moving the panel away from the right
- * later hands the docked band back its target without the reader having to re-pick it.
+ * `ShellBand`'s docked branch keeps its own independent `cli`/`shell` preference (`shellBand.ts`'s
+ * own `target`, picked through its segmented control) — it is never written through `openPanel`
+ * except on an explicit tab click, so nothing else enforces this module's own "a panel is the active
+ * occupant of at most one slot" for it. Applied on the READ side only, never written back.
  */
 export function dockedShowsTarget(layout: SlotLayout, target: 'cli' | 'shell'): boolean {
   return layout.right !== target
@@ -213,42 +246,126 @@ export function setBottomOpen(layout: SlotLayout, open: boolean): SlotLayout {
   return layout.bottomOpen === open ? layout : { ...layout, bottomOpen: open }
 }
 
-/** Minimize or restore the right slot's own content without touching which panel occupies it —
- *  the right slot's analogue of `setBottomOpen`, see `SlotLayout.rightOpen`'s own doc comment. */
+/** Minimize or restore the right slot's own content without touching which panel occupies it. */
 export function setRightOpen(layout: SlotLayout, open: boolean): SlotLayout {
   return layout.rightOpen === open ? layout : { ...layout, rightOpen: open }
 }
 
 /**
- * The layout as a PHONE reads it. A phone has no bottom slot and no side-by-side (`dockedAllowed`
- * in `terminalSurface.ts` already says the band cannot exist below the breakpoint), so a stored
- * `bottom` panel is read as the fullscreen right sheet instead — WITHOUT rewriting storage, so
- * turning the phone back into a desktop restores the layout exactly as it was left.
+ * MOVE `panel` TO `to` ('rail' or 'bottom') — the gear's own verb (spec §3: "the gear menu keeps
+ * both verbs... always reachable"). Sets the placement AND, mirroring the pre-rail model's own
+ * `movePanel` ("a move is simply an open that happens to keep the panel visible throughout"), opens
+ * the panel there — the panel a reader just moved is the panel they meant to keep looking at,
+ * displacing whatever already occupied that slot. `restoreTo` is refreshed to the new placement too,
+ * so a LATER hide-then-restore puts it back where this move actually left it, not where it was
+ * before.
+ */
+export function movePanel(layout: SlotLayout, panel: PanelId, to: OpenPlacement): SlotLayout {
+  const placed = setPlacement(layout, panel, to)
+  return openPanel(placed, panel)
+}
+
+/**
+ * THE ONE PRIMITIVE THAT CHANGES A PANEL'S PLACEMENT — rail/bottom/hidden, plus `order` (appended to
+ * the end of the target placement's own list, so a panel just moved there sorts last, matching where
+ * a person would expect something they just dropped to land — reordering within a placement, drag's
+ * own job, is a separate later pass). Never touches which panel is the ACTIVE occupant of either
+ * slot on its own — `movePanel` layers that on top for the gear's verbs; hiding a panel that IS the
+ * active occupant of a slot removes it from there too, since a hidden panel can have no icon or tab
+ * a reader could have clicked to see it.
  *
- * GENERALIZED FROM `'studio'`-ONLY (2026-09-19, alongside `BOTTOM_PANELS` gaining `contents`/
- * `hardware`): any desktop-only bottom occupant reads the same way on a phone, or a `bottom:
- * 'contents'` stored from a desktop session would survive untouched into `SessionPanel.tsx`'s own
- * mobile branch, which has no bottom band to draw it in at all. `cli`/`shell` are the one exception
- * — a phone's own `SessionPanel` already renders its OWN self-contained terminal/chat toggle
+ * HIDING remembers `restoreTo` from the panel's OWN placement the moment BEFORE this call — never
+ * from `to` (which is `'hidden'` itself) — so the eye's later "put it back" verb has an answer. A
+ * panel that was ALREADY hidden keeps its existing `restoreTo` untouched (there is nothing new to
+ * remember: it was not showing anywhere a moment ago either).
+ */
+export function setPlacement(layout: SlotLayout, panel: PanelId, to: Placement): SlotLayout {
+  if (layout.placement[panel] === to) return layout
+  if (!allowed(to, panel)) return layout
+  const nextOrder = 1 + Math.max(0, ...PANEL_IDS.map(id => layout.order[id]))
+  // Placed (rail/bottom): restoreTo mirrors the new placement — there is nothing else it could mean
+  // for a panel that is visibly sitting there right now. Hidden: restoreTo remembers wherever the
+  // panel was placed the moment BEFORE this call (never "hidden" itself), unless it was ALREADY
+  // hidden, in which case there is nothing new to remember.
+  const restoreTo: Record<PanelId, OpenPlacement> = to !== 'hidden'
+    ? { ...layout.restoreTo, [panel]: to }
+    : layout.placement[panel] !== 'hidden'
+      ? { ...layout.restoreTo, [panel]: layout.placement[panel] as OpenPlacement }
+      : layout.restoreTo
+  const withPlacement: SlotLayout = {
+    ...layout,
+    placement: { ...layout.placement, [panel]: to },
+    order: { ...layout.order, [panel]: nextOrder },
+    restoreTo,
+  }
+  // A panel hidden while it was the active occupant of a slot has nothing left to occupy — there is
+  // no icon or tab a reader could use to bring its content back into view.
+  return to === 'hidden' ? withoutOccupant(withPlacement, panel) : withPlacement
+}
+
+/** The hide verb (design §5, wired for a later pass): `setPlacement(layout, panel, 'hidden')` by
+ *  another name, kept here so a caller never has to remember the raw placement string. */
+export function hidePanelPlacement(layout: SlotLayout, panel: PanelId): SlotLayout {
+  return setPlacement(layout, panel, 'hidden')
+}
+
+/** The eye's "put it back where it was" verb (design §5, wired for a later pass): restores a hidden
+ *  panel to its remembered `restoreTo` placement, WITHOUT opening it — restoring visibility is a
+ *  separate question from restoring reachability, and the eye's own tile does not claim to answer
+ *  both. A no-op when the panel is not currently hidden. */
+export function restorePanelPlacement(layout: SlotLayout, panel: PanelId): SlotLayout {
+  if (layout.placement[panel] !== 'hidden') return layout
+  return setPlacement(layout, panel, layout.restoreTo[panel])
+}
+
+/** Reorder every panel currently in `placement` to match `orderedIds` (design §3, wired for a later
+ *  drag pass) — panels of `placement` absent from `orderedIds` keep their relative order, appended
+ *  after the given ones; an id in `orderedIds` that is not actually in `placement` is ignored. */
+export function reorderPlacement(
+  layout: SlotLayout, placement: OpenPlacement, orderedIds: readonly PanelId[],
+): SlotLayout {
+  const current = (placement === 'rail' ? railPanels : bottomPanels)(layout)
+  const wanted = orderedIds.filter(id => current.includes(id))
+  const rest = current.filter(id => !wanted.includes(id))
+  const sequence = [...wanted, ...rest]
+  const order = { ...layout.order }
+  sequence.forEach((id, i) => { order[id] = i })
+  return { ...layout, order }
+}
+
+/**
+ * The layout as a PHONE reads it. A phone has no rail and no bottom band (spec §8: "the fourteen
+ * panels stay reachable through the existing mobile panel menu"), so a stored `bottom` occupant is
+ * read as the fullscreen right sheet instead — WITHOUT rewriting storage, so turning the phone back
+ * into a desktop restores the layout exactly as it was left. `cli`/`shell` are the one exception —
+ * a phone's own `SessionPanel` already renders its OWN self-contained terminal/chat toggle
  * regardless of what `panelSlots` says for those two, so leaving them as the raw stored value here
  * is harmless and avoids fighting a path this function was never asked to change.
+ *
+ * ONLY WHEN NOTHING IS ALREADY ON THE RIGHT (`layout.right === null`). This is applied on every
+ * render, not written back to storage, so without this guard it never STOPPED applying: a session
+ * whose raw `bottom` was, say, `studio` (moved there by the gear, or carried over from a migrated
+ * layout) folded into `right` on the first mobile render as intended — but the mobile switcher's own
+ * click (`SessionsPage.tsx`'s `openSlotPanel`, which only ever writes the RAW `right` field) never
+ * touches `bottom`, so the very next render folded `bottom` back over whatever the reader had just
+ * picked. Measured live: tapping "Skills" in the mobile switcher while `bottom` still held `studio`
+ * left the panel showing Studio, unchanged, on every tap — the switcher was reachable but inert.
+ * Once something real sits on `right`, the fold has nothing left to do: the reader's own pick wins,
+ * and `bottom`'s content stays reachable exactly as before, one tap away in the same switcher.
  */
 export function resolveForViewport(layout: SlotLayout, isMobile: boolean): SlotLayout {
-  if (!isMobile || layout.bottom === null || layout.bottom === 'cli' || layout.bottom === 'shell') {
+  if (!isMobile || layout.right !== null
+    || layout.bottom === null || layout.bottom === 'cli' || layout.bottom === 'shell') {
     return layout
   }
-  // `rightOpen: true` explicitly — a phone has no minimize control of its own (the right slot is a
-  // fullscreen sheet there, design §1.6), so a `false` carried over from a desktop session would
-  // otherwise open this sheet already collapsed with no visible way to expand it.
   return { ...layout, right: layout.bottom, bottom: null, rightOpen: true }
 }
 
 /**
- * The three server-decided facts that close a panel outright rather than merely greying its entry
- * (design §1.5's "every switcher entry is ABSENT when its gate is closed"): whether this machine
- * serves the repository explorer at all, whether it serves the per-session shell, and whether this
- * session is reached through a central's relay (which has no `cli`/`shell` stream of its own — the
- * whole `/api/fleet` prefix is refused there).
+ * The three server-decided facts that close a panel outright rather than merely greying its entry:
+ * whether this machine serves the repository explorer at all, whether it serves the per-session
+ * shell, and whether this session is reached through a central's relay (which has no `cli`/`shell`
+ * stream of its own — the whole `/api/fleet` prefix is refused there).
  */
 export interface PanelGates {
   editorEnabled: boolean
@@ -256,24 +373,22 @@ export interface PanelGates {
   relayed: boolean
 }
 
-/** May this panel ever be shown, given what the server/session actually allows right now? */
+/** May this panel ever be shown, given what the server/session actually allows right now? The ten
+ *  former `contents` tabs and `hardware` carry no server gate of their own — `hardware` is offered
+ *  or not on a per-session basis (`hardwareOffered`, not a machine capability), read at the render
+ *  layer alongside per-session availability (forks/tasks/metrics), never here. */
 function gateOpen(panel: PanelId, gates: PanelGates): boolean {
   if (panel === 'studio') return gates.editorEnabled
   if (panel === 'cli') return !gates.relayed
   if (panel === 'shell') return gates.shellEnabled && !gates.relayed
-  return true // `contents` and `hardware` have no server gate of their own.
+  return true
 }
 
 /**
  * THE LAYOUT AS THE GATES ACTUALLY ALLOW IT — read-time, exactly like `resolveForViewport`, and
  * NEVER written back to storage. A stored `right: 'studio'` from a browser where the repository
  * explorer was once on must not render an empty, unclosable pane the moment `editorEnabled` turns
- * off (a preference change, a different session, a machine reached through a central): the panel
- * is read as simply absent from wherever it sat, exactly as if it had never been opened, so the
- * slot falls back to showing whatever else belongs there (`contents`, on the right).
- *
- * Applied on every read alongside `resolveForViewport` — never only in one caller — or the same
- * stale-storage shape reopens on the next surface that reads `panelSlots` without the gate.
+ * off: the panel is read as simply absent from wherever it sat, as if it had never been opened.
  */
 export function resolveForGates(layout: SlotLayout, gates: PanelGates): SlotLayout {
   let next = layout
@@ -289,28 +404,99 @@ export function resolveForGates(layout: SlotLayout, gates: PanelGates): SlotLayo
 
 const STORAGE_KEY = 'agentistics-panel-slots'
 
-// `hardware` belongs here too — it is a full `PanelId` (`PANEL_IDS`, `allowed('right', 'hardware')`)
-// and its absence meant a stored `right: 'hardware'` was silently dropped on every reload, the one
-// panel this function could never actually restore. `panelSlots.test.ts`'s own "round-trips every
-// PANEL_IDS member" test walks every one of them through this exact function, which is what caught
-// it — see "the storage guard — readLayout" below.
-function isPanelId(v: unknown): v is PanelId {
-  return v === 'contents' || v === 'studio' || v === 'cli' || v === 'shell' || v === 'hardware'
-}
+/** The current shape's version — bumped whenever the persisted fields change meaning, so a build
+ *  newer than the one that wrote a value can tell "old shape, migrate it" from "current shape,
+ *  trust it" without guessing from which fields happen to be present. */
+const LAYOUT_VERSION = 2
 
-function readLastSlot(v: unknown): Record<PanelId, SlotId> {
-  const out: Record<PanelId, SlotId> = { ...DEFAULT_LAST_SLOT }
+type StoredPlacement = Record<string, unknown>
+
+function readPlacement(v: unknown): Record<PanelId, Placement> {
+  const out = { ...DEFAULT_PLACEMENT }
   if (typeof v !== 'object' || v === null) return out
-  const r = v as Record<string, unknown>
-  for (const panel of PANEL_IDS) {
-    const s = r[panel]
-    if ((s === 'right' || s === 'bottom') && allowed(s, panel)) out[panel] = s
+  const r = v as StoredPlacement
+  for (const id of PANEL_IDS) {
+    const p = r[id]
+    if ((p === 'rail' || p === 'bottom' || p === 'hidden') && allowed(p, id)) out[id] = p
   }
   return out
 }
 
-/** Read the persisted layout. Exported (like `shellBand.ts`'s `readBandPrefs`) so the storage
- *  guard is directly testable with an injected `Storage`. */
+function readOrder(v: unknown, placement: Record<PanelId, Placement>): Record<PanelId, number> {
+  const out = defaultOrder()
+  if (typeof v === 'object' && v !== null) {
+    const r = v as Record<string, unknown>
+    for (const id of PANEL_IDS) {
+      const n = r[id]
+      if (typeof n === 'number' && Number.isFinite(n)) out[id] = n
+    }
+  }
+  // Never let a corrupt/partial order disagree with placement in a way that makes two panels of
+  // different placements interleave in `railPanels`/`bottomPanels` — harmless either way (those
+  // sort within one placement only), kept only so `order` values stay monotonic-ish for the day
+  // drag needs to insert between two of them.
+  void placement
+  return out
+}
+
+function readRestoreTo(v: unknown, placement: Record<PanelId, Placement>): Record<PanelId, OpenPlacement> {
+  const out = defaultRestoreTo()
+  if (typeof v === 'object' && v !== null) {
+    const r = v as Record<string, unknown>
+    for (const id of PANEL_IDS) {
+      const p = r[id]
+      if (p === 'rail' || p === 'bottom') out[id] = p
+    }
+  }
+  // A panel that is CURRENTLY placed (not hidden) always restores to its own placement — there is
+  // nothing else `restoreTo` could mean for it, and a stale value left over from an earlier hide
+  // must not silently disagree with where the panel visibly sits right now.
+  for (const id of PANEL_IDS) {
+    if (placement[id] !== 'hidden') out[id] = placement[id] as OpenPlacement
+  }
+  return out
+}
+
+function readOccupant(v: unknown, placement: Record<PanelId, Placement>, want: OpenPlacement): PanelId | null {
+  if (!isPanelId(v)) return null
+  return placement[v] === want ? v : null
+}
+
+/** OLD SHAPE (pre-rail): a bare `right`/`bottom` panel id from the five-id domain, no `placement`
+ *  field at all. */
+function isLegacyShape(r: Record<string, unknown>): boolean {
+  return r.placement === undefined && ('right' in r || 'bottom' in r || 'lastSlot' in r)
+}
+
+/** MIGRATE an old-shape record — see this module's own header. `oldBottom`/`oldRight` are the raw
+ *  legacy values (any string, since the old five-id domain included `'contents'`, which is not a
+ *  `PanelId` any more). */
+function migrateLegacy(r: Record<string, unknown>): SlotLayout {
+  const oldRight = typeof r.right === 'string' ? r.right : null
+  const oldBottom = typeof r.bottom === 'string' ? r.bottom : null
+  const placement = { ...DEFAULT_PLACEMENT }
+  for (const id of ['studio', 'cli', 'shell', 'hardware'] as const) {
+    if (oldBottom === id) placement[id] = 'bottom'
+    else if (oldRight === id) placement[id] = 'rail'
+  }
+  // `contents`'s ten descendants are placed on the rail regardless of where `contents` itself used
+  // to sit — see this module's own header on why "wherever contents was" is deliberately not the
+  // rule.
+  let right: PanelId | null = isPanelId(oldRight) ? oldRight : null
+  let bottom: PanelId | null = isPanelId(oldBottom) ? oldBottom : null
+  if (oldRight === 'contents') right = 'live'
+  if (oldBottom === 'contents') bottom = 'live'
+  const order = defaultOrder()
+  const restoreTo = defaultRestoreTo()
+  for (const id of PANEL_IDS) restoreTo[id] = placement[id] === 'bottom' ? 'bottom' : 'rail'
+  const bottomOpen = bottom !== null && r.bottomOpen === true
+  const rightOpen = r.rightOpen !== false
+  return { placement, order, restoreTo, right, bottom, bottomOpen, rightOpen }
+}
+
+/** Read the persisted layout. Exported so the storage guard is directly testable with an injected
+ *  `Storage`. Never throws: an unreadable value, or one this build does not recognise, reads as the
+ *  plain defaults. */
 export function readLayout(storage?: Storage): SlotLayout {
   try {
     const raw = (storage ?? globalThis.localStorage)?.getItem(STORAGE_KEY)
@@ -318,15 +504,20 @@ export function readLayout(storage?: Storage): SlotLayout {
     const v = JSON.parse(raw) as unknown
     if (typeof v !== 'object' || v === null) return EMPTY_SLOT_LAYOUT
     const r = v as Record<string, unknown>
-    const right = isPanelId(r.right) && allowed('right', r.right) ? r.right : null
-    const bottom = isPanelId(r.bottom) && allowed('bottom', r.bottom) ? r.bottom : null
+    if (isLegacyShape(r)) return migrateLegacy(r)
+    // CURRENT (or a later) shape. `version` is read but not gated on: a future build may add fields
+    // this one does not know about, and reading only the fields this build recognises — ignoring
+    // everything else — is what lets an OLDER build open a layout a NEWER one saved without
+    // throwing or discarding it outright.
+    const placement = readPlacement(r.placement)
+    const order = readOrder(r.order, placement)
+    const restoreTo = readRestoreTo(r.restoreTo, placement)
     return {
-      right, bottom,
-      bottomOpen: bottom !== null && r.bottomOpen === true,
-      // ABSENT READS AS OPEN — the opposite convention from `bottomOpen` above, and deliberately
-      // so; see `SlotLayout.rightOpen`'s own doc comment for why.
+      placement, order, restoreTo,
+      right: readOccupant(r.right, placement, 'rail'),
+      bottom: readOccupant(r.bottom, placement, 'bottom'),
+      bottomOpen: readOccupant(r.bottom, placement, 'bottom') !== null && r.bottomOpen === true,
       rightOpen: r.rightOpen !== false,
-      lastSlot: readLastSlot(r.lastSlot),
     }
   } catch {
     return EMPTY_SLOT_LAYOUT
@@ -335,7 +526,9 @@ export function readLayout(storage?: Storage): SlotLayout {
 
 function writeLayout(layout: SlotLayout, storage?: Storage): void {
   try {
-    (storage ?? globalThis.localStorage)?.setItem(STORAGE_KEY, JSON.stringify(layout))
+    (storage ?? globalThis.localStorage)?.setItem(
+      STORAGE_KEY, JSON.stringify({ version: LAYOUT_VERSION, ...layout }),
+    )
   } catch { /* the memory is a convenience; the panels still work without it */ }
 }
 
@@ -359,13 +552,12 @@ export function subscribePanelLayout(cb: () => void): () => void {
 }
 
 /**
- * Open a panel imperatively — the one non-React callers (`artifactsStore.ts`'s compatibility shim)
- * reach for. DISPLACING the Studio out of every slot asks first, exactly as closing it does; MOVING
- * it (it stays shown, just in the other slot) never does, because `isPanelShown` reads `true` on
- * both sides of a move.
+ * Open a panel imperatively. DISPLACING the Studio out of every slot asks first, exactly as closing
+ * it does; MOVING it (it stays shown, just in the other slot) never does, because `isPanelShown`
+ * reads `true` on both sides of a move.
  */
-export function showPanel(panel: PanelId, slot?: SlotId): void {
-  const next = openPanel(state, panel, slot)
+export function showPanel(panel: PanelId): void {
+  const next = openPanel(state, panel)
   if (next === state) return
   const studioDisplaced = panel !== 'studio'
     && isPanelShown(state, 'studio') && !isPanelShown(next, 'studio')
@@ -377,10 +569,7 @@ export function showPanel(panel: PanelId, slot?: SlotId): void {
  * Close a panel imperatively. Closing the Studio itself asks first when it is dirty.
  *
  * `after`, when given, runs once the panel is ACTUALLY gone — immediately if there was nothing to
- * ask about (including "it was not shown at all"), or once the reader discards. It never runs on
- * "keep editing". This is what lets a caller displace the Studio and then do something of its own
- * (`artifactsStore.openArtifacts` opening Contents in the slot the Studio just vacated) without
- * asking twice or opening behind a Studio the reader chose to keep.
+ * ask about, or once the reader discards. It never runs on "keep editing".
  */
 export function hidePanel(panel: PanelId, after?: () => void): void {
   const next = closePanel(state, panel)
@@ -390,8 +579,8 @@ export function hidePanel(panel: PanelId, after?: () => void): void {
   after?.()
 }
 
-/** Move a panel to the other slot imperatively. Never asks — see `movePanel`. */
-export function relocatePanel(panel: PanelId, to: SlotId): void {
+/** Move a panel to the rail or the bottom band imperatively. Never asks — see `movePanel`. */
+export function relocatePanel(panel: PanelId, to: OpenPlacement): void {
   commit(movePanel(state, panel, to))
 }
 
@@ -399,9 +588,8 @@ export function setBandOpen(open: boolean): void {
   commit(setBottomOpen(state, open))
 }
 
-/** Minimize or restore the right slot's own content — see `setRightOpen`'s own pure doc comment.
- *  Never asks: it never unmounts anything (the Studio's own host stays parked), so there is nothing
- *  here for `holdIfUnsaved` to protect. */
+/** Minimize or restore the right slot's own content — never asks: it never unmounts anything (the
+ *  Studio's own host stays parked), so there is nothing here for `holdIfUnsaved` to protect. */
 export function setSlotRightOpen(open: boolean): void {
   commit(setRightOpen(state, open))
 }
@@ -414,14 +602,14 @@ export function resetPanelSlots(): void {
 
 export interface PanelSlotsApi {
   layout: SlotLayout
-  openPanel: (panel: PanelId, slot?: SlotId) => void
+  openPanel: (panel: PanelId) => void
   closePanel: (panel: PanelId) => void
-  movePanel: (panel: PanelId, to: SlotId) => void
+  movePanel: (panel: PanelId, to: OpenPlacement) => void
   setBottomOpen: (open: boolean) => void
   setRightOpen: (open: boolean) => void
 }
 
-/** The one hook every slot-aware component reads. Bound actions carry the same names as the pure
+/** The one hook every panel-aware component reads. Bound actions carry the same names as the pure
  *  functions above — they are methods on the returned object, so there is no export collision. */
 export function usePanelSlots(): PanelSlotsApi {
   const layout = useSyncExternalStore(subscribePanelLayout, getPanelLayout, () => EMPTY_SLOT_LAYOUT)
@@ -436,21 +624,8 @@ export function usePanelSlots(): PanelSlotsApi {
 }
 
 /**
- * MOUNTS `Component` AT MOST ONCE, WITH NO `key` OF ITS OWN, wherever `shown` is true — the exact
- * shape §1.4's guarantee depends on. React identifies an element by (type, key, position in its
- * parent's children); `createElement(Component, props)` here never reads a `key` out of `props`
- * because none of this module's own callers ever put one there, so a caller that renders THIS
- * function's result at a stable position in its own tree cannot, by construction, force React to
- * remount it on a re-render — which is precisely what broke when a reviewer added
- * `key={rightIsStudio ? 'right' : 'bottom'}` directly on `<StudioHost>` in `SessionsPage.tsx`: a
- * `key` that changes with the very state a move updates is a key that changes on every move.
- *
- * `SessionsPage.tsx` calls this at the Studio's ONE mount site instead of writing `shown && (<Studio
- * Host .../>)` by hand, so `panelSlots.mountPanel.test.ts` can assert the guarantee against REAL
- * `React.ReactElement` objects (`.key`, `.type` — `React.isValidElement`) rather than against the
- * page's source text, which is what `sessionsPage.lint.test.ts`'s own I4 block already does and
- * could not, on its own, see past a comment or a rename (see that file's own header on why a
- * DOM-level test is not available here at all: there is no jsdom in this repo's test runner).
+ * MOUNTS `Component` AT MOST ONCE, WITH NO `key` OF ITS OWN, wherever `shown` is true — see the
+ * pre-rail revision of this file for the full story of the remount bug this guards against.
  */
 export function mountPanel<P extends object>(
   shown: boolean, Component: ComponentType<P>, props: P,

@@ -4,18 +4,18 @@
  * It used to be a MODE of this panel (`studio` state, a `Layer` at the component's root, a `StripId`
  * outside `TabId`) — one open flag shared by two components, so opening the Studio lit the Contents
  * button beside it. The Studio is now its own PANEL (`lib/panelSlots.ts`'s `studio`), rendered by
- * `StudioHost.tsx` and placed independently in the `right` or `bottom` slot. See
- * `docs/superpowers/specs/2026-09-12-studio-slots-and-references-design.md` §1.
+ * `StudioHost.tsx` and placed independently on the rail or at the bottom.
  *
- * These are the invariants that can regress silently once the two are separate files nothing else
- * forces to agree — each one WAS the shape of the defect this file used to guard against, read the
- * other way round now that the Studio has left:
+ * AFTER THE RIGHT ICON RAIL (2026-09-21), `contents` itself stopped existing as a container: the
+ * strip and the launcher grid this file used to draw (`const tabs:`, `pickStrip`, `TabGrid`,
+ * `StripId`) are GONE — each former tab is its own mount now, driven by the CONTROLLED `activeTab`
+ * prop (`TabId`, a local alias of `panelSlots.ts`'s own `TabPanelId`). What survives from the
+ * original invariant, updated for that shape:
  *
  *  1. This component imports neither `Layer` nor `Studio` — reaching for either here is reaching for
  *     the old architecture.
- *  2. `StripId` carries no `'studio'` member: it names exactly what this panel's strip and launcher
- *     grid can select, and the Studio is not one of them any more.
- *  3. Nothing in the tabs array, `pickStrip`, or the `tabRequest` effect ever names `'studio'`.
+ *  2. `TabId` (this file's local alias of `TabPanelId`) carries no `'studio'` member.
+ *  3. Nothing in the render dispatch, or the focus-request effect, ever names `'studio'`.
  *  4. `editorEnabled` / `editorAutosave` are gone from `ArtifactsAsideProps` — they gated the Studio
  *     alone, and this component has nothing left to gate.
  *
@@ -40,15 +40,6 @@ const src = code(raw)
 
 const has = (needle: string) => src.includes(needle)
 
-/** The strip array literal, on its own — so "inside the tabs" is a question with an answer. */
-function tabsArray(s: string): string {
-  const start = s.indexOf('const tabs:')
-  if (start < 0) throw new Error('ArtifactsAside.gate.lint: the tabs array is no longer `const tabs:`')
-  const end = s.indexOf('\n  ]\n', start)
-  if (end < 0) throw new Error('ArtifactsAside.gate.lint: cannot find the end of the tabs array')
-  return s.slice(start, end)
-}
-
 /** The declaration of one type alias, as written. */
 function alias(s: string, name: string): string {
   const m = new RegExp(`type ${name} =[^\\n]*`).exec(s)
@@ -56,12 +47,19 @@ function alias(s: string, name: string): string {
   return m[0]
 }
 
+/** The body-dispatch chain (`tab === 'tasks' ? … : tab === 'live' ? … : …`), on its own. */
+function bodyChain(s: string): string {
+  const start = s.indexOf("tab === 'tasks' && session ? (")
+  if (start < 0) throw new Error('ArtifactsAside.gate.lint: the body dispatch chain is not where expected')
+  return s.slice(start)
+}
+
 describe('the file this reads is the real one', () => {
   it('read something, and read the right thing', () => {
     // An empty or mis-rooted read would make every assertion below pass by examining nothing.
     expect(raw.length).toBeGreaterThan(30_000)
     expect(has('export function ArtifactsAside(')).toBe(true)
-    expect(tabsArray(src).length).toBeGreaterThan(300)
+    expect(bodyChain(src).length).toBeGreaterThan(300)
   })
 })
 
@@ -71,15 +69,15 @@ describe('the Studio has left this component entirely', () => {
     expect(src).not.toMatch(/\bLayer\b/)
   })
 
-  it("'studio' is not a StripId — the type is exactly TabId, no wider", () => {
-    expect(alias(src, 'StripId')).toBe('type StripId = TabId')
+  it("'studio' is not a TabId — the local alias is exactly TabPanelId, no wider", () => {
+    expect(alias(src, 'TabId')).toBe('type TabId = TabPanelId')
   })
 
-  it('the tabs array names no studio entry', () => {
-    expect(tabsArray(src)).not.toContain("id: 'studio'")
+  it('the body dispatch chain names no studio arm', () => {
+    expect(bodyChain(src)).not.toContain("tab === 'studio'")
   })
 
-  it('nothing routes a strip id, a tab request or a click to `studio`', () => {
+  it('nothing routes the focus-request effect or a click to `studio`', () => {
     expect(has("setTab('studio')")).toBe(false)
     expect(has("'studio'")).toBe(false)
   })
@@ -96,18 +94,18 @@ describe('the Studio has left this component entirely', () => {
     expect(has('editorAutosave')).toBe(false)
   })
 
-  it('the two file lists are gone from the tabs, not merely hidden', () => {
-    const t = alias(src, 'TabId')
-    expect(t).not.toContain("'files'")
-    expect(t).not.toContain("'docs'")
+  it('the two file lists are gone from the tab domain, not merely hidden', () => {
+    // `TabId` is `TabPanelId` itself now (asserted above) — TypeScript already refuses a `'files'`/
+    // `'docs'` id there, so what is left to check here is that no separate list-building code for
+    // either survived under some OTHER name.
     expect(has('const fileList =')).toBe(false)
     expect(src).not.toMatch(/const docs = useMemo/)
   })
 
   it('the scan still sees the defect it exists to catch', () => {
     // The old shape, reintroduced by hand — this is what a regression would look like.
-    const widened = "type StripId = TabId | 'studio'\n"
-    expect(alias(code(widened), 'StripId')).not.toBe('type StripId = TabId')
+    const widened = "type TabId = TabPanelId | 'studio'\n"
+    expect(alias(code(widened), 'TabId')).not.toBe('type TabId = TabPanelId')
     expect(code("import { Layer, Studio } from './Studio'")).toContain("from './Studio'")
     expect(code("<Studio sessionId={sessionId} onExit={onExit} />")).toMatch(/<Studio\b/)
     // The comment form must not satisfy any of the above.
@@ -164,8 +162,8 @@ describe('the two caveats on the header count are rendered, not merely received'
     expect(headerAt).toBeGreaterThan(-1)
     expect(countAt).toBeGreaterThan(headerAt)
     expect(linesAt).toBeGreaterThan(countAt)
-    // Inside the header element, not after it: the tab body begins at the tabs array.
-    expect(linesAt).toBeLessThan(src.indexOf('const tabs:'))
+    // Inside the header element, not after it: the tab body's own dispatch chain begins later.
+    expect(linesAt).toBeLessThan(src.indexOf("tab === 'tasks' && session ? ("))
   })
 
   it('the scan still sees the render going away', () => {

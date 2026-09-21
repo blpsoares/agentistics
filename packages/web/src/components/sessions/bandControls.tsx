@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
-  ArrowDown, ArrowRight, ChevronDown, ChevronUp, Cpu, FileText, FolderTree, Maximize2,
-  Minimize2, MoreHorizontal, Settings, TerminalSquare, X,
+  ArrowDown, ArrowRight, ChevronDown, ChevronUp, Maximize2, Minimize2, MoreHorizontal, Settings, X,
 } from 'lucide-react'
-import { studioLocationLabel, type PanelBarEntry, type PanelBarId } from '../../lib/panelBar'
+import type { PanelBarEntry, PanelBarId } from '../../lib/panelBar'
 import type { PanelMenuIconId } from '../../lib/panelMenu'
 import { resolveBandDrag, resolveBandHeight } from '../../lib/shellBand'
 import { targetLabel } from '../../lib/terminalTarget'
-import { HarnessMark } from './HarnessMark'
+import { panelIconFor } from '../../lib/panelIcons'
+import { panelTitle } from '../../lib/panelMeta'
 import { ResizeGrip } from '../ResizeGrip'
 
 /**
@@ -271,6 +271,11 @@ export function BandSegment({ label, isMobile, children }: {
  * component only draws them, through `panelBarEntries` (`lib/panelBar.ts`) and whatever plumbing the
  * caller wires the click to. The first-open dot (`studioSeen`) stays on the Studio entry's icon
  * alone, exactly as it did in the header.
+ *
+ * NARROWED, AFTER THE RIGHT ICON RAIL: `entries` now only ever names panels PLACED AT THE BOTTOM —
+ * see `lib/panelBar.ts`'s own header on why a bar embedded in the bottom band no longer also offers
+ * rail panels. Every id/label/icon comes from the shared `panelMeta.ts`/`panelIcons.tsx` tables now,
+ * rather than a fifth copy of the same five (now fourteen) entries.
  */
 export function PanelBar({
   entries, lang, studioSeen, harness, onPick, compact = false,
@@ -278,36 +283,27 @@ export function PanelBar({
   entries: readonly PanelBarEntry[]
   lang: 'pt' | 'en'
   studioSeen: boolean
-  /** Names the CLI segment after what is actually on that session's screen (`targetLabel`), the same
-   *  way the band's own old occupant switcher always did. */
+  /** Names the `cli` tab after what is actually on that session's screen (`targetLabel`). */
   harness?: string
   onPick: (id: PanelBarId) => void
   /**
-   * BELOW ~1100PX (design item 7, `lib/panelBar.ts`'s own `bandBarCompact`), every UNLIT tab drops
-   * its visible word and keeps only its icon — the tooltip (`title`) still carries the full
-   * sentence, so nothing is lost, only unlabelled until hovered or focused. The LIT tab (and, for
-   * Studio, its "lateral"/"embaixo" tag) ALWAYS keeps its label: it is the one fact the bar exists
-   * to state at a glance, and a five-icon row with no visible answer to "what am I looking at" is
-   * the wrong place to save the width.
+   * BELOW ~1100PX (`lib/panelBar.ts`'s own `bandBarCompact`), every UNLIT tab drops its visible word
+   * and keeps only its icon — the tooltip (`title`) still carries the full sentence. The LIT tab
+   * ALWAYS keeps its label: it is the one fact the bar exists to state at a glance.
    */
   compact?: boolean
 }) {
   const pt = lang === 'pt'
-  const cliLabel = targetLabel('cli', harness, lang)
-  const shellLabel = targetLabel('shell', harness, lang)
-  const meta: Record<PanelBarId, { label: string; icon: ReactNode; title: string }> = {
-    contents: {
-      label: pt ? 'Conteúdo' : 'Contents',
-      icon: <FileText size={14} />,
-      title: pt
-        ? 'Conteúdo desta sessão — atividade, galeria, skills, subagentes e mais'
-        : 'This session’s contents — activity, gallery, skills, subagents and more',
-    },
-    studio: {
-      label: 'Studio',
-      icon: (
+  const labelFor = (id: PanelBarId): string => {
+    if (id === 'cli') return targetLabel('cli', harness, lang)
+    if (id === 'shell') return targetLabel('shell', harness, lang)
+    return panelTitle(id, pt)
+  }
+  const iconFor = (id: PanelBarId): ReactNode => {
+    if (id === 'studio') {
+      return (
         <span style={{ position: 'relative', display: 'flex' }}>
-          <FolderTree size={14} />
+          {panelIconFor('studio', 14)}
           {!studioSeen && (
             <span aria-hidden="true" style={{
               position: 'absolute', top: -2, right: -2, width: 6, height: 6,
@@ -315,51 +311,16 @@ export function PanelBar({
             }} />
           )}
         </span>
-      ),
-      title: pt
-        ? 'Agentistics Studio (beta) — os arquivos desta sessão em árvore, com busca e editor'
-        : 'Agentistics Studio (beta) — this session’s files as a tree, with search and an editor',
-    },
-    // THE CLI TAB CARRIES THE HARNESS'S OWN MARK (owner, 2026-09-19: "tem 2 icones de terminal
-    // repetidos... coloca a logo do harness invés do icone de terminal") — the same `HarnessMark`
-    // every chat bubble already uses, including its own monogram fallback for a harness with no
-    // file yet, so this never needs a second mapping. `TerminalSquare` only when `harness` itself is
-    // absent (a session `HarnessMark` could not even take a guess at). The SHELL tab keeps
-    // `TerminalSquare` — it is not any vendor's assistant, so a generic terminal glyph is the
-    // correct picture, and it is now the ONLY tab that draws one, which is the whole fix: two
-    // identical glyphs on one bar told two different panes apart by nothing.
-    //
-    // `aria-hidden` on the wrapper: `HarnessMark`'s own `<img alt>`/`aria-label` names the VENDOR
-    // ("Claude"), which is not this tab's own accessible name — the tab's `label` already carries
-    // that (`targetLabel`, "Claude Code"). Without this the two concatenate into "Claude Code Claude
-    // Code" for a screen reader; every other icon in this table is a decorative lucide glyph
-    // (`aria-hidden` by default) and this one is decorative for exactly the same reason — the label
-    // beside it, and the tab's own `title`, are what name it.
-    cli: {
-      label: cliLabel,
-      icon: harness
-        ? <span aria-hidden="true"><HarnessMark harness={harness} size={14} /></span>
-        : <TerminalSquare size={14} />,
-      title: cliLabel,
-    },
-    shell: { label: shellLabel, icon: <TerminalSquare size={14} />, title: shellLabel },
-    hardware: {
-      label: pt ? 'Hardware' : 'Hardware',
-      icon: <Cpu size={14} />,
-      title: pt ? 'Recursos de hardware' : 'Hardware resources',
-    },
+      )
+    }
+    return panelIconFor(id, 14, harness)
   }
   return (
     <BandSegment label={pt ? 'O que mostrar' : 'What to show'} isMobile={false}>
-      {entries.map(({ id, on, studioAt }) => {
-        const m = meta[id]
-        const label = id === 'studio' && studioAt
-          ? `${m.label} · ${studioLocationLabel(studioAt, pt)}`
-          : m.label
-        // The LIT tab (and, for Studio, its location tag) always keeps its visible word — see this
-        // component's own `compact` doc comment. An unlit one in compact mode still carries the
-        // FULL text as its accessible name (a screen reader gets no less than before), only painted
-        // off-screen rather than beside the icon.
+      {entries.map(({ id, on }) => {
+        const label = labelFor(id)
+        // An unlit tab in compact mode still carries the FULL text as its accessible name (a screen
+        // reader gets no less than before), only painted off-screen rather than beside the icon.
         const hideLabel = compact && !on
         return (
           <BandSegmentTab
@@ -369,9 +330,9 @@ export function PanelBar({
             // whole-row collapse toggle (`ShellBand`/`StudioBand`), so an unstopped click would both
             // pick the tab AND collapse the band underneath it.
             onClick={e => { e.stopPropagation(); onPick(id) }}
-            icon={m.icon}
+            icon={iconFor(id)}
             label={hideLabel ? <span style={VISUALLY_HIDDEN}>{label}</span> : <span>{label}</span>}
-            title={m.title}
+            title={label}
           />
         )
       })}

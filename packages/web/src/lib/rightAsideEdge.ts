@@ -116,7 +116,24 @@ export function restingLeftEdge(visualLeft: number, computedTransform: string): 
  * former position would make "full screen" a no-op there instead of covering the header and the
  * fleet list beside it.
  */
-export function fullscreenInsetRight(rightAsideEdge: number | null, viewportWidth: number): number {
-  if (rightAsideEdge === null) return 0
+/**
+ * The rail's own fixed width (`PanelRail.tsx`) — icons only, never resized. A constant rather than
+ * a live measurement: unlike the aside, which the reader drags, the rail never changes size, so
+ * there is nothing here for a `ResizeObserver` to earn its keep measuring.
+ */
+export const RAIL_WIDTH_PX = 44
+
+/**
+ * `railWidth` (default 0, for a caller on a viewport with no rail at all — mobile) is what makes
+ * this respect the rail (spec §2: "Full screen respects the rail") EVEN WHILE `rightAsideEdge` is
+ * `null` — the rail (design §2: "the rail exists even when every panel is at the bottom") sits to
+ * the right of the aside whenever the aside itself is showing something, so `rightAsideEdge`'s own
+ * `viewportWidth - rightAsideEdge` already reaches the rail's own left edge in that case; only the
+ * CLOSED-aside case (`null`) needs the constant added back by hand.
+ */
+export function fullscreenInsetRight(
+  rightAsideEdge: number | null, viewportWidth: number, railWidth = 0,
+): number {
+  if (rightAsideEdge === null) return railWidth
   return Math.max(0, viewportWidth - rightAsideEdge)
 }

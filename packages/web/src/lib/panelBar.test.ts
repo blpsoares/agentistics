@@ -1,357 +1,102 @@
 import { describe, expect, test } from 'bun:test'
 import {
   bandBarCompact, bottomBandFor, gatedBottomOccupant, panelBarEntries, resolvePanelBarPick,
-  studioLocationLabel, type PanelBarGates, type PanelBarId,
+  type PanelBarGates,
 } from './panelBar'
 
 const OPEN: PanelBarGates = {
   editorEnabled: true, shellEnabled: true, relayed: false, hardwareOffered: true,
 }
 
-describe('panelBarEntries — order and presence', () => {
-  test('every gate open: all five, in the fixed order', () => {
-    const entries = panelBarEntries(null, null, OPEN)
-    expect(entries.map(e => e.id)).toEqual(['contents', 'studio', 'cli', 'shell', 'hardware'])
+describe('panelBarEntries — the bottom band’s own tab strip', () => {
+  test('lists exactly the bottomIds it is given, in that order', () => {
+    const entries = panelBarEntries(['shell', 'cli'], 'cli', OPEN)
+    expect(entries.map(e => e.id)).toEqual(['shell', 'cli'])
   })
 
-  test('contents is never gated — always present', () => {
-    const entries = panelBarEntries(null, null, {
-      editorEnabled: false, shellEnabled: false, relayed: true, hardwareOffered: false,
-    })
-    expect(entries.map(e => e.id)).toEqual(['contents'])
-  })
-
-  test('studio absent when editorEnabled is off — never greyed, simply not there', () => {
-    const entries = panelBarEntries(null, null, { ...OPEN, editorEnabled: false })
-    expect(entries.some(e => e.id === 'studio')).toBe(false)
-  })
-
-  test('cli and shell absent on a relayed session', () => {
-    const entries = panelBarEntries(null, null, { ...OPEN, relayed: true })
-    expect(entries.map(e => e.id)).toEqual(['contents', 'studio', 'hardware'])
-  })
-
-  test('shell absent when shellEnabled is off, cli untouched', () => {
-    const entries = panelBarEntries(null, null, { ...OPEN, shellEnabled: false })
-    expect(entries.map(e => e.id)).toEqual(['contents', 'studio', 'cli', 'hardware'])
-  })
-
-  test('hardware absent when not offered (a central)', () => {
-    const entries = panelBarEntries(null, null, { ...OPEN, hardwareOffered: false })
-    expect(entries.some(e => e.id === 'hardware')).toBe(false)
-  })
-})
-
-describe('contents/hardware — right-slot-only panels, on exactly when they occupy the right slot', () => {
-  test('EXACTLY ONE of contents/hardware is on at a time — the right slot\'s occupant, and no other', () => {
-    for (const active of ['contents', 'hardware'] as const) {
-      const entries = panelBarEntries(active, null, OPEN)
-      const lit = entries.filter(e => e.on)
-      expect(lit).toHaveLength(1)
-      expect(lit[0]?.id).toBe(active)
-    }
-  })
-
-  test('nothing active: every entry reads off — never a confident default', () => {
-    const entries = panelBarEntries(null, null, OPEN)
-    expect(entries.every(e => !e.on)).toBe(true)
-  })
-
-  test('a panel absent from this gate set is simply never lit even if named the right occupant', () => {
-    const entries = panelBarEntries('studio', null, { ...OPEN, editorEnabled: false })
-    expect(entries.every(e => !e.on)).toBe(true)
-  })
-
-  // A real `SlotLayout` CAN now put `contents`/`hardware` in the bottom slot (`panelSlots.allowed`,
-  // 2026-09-19), so this is a genuine either-slot reading for them too, exactly like cli/shell.
-  test('contents/hardware read on for a real bottom occupant too', () => {
-    expect(panelBarEntries(null, 'contents', OPEN).find(e => e.id === 'contents')?.on).toBe(true)
-    expect(panelBarEntries(null, 'hardware', OPEN).find(e => e.id === 'hardware')?.on).toBe(true)
-  })
-})
-
-// New in this pass (design item 1): the bottom band's own occupant switcher merges into this bar,
-// so cli/shell must light for the BOTTOM slot too, or the band's own occupant would show no lit tab.
-describe('cli/shell — lit in EITHER slot (owner: the band merges into this bar)', () => {
-  test('cli lit as the bottom band\'s own occupant, nothing on the right', () => {
-    const entries = panelBarEntries(null, 'cli', OPEN)
-    expect(entries.find(e => e.id === 'cli')?.on).toBe(true)
+  test('marks the active bottom occupant as lit, and only that one', () => {
+    const entries = panelBarEntries(['shell', 'cli'], 'cli', OPEN)
     expect(entries.find(e => e.id === 'shell')?.on).toBe(false)
+    expect(entries.find(e => e.id === 'cli')?.on).toBe(true)
   })
 
-  test('shell lit as the bottom band\'s own occupant', () => {
-    const entries = panelBarEntries(null, 'shell', OPEN)
-    expect(entries.find(e => e.id === 'shell')?.on).toBe(true)
+  test('a gate-closed panel is ABSENT, never greyed', () => {
+    const entries = panelBarEntries(['cli', 'shell'], 'cli', { ...OPEN, shellEnabled: false })
+    expect(entries.map(e => e.id)).toEqual(['cli'])
   })
 
-  test('cli lit when moved to the right instead, bottom showing something else', () => {
-    const entries = panelBarEntries('cli', 'shell', OPEN)
-    const lit = entries.filter(e => e.on).map(e => e.id).sort()
-    expect(lit).toEqual(['cli', 'shell'])
+  test('studio is gated by editorEnabled', () => {
+    expect(panelBarEntries(['studio'], null, { ...OPEN, editorEnabled: false })).toEqual([])
+    expect(panelBarEntries(['studio'], null, OPEN).map(e => e.id)).toEqual(['studio'])
+  })
+
+  test('cli/shell are gated by relayed', () => {
+    expect(panelBarEntries(['cli', 'shell'], null, { ...OPEN, relayed: true })).toEqual([])
+  })
+
+  test('hardware is gated by hardwareOffered', () => {
+    expect(panelBarEntries(['hardware'], null, { ...OPEN, hardwareOffered: false })).toEqual([])
+  })
+
+  test('the ten former Contents tabs carry no gate of their own', () => {
+    const ids = ['live', 'gallery', 'skills', 'agents', 'forks', 'workflows', 'mcps', 'prs', 'tasks', 'metrics'] as const
+    const entries = panelBarEntries([...ids], null, { editorEnabled: false, shellEnabled: false, relayed: true, hardwareOffered: false })
+    expect(entries.map(e => e.id)).toEqual([...ids])
   })
 })
 
-describe('studio — lit in EITHER slot, tagged with where it sits', () => {
-  test('studio in the right slot: on, tagged "side"', () => {
-    const entries = panelBarEntries('studio', null, OPEN)
-    const studio = entries.find(e => e.id === 'studio')
-    expect(studio).toEqual({ id: 'studio', on: true, studioAt: 'side' })
-  })
-
-  test('studio in the bottom slot, nothing on the right: on, tagged "bottom"', () => {
-    const entries = panelBarEntries(null, 'studio', OPEN)
-    const studio = entries.find(e => e.id === 'studio')
-    expect(studio).toEqual({ id: 'studio', on: true, studioAt: 'bottom' })
-  })
-
-  test('studio shown nowhere: off, no tag', () => {
-    const entries = panelBarEntries('contents', null, OPEN)
-    const studio = entries.find(e => e.id === 'studio')
-    expect(studio).toEqual({ id: 'studio', on: false })
-  })
-
-  // The one case two entries may read `on` at once for studio (design item 1): Studio docked at the
-  // bottom while another panel occupies the right slot.
-  test('studio at the bottom AND contents on the right: BOTH lit', () => {
-    const entries = panelBarEntries('contents', 'studio', OPEN)
-    const lit = entries.filter(e => e.on)
-    expect(lit.map(e => e.id).sort()).toEqual(['contents', 'studio'])
-    expect(entries.find(e => e.id === 'studio')?.studioAt).toBe('bottom')
-  })
-
-  // Exhaustive: every (rightOccupant, bottomOccupant) combination a real `SlotLayout` can produce —
-  // a panel sits in at most one slot, so `right` and `bottom` are never the SAME id (except both
-  // `null`). Every one of the five may now light from either side (2026-09-19).
-  const PANELS = ['contents', 'studio', 'cli', 'shell', 'hardware'] as const
-  test('exhaustive: every entry\'s `on` matches its own either-slot/right-only rule', () => {
-    for (const right of [...PANELS, null]) {
-      for (const bottom of [...PANELS, null]) {
-        if (right !== null && bottom !== null && right === bottom) continue // impossible in a real layout
-        const entries = panelBarEntries(right, bottom, OPEN)
-        const studio = entries.find(e => e.id === 'studio')
-        if (right === 'studio') expect(studio).toMatchObject({ on: true, studioAt: 'side' })
-        else if (bottom === 'studio') expect(studio).toMatchObject({ on: true, studioAt: 'bottom' })
-        else if (studio) expect(studio.on).toBe(false)
-        for (const e of entries) {
-          if (e.id === 'studio') continue
-          expect(e.on).toBe(right === e.id || bottom === e.id)
-        }
-      }
-    }
-  })
-})
-
-describe('bandBarCompact — the bar\'s own measured width, never the window\'s', () => {
-  test('unmeasured (0) reads as WIDE, never compact', () => {
-    expect(bandBarCompact(0)).toBe(false)
-  })
-  test('below the breakpoint is compact', () => {
-    expect(bandBarCompact(1099)).toBe(true)
-    expect(bandBarCompact(600)).toBe(true)
-  })
-  test('at or above the breakpoint is not compact', () => {
-    expect(bandBarCompact(1100)).toBe(false)
-    expect(bandBarCompact(1440)).toBe(false)
-  })
-})
-
-describe('studioLocationLabel — the tag\'s own words', () => {
-  test('side, EN/PT', () => {
-    expect(studioLocationLabel('side', false)).toBe('side')
-    expect(studioLocationLabel('side', true)).toBe('lateral')
-  })
-
-  test('bottom, EN/PT', () => {
-    expect(studioLocationLabel('bottom', false)).toBe('bottom')
-    expect(studioLocationLabel('bottom', true)).toBe('embaixo')
-  })
-})
-
-// The bug: a LOCAL session with the shell switch off used to draw NEITHER `StudioBand` nor
-// `ShellBand` at all (`SessionPanel.tsx`'s old JSX read `shellEnabled && !relayed`) — no way to
-// reach Contents/Studio/Hardware, no task control, no panel switcher whatsoever. `bottomBandFor`
-// is the pure decision the fix hangs on: PRESENCE no longer reads `shellEnabled` at all, only
-// `ShellBand`'s own CONTENT does (`panelBarEntries`' `shell` gate, `ShellBand`'s own `shellEnabled`
-// prop).
-describe('gatedBottomOccupant — a stale/requested "shell" reads as "cli" once the switch is off', () => {
-  const OCCUPANTS = ['contents', 'studio', 'cli', 'shell', 'hardware', null] as const
-
-  test('shellEnabled on: every occupant passes through unchanged', () => {
-    for (const occ of OCCUPANTS) expect(gatedBottomOccupant(occ, true)).toBe(occ)
-  })
-
-  test('shellEnabled off: "shell" reads as "cli"', () => {
+describe('gatedBottomOccupant', () => {
+  test('a stale "shell" reads as "cli" when the shell switch is off', () => {
     expect(gatedBottomOccupant('shell', false)).toBe('cli')
   })
 
-  test('shellEnabled off: every OTHER occupant, including null, passes through unchanged', () => {
-    for (const occ of OCCUPANTS.filter(o => o !== 'shell')) {
-      expect(gatedBottomOccupant(occ, false)).toBe(occ)
-    }
+  test('otherwise passes through unchanged', () => {
+    expect(gatedBottomOccupant('shell', true)).toBe('shell')
+    expect(gatedBottomOccupant('skills', false)).toBe('skills')
+    expect(gatedBottomOccupant(null, true)).toBeNull()
   })
 })
 
-describe('bottomBandFor — which band renders at the foot of the panel', () => {
-  test('studio/contents/hardware each win first, whatever relayed/isMobile say', () => {
-    for (const bottomOccupant of ['studio', 'contents', 'hardware'] as const) {
-      for (const relayed of [true, false]) {
-        for (const isMobile of [true, false]) {
-          expect(bottomBandFor({ bottomOccupant, relayed, isMobile })).toBe(bottomOccupant)
-        }
-      }
-    }
+describe('bottomBandFor', () => {
+  test('bottomOccupant wins whenever it names anything', () => {
+    expect(bottomBandFor({ bottomOccupant: 'skills', relayed: false, isMobile: false })).toBe('skills')
+    expect(bottomBandFor({ bottomOccupant: 'studio', relayed: false, isMobile: false })).toBe('studio')
   })
 
-  test('a LOCAL session with nothing else docked always gets the shell band — desktop and mobile alike', () => {
+  test('a local session with nothing docked always gets shell (the floor)', () => {
     expect(bottomBandFor({ bottomOccupant: null, relayed: false, isMobile: false })).toBe('shell')
-    expect(bottomBandFor({ bottomOccupant: null, relayed: false, isMobile: true })).toBe('shell')
   })
 
-  test('a RELAYED session with nothing docked, on desktop, falls back to the bar-only band', () => {
+  test('a relayed session with nothing docked gets bar-only on desktop, none on a phone', () => {
     expect(bottomBandFor({ bottomOccupant: null, relayed: true, isMobile: false })).toBe('bar-only')
-  })
-
-  // Deliberately UNTOUCHED by this fix — see the function's own doc comment on why.
-  test('a RELAYED session with nothing docked, on a phone, renders nothing, exactly as before this fix', () => {
     expect(bottomBandFor({ bottomOccupant: null, relayed: true, isMobile: true })).toBe('none')
   })
+})
 
-  test('contents/hardware win over the relayed fallback too — neither is gated by relayed', () => {
-    expect(bottomBandFor({ bottomOccupant: 'contents', relayed: true, isMobile: false })).toBe('contents')
-    expect(bottomBandFor({ bottomOccupant: 'hardware', relayed: true, isMobile: false })).toBe('hardware')
+describe('bandBarCompact', () => {
+  test('0 (unmeasured) reads as wide, never compact', () => {
+    expect(bandBarCompact(0)).toBe(false)
+  })
+
+  test('below the breakpoint is compact', () => {
+    expect(bandBarCompact(1099)).toBe(true)
+    expect(bandBarCompact(1100)).toBe(false)
   })
 })
 
-/**
- * EXHAUSTIVE: every `shellEnabled × editorEnabled × relayed × bottom-occupant` combination
- * (× `isMobile`, since the relayed fallback is desktop-only) — both the PRESENCE decision
- * (`bottomBandFor`) and the ENTRIES a caller builds from the same gated occupant
- * (`gatedBottomOccupant` + `panelBarEntries`), the two halves `SessionPanel.tsx` computes once and
- * hands to whichever band actually renders.
- *
- * `bottomOccupant` is computed here exactly the way `SessionPanel.tsx` computes it (`isMobile` is
- * never even consulted — `resolveForViewport` already clears a desktop-only bottom occupant before
- * this point, so a caller that ran the layout through it need not repeat the check) — so this grid
- * also exercises the interaction between `editorEnabled`/`isMobile` and studio/contents/hardware
- * winning first, not only `bottomBandFor`'s own narrower contract.
- */
-describe('the fix, exhaustively: shellEnabled × editorEnabled × relayed × bottom occupant × isMobile', () => {
-  const OCCUPANTS = [null, 'studio', 'contents', 'hardware', 'cli', 'shell'] as const
-
-  for (const shellEnabled of [true, false]) {
-    for (const editorEnabled of [true, false]) {
-      for (const relayed of [true, false]) {
-        for (const rawBottom of OCCUPANTS) {
-          for (const isMobile of [true, false]) {
-            test(`shellEnabled=${shellEnabled} editorEnabled=${editorEnabled} relayed=${relayed} `
-              + `bottom=${String(rawBottom)} isMobile=${isMobile}`, () => {
-              // `resolveForViewport` sends a desktop-only occupant to the right sheet on a phone —
-              // the same "absent on mobile" reading `SessionPanel.tsx` gets from it before this
-              // grid's own `bottomOccupant` is ever computed.
-              const bottomOccupant = isMobile ? null
-                : rawBottom === 'studio' ? (editorEnabled ? 'studio' : null)
-                : rawBottom === 'contents' ? 'contents'
-                : rawBottom === 'hardware' ? 'hardware'
-                : null
-              const band = bottomBandFor({ bottomOccupant, relayed, isMobile })
-
-              // PRESENCE — the ONE gap this fix leaves in place: a relayed session on a phone,
-              // showing no Studio/Contents/Hardware, renders nothing. Every other combination gets
-              // a band.
-              if (relayed && isMobile && bottomOccupant === null) expect(band).toBe('none')
-              else expect(band).not.toBe('none')
-
-              // shellEnabled decides NOTHING about presence — a local session with nothing else
-              // docked always gets the shell band, whatever the switch says. This is the fix itself.
-              if (!relayed && bottomOccupant === null) expect(band).toBe('shell')
-
-              // ENTRIES — built from the SAME gated occupant `ShellBand` is handed, so the bar's
-              // lit tab and the pane actually on screen can never disagree.
-              const gated = gatedBottomOccupant(rawBottom, shellEnabled)
-              const gates: PanelBarGates = { editorEnabled, shellEnabled, relayed, hardwareOffered: true }
-              const ids = panelBarEntries(null, gated, gates).map(e => e.id)
-
-              // No Shell tab, ever, once the switch is off.
-              if (!shellEnabled) expect(ids).not.toContain('shell')
-              // Claude Code is gated by being relayed alone — never by the shell switch.
-              expect(ids.includes('cli')).toBe(!relayed)
-
-              // The consistency fix: a stale/requested "shell" occupant with the switch off lights
-              // "Claude Code" instead, matching the pane `ShellBand`'s own clamp actually draws.
-              if (rawBottom === 'shell' && !shellEnabled && !relayed) {
-                const cli = panelBarEntries(null, gated, gates).find(e => e.id === 'cli')
-                expect(cli?.on).toBe(true)
-              }
-            })
-          }
-        }
-      }
-    }
-  }
-})
-
-/**
- * resolvePanelBarPick — the fix itself (owner, 2026-09-19: "remove o clique na barra pra minimizar
- * e reabrir"). A tab click SELECTS, it never toggles a panel closed. See the function's own header
- * for the three answers and why `rightOpen: true` is what every non-Studio caller passes.
- */
-describe('resolvePanelBarPick — a tab click SELECTS, it never toggles', () => {
-  const PANELS: readonly PanelBarId[] = ['contents', 'studio', 'cli', 'shell', 'hardware']
-
-  test('shown nowhere: open it', () => {
-    for (const id of PANELS) {
-      expect(resolvePanelBarPick({
-        id, rightOccupant: null, bottomOccupant: null, rightOpen: true, bottomOpen: false,
-      })).toEqual({ kind: 'open' })
-    }
+describe('resolvePanelBarPick', () => {
+  test('a panel that is not the active bottom tab: open', () => {
+    expect(resolvePanelBarPick({ id: 'cli', activeBottom: 'shell', bottomOpen: true }))
+      .toEqual({ kind: 'open' })
   })
 
-  test(
-    'THE FIX: already open and visible on the right is a NO-OP — it used to close the panel',
-    () => {
-      for (const id of PANELS) {
-        expect(resolvePanelBarPick({
-          id, rightOccupant: id, bottomOccupant: null, rightOpen: true, bottomOpen: false,
-        })).toEqual({ kind: 'noop' })
-      }
-    },
-  )
-
-  test(
-    'THE FIX: already open and visible at the bottom is a NO-OP — it used to be a no-op already ' +
-    'for hardware/cli/shell, but studio used to CLOSE',
-    () => {
-      for (const id of PANELS) {
-        expect(resolvePanelBarPick({
-          id, rightOccupant: null, bottomOccupant: id, rightOpen: true, bottomOpen: true,
-        })).toEqual({ kind: 'noop' })
-      }
-    },
-  )
-
-  test('assigned to the right but minimized (rightOpen false) — the Studio\'s own park state — restores in place', () => {
-    expect(resolvePanelBarPick({
-      id: 'studio', rightOccupant: 'studio', bottomOccupant: null, rightOpen: false, bottomOpen: false,
-    })).toEqual({ kind: 'restore-right' })
+  test('the active tab, collapsed band: restore', () => {
+    expect(resolvePanelBarPick({ id: 'cli', activeBottom: 'cli', bottomOpen: false }))
+      .toEqual({ kind: 'restore' })
   })
 
-  test('assigned to the bottom but collapsed — restores in place, for every panel', () => {
-    for (const id of PANELS) {
-      expect(resolvePanelBarPick({
-        id, rightOccupant: null, bottomOccupant: id, rightOpen: true, bottomOpen: false,
-      })).toEqual({ kind: 'restore-bottom' })
-    }
-  })
-
-  test('the right occupant wins over the bottom one when (defensively) both somehow name this id', () => {
-    expect(resolvePanelBarPick({
-      id: 'studio', rightOccupant: 'studio', bottomOccupant: 'studio', rightOpen: true, bottomOpen: false,
-    })).toEqual({ kind: 'noop' })
-  })
-
-  test('a DIFFERENT panel occupying either slot never distracts the answer', () => {
-    expect(resolvePanelBarPick({
-      id: 'hardware', rightOccupant: 'studio', bottomOccupant: 'shell', rightOpen: true, bottomOpen: true,
-    })).toEqual({ kind: 'open' })
+  test('the active tab, expanded band: noop', () => {
+    expect(resolvePanelBarPick({ id: 'cli', activeBottom: 'cli', bottomOpen: true }))
+      .toEqual({ kind: 'noop' })
   })
 })
