@@ -709,6 +709,20 @@ export default function SessionsPage() {
    * being written", which is what makes it able to announce a command and its output too.
    */
 
+  /**
+   * ON THE DEDICATED TERMINAL SCREEN, THE RIGHT SLOT MUST NEVER SHOW THE SAME PANE THAT IS ALREADY
+   * FULL SCREEN (change #2 — respecting the artifacts aside means the dedicated CLI/Shell screen
+   * now renders it BESIDE itself, below, whenever it was already open; see the dedicated-terminal
+   * branch's own header). `cli`/`shell` can sit in the right slot independently of what this route
+   * shows (`fullscreenModeFor`'s `'navigate'` mode never removes them from `panelSlots` on the way
+   * in), so without this a session whose CLI pane happened to also be assigned to the right slot
+   * would show its own terminal TWICE — once as the dedicated page, once as a redundant aside beside
+   * it. Contents/Studio/Hardware are unaffected: those genuinely are something ELSE to show beside
+   * the terminal, not a copy of it.
+   */
+  const dedicatedRightRedundant = dedicatedTerminal
+    && ((dedicatedPane === 'assistant' && rightIsCli) || (dedicatedPane === 'shell' && rightIsShell))
+
   const artLayout = resolveArtifactLayout({
     // The RIGHT SLOT is open whenever Contents wants it OR panelSlots has put the Studio, Claude
     // Code, the Shell or Hardware there — opening any of them from a switcher must show the box
@@ -725,7 +739,8 @@ export default function SessionsPage() {
     // through the flags above, so `slotLayout.rightOpen` only ever narrows the ONE case those flags
     // cannot already see: the Studio still assigned to the slot, parked rather than shown.
     open: (art.open || rightIsStudio || rightIsCli || rightIsShell || rightIsHardware)
-      && (!rightIsStudio || slotLayout.rightOpen) && selected !== undefined,
+      && (!rightIsStudio || slotLayout.rightOpen) && selected !== undefined
+      && !dedicatedRightRedundant,
     width: typeof window === 'undefined' ? 1440 : window.innerWidth,
     isMobile,
     // Phase B ships without the reversal control; the split-rail default is what the plan measured.
@@ -1491,14 +1506,39 @@ export default function SessionsPage() {
   }, [isMobile, artShell, splitRoom, asideIn])
   useEffect(() => () => setRightAsideEdge(null), [])
 
+  /**
+   * What the pane sits beside or under. A VALUE, never a `return`: the moment one of these is
+   * returned on its own, the pane it was meant to share a parent with is at a different index.
+   */
+  let centre: ReactNode
   // ---------------------------------------------------------------------------
-  // The DEDICATED terminal — one screen, one pane, both layouts. Before the mobile branch because
-  // it is the SAME screen at 390px and at 1440px: a terminal that fills what it is given needs no
-  // second version, and the key strip it gets on a phone is decided by `keyStripShown`.
+  // The DEDICATED terminal — one screen, one pane, both layouts. FIRST in the chain because it is
+  // the SAME screen at 390px and at 1440px: a terminal that fills what it is given needs no second
+  // version, and the key strip it gets on a phone is decided by `keyStripShown`.
+  //
+  // ONLY THE ONE CONTROL LEAVING FULL SCREEN NEEDS TO EXIST HERE — a control removed must not take
+  // away the only way to do something, so it is worth stating what this screen does NOT offer any
+  // more and why that is still complete. It used to carry its own `Claude Code | Shell` tab
+  // switcher, on top of the panel bar the session itself already has — two controls for one
+  // question, in two vocabularies, on the one screen whose whole point is showing ONE of them at
+  // full size (owner: "ele deveria ter apenas o botao de fullscreen e de desfullscreen"). Switching
+  // panes now means going BACK to the session (this screen's own "Voltar" arrow) and picking the
+  // other one from the band's panel bar there, then pressing full screen again — one extra step, for
+  // a control this screen otherwise duplicated.
+  //
+  // ON DESKTOP THIS NOW RESPECTS THE ARTIFACTS ASIDE TOO (change #2): the terminal falls through to
+  // `centre` below instead of returning early, so whatever the right slot was independently showing
+  // (Contents, Studio, Hardware) keeps showing beside it, through the SAME `artOuter`/`rightAsideRef`
+  // composition every other layout on this page shares — no second aside implementation to agree
+  // with the first. `dedicatedRightRedundant` (above) is the one case this deliberately EXCLUDES:
+  // the right slot showing the very CLI/Shell pane this screen already fills whole would be the same
+  // terminal drawn twice, not a companion. ON MOBILE there is no room for a companion aside at all,
+  // and `artShell` would otherwise draw one as a FULL-SCREEN OVERLAY on top of the very screen this
+  // route exists to show — so mobile keeps the original early `return`, unaffected by any of this.
   // ---------------------------------------------------------------------------
   if (dedicatedTerminal && selected) {
     const back = () => navigate(sessionPath(selected.id))
-    return (
+    const dedicated = (
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8, minHeight: 44, padding: '0 10px',
@@ -1544,56 +1584,9 @@ export default function SessionsPage() {
           </div>
         </div>
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: 10 }}>
-          {/* THE TARGET SELECTOR. One screen, two panes, and neither segment may be called
-              "Terminal" — that ambiguity is exactly what phase 1 avoided by naming the shell a
-              shell. It is a ROUTE and not a state, so a reload and a shared link land on the pane
-              you were looking at. Withheld when this machine serves no shell: a segment whose only
-              outcome is a refusal is worse than no segment. */}
-          {shellEnabled && (
-            <div role="tablist" aria-label={pt ? 'Qual terminal' : 'Which terminal'} style={{
-              // RIGHT, like the band's. One control, one shape, one SIDE — a control that changes
-              // corner between the docked band and this screen is one the reader has to find again.
-              display: 'flex', gap: 4, flexShrink: 0, alignSelf: 'flex-end',
-              padding: 3, borderRadius: 8, background: 'var(--bg-elevated)',
-              border: '1px solid var(--border-subtle)',
-            }}>
-              {(['assistant', 'shell'] as const).map(target => {
-                const on = dedicatedPane === target
-                // ONE VOCABULARY. The band and this screen ask the same question, so they may not
-                // word it differently — and the CLI segment is named after the harness on the
-                // screen rather than after a concept.
-                const label = targetLabel(
-                  target === 'assistant' ? 'cli' : 'shell',
-                  selected.harness,
-                  pt ? 'pt' : 'en',
-                )
-                return (
-                  <button
-                    key={target}
-                    role="tab"
-                    aria-selected={on}
-                    onClick={() => navigate(dedicatedTerminalPath(selected.id, target), { replace: true })}
-                    style={{
-                      // 44px is the MOBILE figure; on a desktop it would turn a segmented control
-                      // into a row of buttons.
-                      minHeight: isMobile ? 44 : 26, padding: isMobile ? '0 16px' : '0 12px',
-                      borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-                      fontSize: 12, fontWeight: 650, border: 'none',
-                      background: on ? 'var(--bg-surface)' : 'transparent',
-                      color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                      boxShadow: on ? '0 1px 2px rgba(0,0,0,0.18)' : 'none',
-                    }}
-                  >
-                    {label}
-                  </button>
-                )
-              })}
-            </div>
-          )}
           {/* A link to `?pane=shell` on a machine that serves no shell must not quietly draw the
-              ASSISTANT's pane under a shell's name. The selector is absent there — a segment whose
-              only outcome is a refusal is worse than none — so the sentence is the only thing that
-              can say what happened. */}
+              ASSISTANT's pane under a shell's name. There is no selector here to say so any more
+              (see this branch's own header) — so this sentence is the only thing that can. */}
           {dedicatedPane === 'shell' && !shellEnabled && (
             <div role="status" style={{ fontSize: 11, color: 'var(--accent-red)', flexShrink: 0 }}>
               {pt
@@ -1627,14 +1620,12 @@ export default function SessionsPage() {
         </div>
       </div>
     )
-  }
-
-  /**
-   * What the pane sits beside or under. A VALUE, never a `return`: the moment one of these is
-   * returned on its own, the pane it was meant to share a parent with is at a different index.
-   */
-  let centre: ReactNode
-  if (isMobile && (creating || finishing)) {
+    // MOBILE: unchanged from before this change — its own screen, nothing else on it, no room for
+    // a companion aside. DESKTOP: falls through to `centre` so the shared split/aside composition
+    // below can add the artifacts aside beside it exactly as it does for every other layout.
+    if (isMobile) return dedicated
+    centre = dedicated
+  } else if (isMobile && (creating || finishing)) {
     // A session that is on its way owns the whole surface — before the panel case, because
     // `finishing` is the one moment BOTH are true, and before the list, which is the metrics screen
     // this replaced. One rule, both layouts: the loader is the same on a phone.

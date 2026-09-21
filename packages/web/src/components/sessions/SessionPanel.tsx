@@ -26,8 +26,10 @@ import { ChevronDown, ChevronUp } from 'lucide-react'
 import { getCentralMachine } from '../../lib/centralMachinePick'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useElementWidth } from '../../hooks/useElementWidth'
+import { useViewportWidth } from '../../hooks/useViewportWidth'
 import { resolveForViewport, rightSlotShowing, usePanelSlots } from '../../lib/panelSlots'
 import { closeArtifacts, openArtifacts, useArtifacts } from '../../lib/artifactsStore'
+import { fullscreenInsetRight, useRightAsideEdge } from '../../lib/rightAsideEdge'
 import {
   bandBarCompact, bottomBandFor, gatedBottomOccupant, panelBarEntries, resolvePanelBarPick,
   type PanelBarEntry, type PanelBarGates, type PanelBarId,
@@ -42,7 +44,10 @@ import { SessionChat, type SessionChatProps } from './SessionChat'
 import { SessionActions } from './SessionActions'
 import { SessionTitleFlag } from './SessionTitleFlag'
 import { ShellBand } from './ShellBand'
-import { BAND_MIN_PX, readBandPrefs, writeBandPrefs } from '../../lib/shellBand'
+import {
+  BAND_MIN_PX, bandPanelFull, readBandPrefs, resolveBandDrag, resolveBandHeight, withBandPanelFull,
+  writeBandPrefs,
+} from '../../lib/shellBand'
 import {
   BAND_CONTROL_H, BandResizeHandle, PanelBar, PanelFixedControls, panelMenuIconFor, useBandDrag,
   type BandOverflowEntry,
@@ -519,6 +524,15 @@ export function SessionPanel({
           // as 'cli' by the time it got here.
           bottomOccupant={slotLayout.bottom === 'cli' || slotLayout.bottom === 'shell' ? slotLayout.bottom : null}
           taskControl={taskControl}
+          // SEEDS this band's own open/collapsed state at mount and stays in sync afterward — the
+          // SAME `slotLayout.bottomOpen` / `setBottomOpen` pair `StudioBand`/`SimpleDockedBand`
+          // already take as a fully controlled `open`/`onToggleOpen`. See `ShellBand`'s own `open`
+          // prop for why this one is a seed rather than a full control, and the bug it closes: with
+          // the band open on Studio, picking Claude Code or Shell minimized it instead of switching,
+          // needing a second click — this band mounting fresh and reading the shared band-prefs
+          // record's stale `open` cold, ignoring the `bottomOpen: true` `openPanel` had just set.
+          open={slotLayout.bottomOpen}
+          onOpenChange={setBottomOpen}
           /*
            * `openSlotPanel`, deliberately NOT `moveSlotPanel` (C3's second half). The docked band's
            * own `cli`/`shell` preference (`shellBand.ts`'s `target`) is never written through
@@ -663,18 +677,22 @@ function StudioBand({
    *  own header on why. */
   const [barWidthRef, barWidth] = useElementWidth()
   const compact = bandBarCompact(barWidth)
+  // WHERE THE ARTIFACTS ASIDE SITS RIGHT NOW — a SIBLING box `SessionsPage.tsx` owns, never a
+  // descendant of this band, so full screen here must read it through the same shared bridge that
+  // component reports it through (`rightAsideEdge.ts`) rather than assume it knows nothing about
+  // one. `null` when there is no aside on screen — see `fullscreenInsetRight`'s own header.
+  const rightAsideEdge = useRightAsideEdge()
+  const viewportWidth = useViewportWidth()
+  // FULL SCREEN IS A PROPERTY OF THE PANEL, NOT OF THE SLOT — `bandPanelFull` reads only THIS
+  // panel's ('studio') own entry, so a DIFFERENT panel moved into this same bottom band afterward
+  // never inherits it. See `BandPrefs.full`'s own header in `shellBand.ts`.
   const [heightPrefs, setHeightPrefs] = useState(() => {
     const p = readBandPrefs()
-    return { height: p.height, full: p.full === true }
+    return { height: p.height, full: bandPanelFull(p, 'studio') }
   })
   const applyHeight = useCallback((next: { height: number; full: boolean }) => {
     setHeightPrefs(next)
-    // `full: false` is written by OMISSION (never as a literal `false`) — matching how
-    // `readBandPrefs` treats the two the same way, and what stops a stale `full: true` from a
-    // PREVIOUS session surviving an ordinary resize that no longer asks for it.
-    const { full: _previousFull, ...rest } = readBandPrefs()
-    void _previousFull
-    writeBandPrefs({ ...rest, height: next.height, ...(next.full ? { full: true } : {}) })
+    writeBandPrefs(withBandPanelFull({ ...readBandPrefs(), height: next.height }, 'studio', next.full))
   }, [])
   const renderedHeight = heightPrefs.full && columnHeight > 0 ? columnHeight : heightPrefs.height
   // THE DRAG — `bandControls.tsx`'s shared `useBandDrag`, the one state machine `StudioBand`,
@@ -707,8 +725,18 @@ function StudioBand({
       // leave over, and the two can never add up to more or less than the column. Gated on `open`:
       // a COLLAPSED band shows only its header row and must stay auto-sized to it, whatever `full`
       // says — the bar's own click is what set `full`, not what asks to render it this frame.
+      //
+      // FULL SCREEN STOPS SHORT OF THE ARTIFACTS ASIDE (`fullscreenInsetRight`) rather than
+      // `inset: 0` — this band is docked at the BOTTOM, so a fixed `right: 0` would paint straight
+      // over whatever the RIGHT slot is independently showing. `top`/`left`/`bottom` stay 0; only
+      // `right` follows the aside's own live edge, reactively, so minimizing it (its existing
+      // control) frees the width without this band leaving and re-entering full screen.
       ...(fullscreen
-        ? { position: 'fixed', inset: 0, zIndex: PANEL_FULLSCREEN_Z }
+        ? {
+          position: 'fixed', top: 0, left: 0, bottom: 0,
+          right: fullscreenInsetRight(rightAsideEdge, viewportWidth),
+          zIndex: PANEL_FULLSCREEN_Z,
+        }
         : open && heightPrefs.full
           ? { height: renderedHeight, flexShrink: 0 }
           : { flexShrink: 0 }),
@@ -857,19 +885,23 @@ function SimpleDockedBand({
   const pt = lang === 'pt'
   const [barWidthRef, barWidth] = useElementWidth()
   const compact = bandBarCompact(barWidth)
-  // THE SAME persisted height/full record `StudioBand`/`ShellBand` already share (`shellBand.ts`'s
+  // Same reason `StudioBand` reads these — see that component's own header on `fullscreenInsetRight`.
+  const rightAsideEdge = useRightAsideEdge()
+  const viewportWidth = useViewportWidth()
+  // THE SAME persisted height record `StudioBand`/`ShellBand` already share (`shellBand.ts`'s
   // `agentistics-shell-band` key) — one memory for "drag near the top to fill the column", however
-  // many kinds of panel a reader has parked there over time.
+  // many kinds of panel a reader has parked there over time. `full` is the ONE field that does NOT
+  // follow this — it is keyed by `panel` (`bandPanelFull`/`withBandPanelFull`), so `contents` moved
+  // into this band never reads full because `hardware` left it that way, or the reverse. See
+  // `BandPrefs.full`'s own header in `shellBand.ts`.
   const [heightPrefs, setHeightPrefs] = useState(() => {
     const p = readBandPrefs()
-    return { height: p.height, full: p.full === true }
+    return { height: p.height, full: bandPanelFull(p, panel) }
   })
   const applyHeight = useCallback((next: { height: number; full: boolean }) => {
     setHeightPrefs(next)
-    const { full: _previousFull, ...rest } = readBandPrefs()
-    void _previousFull
-    writeBandPrefs({ ...rest, height: next.height, ...(next.full ? { full: true } : {}) })
-  }, [])
+    writeBandPrefs(withBandPanelFull({ ...readBandPrefs(), height: next.height }, panel, next.full))
+  }, [panel])
   const renderedHeight = heightPrefs.full && columnHeight > 0 ? columnHeight : heightPrefs.height
   // THE DRAG — the SAME shared `useBandDrag` `StudioBand` drives its own handle through; see that
   // component's own comment for why `onFullscreen` needs no `!fullscreen` re-entry guard.
@@ -888,8 +920,14 @@ function SimpleDockedBand({
   }))
   return (
     <div style={{
+      // FULL SCREEN STOPS SHORT OF THE ARTIFACTS ASIDE — see `StudioBand`'s own comment on
+      // `fullscreenInsetRight`; the same reasoning applies here unchanged.
       ...(fullscreen
-        ? { position: 'fixed', inset: 0, zIndex: PANEL_FULLSCREEN_Z }
+        ? {
+          position: 'fixed', top: 0, left: 0, bottom: 0,
+          right: fullscreenInsetRight(rightAsideEdge, viewportWidth),
+          zIndex: PANEL_FULLSCREEN_Z,
+        }
         : open && heightPrefs.full
           ? { height: renderedHeight, flexShrink: 0 }
           : { flexShrink: 0 }),

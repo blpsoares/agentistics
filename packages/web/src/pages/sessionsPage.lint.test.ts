@@ -380,3 +380,73 @@ describe('the dedicated-terminal branch may not skip a hook (hook-order crash)',
     expect([...afterComment.matchAll(HOOK_CALL)]).toHaveLength(0)
   })
 })
+
+/**
+ * THE DEDICATED TERMINAL SCREEN CARRIES NO PANE SWITCHER — owner: "quando eu coloco o shell em
+ * fullscreen ele ainda renderiza um componente antigo que tem o tabmenu claude code e shell, ele
+ * deveria ter apenas o botao de fullscreen e de desfullscreen." The switcher duplicated the panel
+ * bar the session itself already has; removing it must not take away the only way to switch panes,
+ * so `dedicatedTerminalPath` — the one thing that could re-introduce a second picker — must not be
+ * called from inside this branch's own JSX any more, only from the OTHER surfaces that navigate
+ * INTO it (`rightSlotBar`, `SessionPanel`'s own props) — the same assumption `targetLabel`'s own
+ * remaining two call sites already carry (the right slot's Claude Code/Shell headers, untouched).
+ */
+describe('the dedicated-terminal branch carries no pane switcher of its own (I1)', () => {
+  const DEDICATED_IF = 'if (dedicatedTerminal && selected) {'
+  const NEXT_BRANCH = "} else if (isMobile && (creating || finishing)) {"
+
+  function dedicatedBody(src: string): string {
+    const start = src.indexOf(DEDICATED_IF)
+    const end = src.indexOf(NEXT_BRANCH, start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    return src.slice(start, end)
+  }
+
+  test('no role="tablist" (the removed pane switcher) inside the dedicated-terminal branch', () => {
+    expect(dedicatedBody(SRC)).not.toContain('role="tablist"')
+  })
+
+  test('the branch never navigates to itself with a different pane — that was the switcher\'s own click', () => {
+    expect(dedicatedBody(SRC)).not.toMatch(/dedicatedTerminalPath\(selected\.id, target\)/)
+  })
+
+  test('the "which terminal" label is gone with it — only the shell-unavailable sentence remains', () => {
+    expect(dedicatedBody(SRC)).not.toMatch(/Qual terminal|Which terminal/)
+  })
+
+  test('the shell-unavailable sentence survives the removal — it is not a switcher row', () => {
+    expect(dedicatedBody(SRC)).toContain("dedicatedPane === 'shell' && !shellEnabled")
+  })
+
+  test('the scan still sees the switcher reintroduced', () => {
+    const planted = `${SRC.slice(0, SRC.indexOf(DEDICATED_IF))}${DEDICATED_IF}\n    <div role="tablist">x</div>\n${SRC.slice(SRC.indexOf(DEDICATED_IF) + DEDICATED_IF.length)}`
+    expect(dedicatedBody(planted)).toContain('role="tablist"')
+  })
+})
+
+/**
+ * ON DESKTOP THE DEDICATED TERMINAL RESPECTS THE ARTIFACTS ASIDE (change #2) — it falls through to
+ * `centre` instead of returning unconditionally, so the shared split/aside composition below can
+ * add the aside beside it. `dedicatedRightRedundant` is the one thing that composition must NOT
+ * show: the very CLI/Shell pane this screen already fills whole, drawn a second time in the aside.
+ */
+describe('the dedicated-terminal branch falls through to centre on desktop (I2)', () => {
+  test('mobile still returns directly — no room for a companion aside', () => {
+    expect(has('if (isMobile) return dedicated')).toBe(true)
+  })
+
+  test('desktop assigns centre instead of returning', () => {
+    expect(has('centre = dedicated')).toBe(true)
+  })
+
+  test('the redundant-pane guard exists and feeds the aside\'s own open condition', () => {
+    expect(has('const dedicatedRightRedundant = dedicatedTerminal')).toBe(true)
+    expect(has('&& !dedicatedRightRedundant,')).toBe(true)
+  })
+
+  test('the scan still sees an unconditional return reintroduced', () => {
+    const reverted = SRC.replace('if (isMobile) return dedicated\n    centre = dedicated', 'return dedicated')
+    expect(reverted.includes('if (isMobile) return dedicated')).toBe(false)
+  })
+})
