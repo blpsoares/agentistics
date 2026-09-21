@@ -31,6 +31,10 @@ Every dispatched session records `model`, `modelSelectionReason`, and — for Op
 `approvalRequired`, `approvedBy`, `approvalAt`. **Opus is never the default**, and "it is better" is
 not a reason.
 
+**The table is read at the ITEM level, not only at the session level** (§3.1). A session whose items
+differ in difficulty hands each item the model that item earns — the same table, applied one level
+down, which is where the work actually is.
+
 ## 3. What a session carries BEFORE dispatch
 
 Non-negotiable, because a session that has to rediscover its own brief is a session that will drift:
@@ -43,7 +47,58 @@ the files it may touch, and the ones it must not
 acceptance criteria, copied from the Task
 constraints (no commit without approval · worktree · tests must pass)
 expected result (what "done" looks like, concretely)
+the ITEMS it is to fan out, and the model each one gets (§3.1)
 ```
+
+## 3.1 A dispatched session is an ORCHESTRATOR, not a worker
+
+**Owner's rule, stated 2026-09-21:** every dedicated session opened to do this work **runs its
+items with subagents**, and the model is **weighed per item** — by the item's own complexity, and
+by the group it sits in.
+
+So a session's prompt does not say "implement A1.3". It says: here are the three items of A1.3,
+here is the model each one gets and why, fan them out, then integrate, run the tests and hand back.
+The session's own context is spent on the BRIEF, the INTEGRATION and the HANDBACK — never on being
+the third pair of hands.
+
+Why this is a rule and not a preference, in this project specifically:
+
+- **The group level already assumes it.** A group is ONE session by definition (§1), so a group
+  with three items and no fan-out is three items done serially in one context window — which is
+  the shape that runs out of context in the middle of the third and hands back the first two
+  undescribed.
+- **The items of one group are usually independent by construction.** A1.3 is (a) DDL + open,
+  (b) append/read, (c) the tests; A2.5 is one field family per subagent. Fanning them out is not a
+  performance trick, it is what makes the failure of one item legible as the failure of that item.
+- **A model chosen per SESSION over-pays for most of what the session does.** A Sonnet session whose
+  fixtures and capability-table transcription are Haiku items pays Sonnet for the Haiku work; the
+  weighing has to happen where the work is, which is the item.
+
+### The contract each dispatched session is held to
+
+1. **Fan the items out.** One subagent per item, in parallel where the items do not depend on each
+   other, and never one subagent for the whole subtask (that is just a second session with a worse
+   handback).
+2. **State the model per item, with its reason**, using §2's table. The reason is recorded on the
+   item, not implied by the session's own model.
+3. **The session's own model is the INTEGRATION's model** — it reads the returns, resolves the
+   disagreements between them and writes the handback. It is Sonnet by default; it is never chosen
+   to be "as strong as the hardest item", because the hardest item has its own subagent.
+4. **Opus is per ITEM and still needs explicit approval** (§2). A session may not promote an item to
+   Opus on its own authority, and "the group is hard" is not a reason for the group — it is an
+   argument about one item.
+5. **A subagent's return is evidence or it is nothing.** Each item comes back with what it changed,
+   what it ran, and what it could not verify. The session may not launder an item's uncertainty
+   into its own confident summary — §5's rule, applied one level down.
+6. **The session integrates; the subagents do not commit.** One diff per subtask, staged by explicit
+   path, reviewed by the session before it is offered for approval.
+
+### What this changes in the filing
+
+Every `stagedSession` draft in this project therefore carries an ITEM LIST — the pieces to fan out,
+with a model and a one-line reason each — and not only the subtask's prompt. A draft that names no
+items is a draft that has not been thought through: either the work really is one item (say so, and
+the session runs it as one subagent plus its own integration) or the items exist and are missing.
 
 ## 4. The breakdown — Track A first phases
 
@@ -92,13 +147,35 @@ expected result (what "done" looks like, concretely)
    report that only lists successes is a report that hides the next defect.
 6. **Evidence closes a criterion**: tests, a benchmark, a screenshot, a parity row — attached to the
    task, not pasted into a chat.
+7. **Fan the items out and weigh the model per item** (§3.1). The session integrates; it does not
+   do the items itself.
+8. **A subagent's uncertainty survives the integration.** What an item could not verify is named in
+   the handback as unverified, attributed to that item.
 
-## 6. What is still undecided and blocks filing
+## 6. How the board is filled — waves, and a coordinator
 
-- **The bootstrap question** (owner's decision): work with the board as it is — session created
-  first, attached second, prompt living outside the board — or make the ALM's own upgrade
-  (prepared sessions, dispatch, acceptance criteria) the first Task, so that every later subtask is
-  tracked the way this document describes.
+**Owner's decisions, 2026-09-21:**
+
+- **Filing is BY WAVE, not all at once.** A subtask's prompt is written after the decisions that
+  shape it are answered, so filing B1 today would mean writing a prompt against an unanswered D3.
+  The cost is that the board never shows the whole project at once; the benefit is that no draft is
+  a guess. **The rule that comes with it**: a wave is filed complete — every subtask of it born
+  with its `stagedSession` — so "no subtask without a session" holds at every moment, not only at
+  the end.
+- **A COORDINATOR session, attached to the mother Task.** It holds the waves, writes the drafts,
+  dispatches and reads the handbacks. Its rules: it writes no product code; everything it knows
+  lives on the board, so a replacement session resumes from the board and not from its context; it
+  never fires a draft whose blocking decision is unanswered; it never approves an Opus item and
+  never opens a PR; its model is Sonnet; and it is attached to the mother Task so the coordination
+  cost is separable from the execution cost.
+
+**The bootstrap question has dissolved.** `Subtask.stagedSession` shipped on 2026-09-18 (`38e62538`),
+so a subtask is born holding a dormant prepared draft rather than empty — which is exactly the
+"no subtask without a session" rule, enforced by the board instead of by discipline. What is still
+missing from a draft is content, not structure (§3 and §3.1 say what).
+
+## 7. What is still undecided and blocks a wave
+
 - The §50 decisions that gate A1 (D1 vocabulary, D2 storage) and B1 (D3 base, D4 ingestion).
 - The B3 catalogue's own three (sandbox timing, git as a tool, browser placement) — B3 is not filed
-  until the research wave lands.
+  until those are answered.
