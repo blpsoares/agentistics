@@ -847,6 +847,12 @@ export async function attachSession(
  * The row keeps existing and keeps its history — only the attribution goes. `patchSession` writes
  * fields rather than clearing them, so the empty strings here are what "no longer filed" looks like
  * on this record; `rowsOfTask` matches on a non-empty id or name, so an empty one belongs to no task.
+ *
+ * **The empty `taskId` is also read as a STATEMENT** by `conversationOwners` (task-conversations.ts):
+ * it is the only thing that tells "the person took this conversation off its task" from "a reopen
+ * that did not carry the filing" (`taskId` ABSENT). Writing `undefined`/deleting the key here would
+ * make a detach fall back to an older row still filed on another task, so the conversation would
+ * come back to it. Keep writing `''`.
  */
 export async function detachSession(sessionId: string): Promise<boolean> {
   const { patchSession } = await import('./registry')

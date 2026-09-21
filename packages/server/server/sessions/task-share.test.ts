@@ -29,6 +29,19 @@ const inputs = (over: Partial<ShareInputs> = {}): ShareInputs => ({
 })
 
 describe('selectSharedTasks', () => {
+  it('sends a conversation under ONE delivery only, the one it was last filed on', () => {
+    // Filing is a move written on one row: the older row still names t1. Both deliveries used to
+    // ship the conversation, and the central then priced it under each.
+    const out = selectSharedTasks(inputs({
+      tasks: [task({ id: 't1', shared: true }), task({ id: 't2', title: 'other', shared: true })],
+      rows: [
+        row({ id: 'r-old', taskId: 't1', createdAt: '2026-09-05T09:00:00.000Z' }),
+        row({ id: 'r-new', taskId: 't2', createdAt: '2026-09-05T11:00:00.000Z' }),
+      ],
+    }))
+    expect(out.map(s => [s.task.id, s.sessionIds])).toEqual([['t1', []], ['t2', ['c1']]])
+  })
+
   it('sends nothing when nobody said to share', () => {
     // Absent reads as NOT shared — the `chat-gate.ts` rule, never the `shareMode` one.
     expect(selectSharedTasks(inputs({ tasks: [task()] }))).toEqual([])

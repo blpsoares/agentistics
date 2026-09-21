@@ -18,7 +18,7 @@ import { sessionTokens } from '@agentistics/core'
 import { isClosed, type Task } from './task-model'
 import type { Bucket } from './task-stats'
 import type { ManagedSession } from './types'
-import { distinctConversations } from './task-conversations'
+import { conversationOwners, distinctConversations } from './task-conversations'
 import { rowsOfTask } from './task-report'
 
 /**
@@ -146,6 +146,11 @@ export function buildBoardOverview(o: {
   let totalTokens: number | null = null
   const days = new Map<string, DayCounts>()
 
+  // WHICH TASK OWNS EACH CONVERSATION, decided once over the whole registry. `rowsOfTask` keeps a
+  // conversation for its owner only, so two tasks can no longer both price the same one — the sum
+  // below is a sum over DISTINCT conversations, which is what a headline total has to be.
+  const owners = conversationOwners(o.rows)
+
   for (const task of o.tasks) {
     statusCounts[task.status] = (statusCounts[task.status] ?? 0) + 1
 
@@ -157,7 +162,7 @@ export function buildBoardOverview(o: {
     // Six rows of one reopened conversation put its tokens and its cost into the headline six
     // times: measured on a live board, the overview read 13.110.140.051 tokens where the
     // deliveries under it summed to 2.493.697.631.
-    const mine = distinctConversations(rowsOfTask(task, o.rows))
+    const mine = distinctConversations(rowsOfTask(task, o.rows, owners))
     totalSessions += mine.length
     sessionsPer.push(mine.length)
 
