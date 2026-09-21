@@ -40,7 +40,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { asideCache, asideKey } from '../../lib/asideCache'
 import { focusMissNotice, isFocusedRow, rowsCarry, ROW_FLASH } from '../../lib/noteFocus'
-import { Bot, Brain, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Eye, FileEdit, Loader, PanelRightClose, Pencil, Plug, Plus, Send, Sparkles, Terminal, Trash2, Workflow } from 'lucide-react'
+import { BarChart3, Bot, Brain, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Eye, FileEdit, Loader, PanelRightClose, Pencil, Plug, Plus, Send, Sparkles, Terminal, Trash2, Workflow } from 'lucide-react'
 import { artifactShortfall, type Artifact } from '../../lib/sessionArtifacts'
 import {
   countSkills, groupSkills, shortName, skillInvocation, type SkillEntry,
@@ -720,13 +720,16 @@ export function ArtifactsAside({
         : 'Reading this conversation’s subagents… this opens each one’s transcript.'} />
     }
     // FOUR SENTENCES, and never one shared empty box: the harness cannot report them, the read
-    // failed, this conversation ran none, or here they are.
+    // failed, this conversation ran/branched none, or here they are. The EMPTY sentence is the one
+    // place `agentKind` still matters once forks got their own rail panel: a fork is not something
+    // that was DELEGATED (module header: "nothing dispatched it, it is claimed by no tool_use"), so
+    // reusing the subagent wording on an empty Forks panel would misname what is missing.
     if (st.phase === 'unsupported') return <Note icon={<Bot size={16} />} text={st.message} />
     if (st.phase === 'failed') return <Note text={st.message} />
     if (st.rows.length === 0) {
-      return <Note icon={<Bot size={16} />} text={pt
-        ? 'Esta conversa não delegou nada a um subagente.'
-        : 'This conversation has not delegated anything to a subagent.'} />
+      return <Note icon={<Bot size={16} />} text={agentKind === 'fork'
+        ? (pt ? 'Nenhuma conversa foi ramificada a partir desta.' : 'No conversation has been forked from this one.')
+        : (pt ? 'Esta conversa não delegou nada a um subagente.' : 'This conversation has not delegated anything to a subagent.')} />
     }
     return (
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: '6px 6px 10px' }}>
@@ -1270,6 +1273,15 @@ export function ArtifactsAside({
           ) : tab === 'metrics' && metrics ? metricsBody()
             /* Like the tasks tab, and for the same reason: these figures come from the STORE, not
                from the transcript, so a conversation this panel cannot READ still has metrics. */
+            /* THE STORE HAS NO RECORD OF THIS CONVERSATION — post-rail, the Métricas panel is
+               reachable from the rail for EVERY session, not only the ones the old strip entry used
+               to hide it for (`ArtifactsAsideProps.metrics`'s own doc comment: "ABSENT means the
+               store has no record of this conversation yet, and then there is NO TAB"). There is
+               still a tab now — the rail put one there — so the panel has to say WHY it has nothing,
+               rather than the blank region a reader got here before this branch existed. */
+            : tab === 'metrics' ? <Note icon={<BarChart3 size={16} />} text={pt
+              ? 'O banco ainda não tem registro desta conversa — as métricas aparecem depois que a sessão termina de ser processada.'
+              : 'The store has no record of this conversation yet — metrics appear once the session has finished being processed.'} />
             /* THE REFUSAL outranks every remaining tab: there is no feed, gallery or list to be
                empty when the conversation cannot be read at all. */
             : unavailable ? <Note text={unavailable} />
@@ -1281,10 +1293,10 @@ export function ArtifactsAside({
             : tab === 'mcps' ? mcpBody()
             : tab === 'prs' ? prsBody()
             /* UNREACHABLE, and deliberately `null` rather than an invented sentence. Every `TabId`
-               above has an arm; the two that carry a condition (`tasks` needs a session, `metrics`
-               needs a record) are exactly the two whose strip entry is gated on the same fact, and
-               `tabRequest` is gated on it too — so there is no way to select one of them without the
-               data. A sentence here would be copy nobody can ever read. */
+               above now has a real arm — `tasks` alone still carries a condition (it needs a
+               `session` prop, which every caller in this codebase always supplies), so this is a
+               defensive floor rather than a reachable gap. A sentence here would be copy nobody can
+               ever read. */
             : null}
           </div>
         </>
