@@ -155,21 +155,36 @@ describe('the fullscreen overlay respects the artifacts aside (I2)', () => {
     expect(SRC).not.toMatch(/position: 'fixed', inset: 0/)
   })
 
-  test('both bands compute their right inset through `fullscreenInsetRight`', () => {
-    expect([...SRC.matchAll(/right: fullscreenInsetRight\(rightAsideEdge, viewportWidth\)/g)]).toHaveLength(2)
+  test('both bands compute their right inset through `fullscreenInsetRight`, respecting the rail too', () => {
+    // A third argument joined this call in the right-icon-rail pass (`RAIL_WIDTH_PX` on desktop, 0
+    // on a phone) — spec §2, "full screen respects the rail" — so both bands must ALSO stop short
+    // of the rail even when the aside itself shows nothing.
+    expect([...SRC.matchAll(/right: fullscreenInsetRight\(rightAsideEdge, viewportWidth, isMobile \? 0 : RAIL_WIDTH_PX\)/g)]).toHaveLength(2)
   })
 
-  test('both bands read the aside\'s live edge and the viewport width reactively', () => {
+  test('both bands read the aside\'s live edge, the viewport width, and whether the rail exists here, reactively', () => {
     expect([...SRC.matchAll(/const rightAsideEdge = useRightAsideEdge\(\)/g)]).toHaveLength(2)
     expect([...SRC.matchAll(/const viewportWidth = useViewportWidth\(\)/g)]).toHaveLength(2)
+    // `StudioBand` reads `isMobile` once for itself; `SimpleDockedBand` does too — plus the one
+    // `SessionPanel` itself already reads for `resolveForViewport`, three in total.
+    expect([...SRC.matchAll(/const isMobile = useIsMobile\(\)/g)]).toHaveLength(3)
   })
 
   test('the scan still sees `inset: 0` reintroduced on a fullscreen branch', () => {
     const planted = SRC.replace(
-      "position: 'fixed', top: 0, left: 0, bottom: 0,\n          right: fullscreenInsetRight(rightAsideEdge, viewportWidth),\n          zIndex: PANEL_FULLSCREEN_Z,",
+      "position: 'fixed', top: 0, left: 0, bottom: 0,\n          right: fullscreenInsetRight(rightAsideEdge, viewportWidth, isMobile ? 0 : RAIL_WIDTH_PX),\n          zIndex: PANEL_FULLSCREEN_Z,",
       "position: 'fixed', inset: 0, zIndex: PANEL_FULLSCREEN_Z,",
     )
     expect(planted).toMatch(/position: 'fixed', inset: 0/)
+  })
+
+  test('the scan still sees the rail-width argument dropped, silently uncovering it when the aside is empty', () => {
+    const planted = SRC.replace(
+      /right: fullscreenInsetRight\(rightAsideEdge, viewportWidth, isMobile \? 0 : RAIL_WIDTH_PX\)/g,
+      'right: fullscreenInsetRight(rightAsideEdge, viewportWidth)',
+    )
+    expect([...planted.matchAll(/right: fullscreenInsetRight\(rightAsideEdge, viewportWidth, isMobile \? 0 : RAIL_WIDTH_PX\)/g)])
+      .toHaveLength(0)
   })
 })
 

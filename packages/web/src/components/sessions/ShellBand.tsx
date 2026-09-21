@@ -838,7 +838,7 @@ export function ShellBand({
    * rather than opening onto rows about a pane the reader cannot currently see.
    */
   const moveEntry = panelMenuEntries({
-    panel: target, slot: 'bottom', lang, panelName: targetLabel(target, harness, lang),
+    panel: target, placement: 'bottom', lang, panelName: targetLabel(target, harness, lang),
   }).find(e => e.id === 'move-right')
   const gearEntries: BandOverflowEntry[] = [
     ...(prefs.open && onMoveToRight && moveEntry ? [{

@@ -27,9 +27,11 @@ import { getCentralMachine } from '../../lib/centralMachinePick'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useElementWidth } from '../../hooks/useElementWidth'
 import { useViewportWidth } from '../../hooks/useViewportWidth'
-import { resolveForViewport, rightSlotShowing, usePanelSlots } from '../../lib/panelSlots'
-import { closeArtifacts, openArtifacts, useArtifacts } from '../../lib/artifactsStore'
-import { fullscreenInsetRight, useRightAsideEdge } from '../../lib/rightAsideEdge'
+import {
+  bottomPanels, resolveForViewport, usePanelSlots, type PanelId,
+} from '../../lib/panelSlots'
+import { panelTitle } from '../../lib/panelMeta'
+import { RAIL_WIDTH_PX, fullscreenInsetRight, useRightAsideEdge } from '../../lib/rightAsideEdge'
 import {
   bandBarCompact, bottomBandFor, gatedBottomOccupant, panelBarEntries, resolvePanelBarPick,
   type PanelBarEntry, type PanelBarGates, type PanelBarId,
@@ -163,19 +165,19 @@ export interface SessionPanelProps {
   studioFullscreen?: boolean
   onStudioFullscreenChange?: (next: boolean) => void
   /**
-   * CONTENTS/HARDWARE, DOCKED AT THE BOTTOM (owner, 2026-09-19). This component holds no Monaco-
-   * style buffer for either — a plain remount is safe (`panelMenu.ts`'s own `panelMinimizeAction`
-   * already says so for the right slot's `close-right`) — so, unlike the Studio, there is no
-   * persistent host to re-parent: the CALLER's own already-built element (`SessionsPage`'s
-   * `artifactsPane`/`hardwarePaneEl`, the SAME ones the right slot renders) is simply mounted here
-   * instead, through `SimpleDockedBand`'s own `children`.
+   * ANY PANEL OTHER THAN STUDIO/CLI/SHELL, DOCKED AT THE BOTTOM — one of the ten former Contents
+   * tabs, or `hardware`. This component holds no Monaco-style buffer for any of them — a plain
+   * remount is safe (`panelMenu.ts`'s own `panelMinimizeAction` already says so for the rail's
+   * `close-right`) — so, unlike the Studio, there is no persistent host to re-parent: the CALLER's
+   * own already-built element for WHICHEVER id is currently docked (`SessionsPage`'s `panelBody`,
+   * the SAME function the right slot calls) is simply mounted here instead, through
+   * `SimpleDockedBand`'s own `children`. ONE fullscreen flag serves all of them — only one such
+   * panel is ever docked at a time (a panel sits in at most one placement), so there is nothing to
+   * disambiguate.
    */
-  contentsPane?: ReactNode
-  contentsFullscreen?: boolean
-  onContentsFullscreenChange?: (next: boolean) => void
-  hardwarePane?: ReactNode
-  hardwareFullscreen?: boolean
-  onHardwareFullscreenChange?: (next: boolean) => void
+  bottomTabPane?: ReactNode
+  bottomTabFullscreen?: boolean
+  onBottomTabFullscreenChange?: (next: boolean) => void
 }
 
 export function SessionPanel({
@@ -183,8 +185,7 @@ export function SessionPanel({
   onArtifacts, shellEnabled, shellCapable, onShellEnabledChange, editorEnabled, onOpenTerminal,
   onOpenShellFullscreen, onStudioBandRef, hardwareOffered, studioSeen = true, onTaskLinked,
   studioFullscreen, onStudioFullscreenChange,
-  contentsPane, contentsFullscreen, onContentsFullscreenChange,
-  hardwarePane, hardwareFullscreen, onHardwareFullscreenChange,
+  bottomTabPane, bottomTabFullscreen, onBottomTabFullscreenChange,
 }: SessionPanelProps) {
   /**
    * Is this a session of ANOTHER machine, reached through the relay?
@@ -229,27 +230,31 @@ export function SessionPanel({
    */
   const isMobile = useIsMobile()
   const {
-    layout: rawSlotLayout, openPanel: openSlotPanel, closePanel: closeSlotPanel,
-    movePanel: moveSlotPanel, setBottomOpen, setRightOpen,
+    layout: rawSlotLayout, openPanel: openSlotPanel, movePanel: moveSlotPanel, setBottomOpen,
   } = usePanelSlots()
   const slotLayout = resolveForViewport(rawSlotLayout, isMobile)
   /**
-   * WHICH OF THE THREE DESKTOP-ONLY PANELS GENUINELY OCCUPIES THE BOTTOM SLOT RIGHT NOW —
-   * `lib/panelBar.ts`'s `bottomBandFor` own input, generalized 2026-09-19 from `studio` alone to
-   * also carry `contents`/`hardware` (`panelSlots.ts`'s `BOTTOM_PANELS`, same date). `isMobile` is
-   * never re-checked here for `contents`/`hardware`: `resolveForViewport` already clears a
-   * desktop-only bottom occupant before this line runs, so `slotLayout.bottom` can only ever be one
-   * of them on a genuine desktop viewport.
+   * WHICH PANEL GENUINELY OCCUPIES THE BOTTOM SLOT RIGHT NOW, EXCLUDING `cli`/`shell` — those two
+   * are `ShellBand`'s own concern (it chooses between them internally via its own `target`); every
+   * OTHER panel that can dock at the bottom (the ten former Contents tabs, `studio`, `hardware`)
+   * renders through the generic path below, DESKTOP ONLY.
    *
-   * Named `bottomDesktopPanel`, NOT `bottomOccupant` — that name is already `gatedBottomOccupant`'s
-   * own result below, which answers a different question (what does the PANEL BAR light) over a
-   * different domain (any of the five ids, gated only by the shell switch).
+   * `isMobile` IS RE-CHECKED HERE, EXPLICITLY — `resolveForViewport` clears a desktop-only bottom
+   * occupant only when nothing is ALREADY on `right` (see that function's own header on why: it must
+   * not keep re-folding `bottom` over a panel the mobile switcher just picked). That guard is correct
+   * for `SessionsPage.tsx`'s own full-screen sheet, and wrong read from here: this component has no
+   * such sheet, and a phone has no docked band for anything but the session's own terminal panes,
+   * full stop — regardless of what `right` currently holds. Skipping this check let a genuine second
+   * band (`Studio | Claude Code | Shell`) render UNDERNEATH the sheet on mobile the moment `right`
+   * was no longer `null`, found live right after fixing the switcher's own stuck-panel bug.
+   *
+   * Named `bottomDesktopPanel`, NOT `bottomOccupant` — that name is `gatedBottomOccupant`'s own
+   * result below, which answers a different question (what does the PANEL BAR light).
    */
-  const bottomDesktopPanel: 'studio' | 'contents' | 'hardware' | null =
-    slotLayout.bottom === 'studio' ? (editorEnabled === true ? 'studio' : null)
-    : slotLayout.bottom === 'contents' ? 'contents'
-    : slotLayout.bottom === 'hardware' ? 'hardware'
-    : null
+  const bottomDesktopPanel: Exclude<PanelId, 'cli' | 'shell'> | null =
+    isMobile || slotLayout.bottom === null || slotLayout.bottom === 'cli' || slotLayout.bottom === 'shell' ? null
+    : slotLayout.bottom === 'studio' ? (editorEnabled === true ? 'studio' : null)
+    : slotLayout.bottom
 
   /** WHICH BAND RENDERS AT THE FOOT OF THE PANEL — `lib/panelBar.ts`'s own `bottomBandFor`. Kept
    *  here as one small pure call rather than as a JSX ternary so the decision can be planted and
@@ -257,69 +262,36 @@ export function SessionPanel({
   const bottomBand = bottomBandFor({ bottomOccupant: bottomDesktopPanel, relayed, isMobile })
 
   /**
-   * THE ONE PANEL BAR (design item 1) — computed here, where `slotLayout`/`artifactsStore`/`relayed`
-   * are all already in scope, and handed down as data + one callback to whichever bottom band
-   * actually renders it (`ShellBand`'s desktop bar, `StudioBand`'s bar, the new Contents/Hardware
-   * bottom bands, or the no-terminal fallback band below) — so none of them can draw a different bar
-   * for the same session.
-   *
-   * `contents` keeps going through the OLD `artifactsStore` (`openArtifacts`/`closeArtifacts`),
-   * deliberately — see `panelSlots.ts`'s own header on why `contents` carries no field of its own
-   * there. Every other entry goes through `panelSlots` directly.
-   *
-   * A TAB NEVER CLOSES ANYTHING ANY MORE (owner, 2026-09-19 — see `onPanelBarPick`'s own doc
-   * comment for the fix and why it replaced the old toggle reading). LIT BECAUSE A PANEL IS THE
-   * BOTTOM BAND'S OWN OCCUPANT restores it from collapsed if needed and is otherwise a no-op —
-   * there is nothing to close FROM in that reading, since the band itself decides what it shows.
+   * THE BOTTOM BAND'S OWN TAB STRIP (`lib/panelBar.ts`) — computed here, where `slotLayout`/
+   * `relayed` are all already in scope, and handed down as data + one callback to whichever bottom
+   * band actually renders it. AFTER THE RIGHT ICON RAIL it is scoped to the panels PLACED AT THE
+   * BOTTOM (`bottomPanels(slotLayout)`) — every panel now goes through `panelSlots` directly; there
+   * is no `contents` special case left to carve out.
    */
-  const art = useArtifacts()
-  const rightOccupant = rightSlotShowing(slotLayout, art.open)
   const panelBarGates: PanelBarGates = {
     editorEnabled: editorEnabled === true,
     shellEnabled: shellEnabled === true,
     relayed,
     hardwareOffered: hardwareOffered === true,
   }
+  const bottomIds = bottomPanels(slotLayout)
   // GATED — a stale `bottom: 'shell'` left over from before the switch turned off reads as `'cli'`
   // here too, or the bar would light no tab at all over a pane `ShellBand` draws anyway (its own
   // `target` is clamped the same way independently). See `gatedBottomOccupant`'s own doc comment.
   const bottomOccupant = gatedBottomOccupant(slotLayout.bottom, panelBarGates.shellEnabled)
-  const barEntries = panelBarEntries(rightOccupant, bottomOccupant, panelBarGates)
+  const barEntries = panelBarEntries(bottomIds, bottomOccupant, panelBarGates)
   /**
-   * ONE MENU NEVER NAMES A PANEL OTHER THAN ITS OWN (owner, 2026-09-19 — "movi o studio pra direita,
-   * mas ao clicar na engrenagem nao aparecem as opcoes corretas de mover"). Before this, whichever
-   * band happened to be docked at the bottom offered a `moveDownEntries` row NAMING WHATEVER PANEL
-   * SAT ON THE RIGHT — so a reader looking at the Shell's own "⋯" could find "Trazer o Studio para
-   * baixo" in it, a verb about a panel that menu had nothing to do with. That panel already has its
-   * OWN menu wherever it is actually drawn (the right slot's own header, below, or its own gear for
-   * the Studio) offering exactly this move through `panelMenuEntries` — there is nothing left for
-   * the CURRENTLY DOCKED band's menu to say about a DIFFERENT panel, so it says nothing.
-   *
-   * A TAB CLICK SELECTS, IT NEVER TOGGLES — `lib/panelBar.ts`'s own `resolvePanelBarPick`, a PURE
-   * function extracted from what used to be three hand-written copies of this exact rule here (one
-   * for `studio`, one for `contents`, one shared branch for `hardware`/`cli`/`shell`). See that
-   * function's own header for the fix and the three answers it can give; this only wires each
-   * answer to the right side effect, one panel at a time — `contents` alone goes through the legacy
-   * `artifactsStore` (`panelSlots.ts`'s own header explains why), and `rightOpen` is passed `true`
-   * for every panel but `studio` since none of the other four ever parks in the right slot with its
-   * content released (`panelMinimizeAction`'s `close-right` removes it from `rightOccupant`
-   * entirely instead) — `'restore-right'` is consequently unreachable for them, which is correct.
+   * A TAB CLICK SELECTS, IT NEVER TOGGLES — `lib/panelBar.ts`'s own `resolvePanelBarPick`. This bar
+   * only ever lists bottom-placed panels now, so there is exactly one destination for a pick that is
+   * not already the visible active tab: open it there.
    */
   const onPanelBarPick = useCallback((id: PanelBarId) => {
-    const rightOpen = id === 'studio' ? slotLayout.rightOpen : true
-    const action = resolvePanelBarPick({
-      id, rightOccupant, bottomOccupant, rightOpen, bottomOpen: slotLayout.bottomOpen,
-    })
+    const action = resolvePanelBarPick({ id, activeBottom: bottomOccupant, bottomOpen: slotLayout.bottomOpen })
     if (action.kind === 'noop') return
-    if (action.kind === 'restore-right') { setRightOpen(true); return }
-    if (action.kind === 'restore-bottom') { setBottomOpen(true); return }
+    if (action.kind === 'restore') { setBottomOpen(true); return }
     // action.kind === 'open'
-    if (id === 'contents') openArtifacts()
-    else openSlotPanel(id)
-  }, [
-    rightOccupant, bottomOccupant, slotLayout.rightOpen, slotLayout.bottomOpen,
-    openSlotPanel, setRightOpen, setBottomOpen,
-  ])
+    openSlotPanel(id)
+  }, [bottomOccupant, slotLayout.bottomOpen, openSlotPanel, setBottomOpen])
 
   const taskControl = (
     <SessionTitleFlag
@@ -534,61 +506,39 @@ export function SessionPanel({
           open={slotLayout.bottomOpen}
           onOpenChange={setBottomOpen}
           /*
-           * `openSlotPanel`, deliberately NOT `moveSlotPanel` (C3's second half). The docked band's
-           * own `cli`/`shell` preference (`shellBand.ts`'s `target`) is never written through
-           * `panelSlots` except on an explicit tab click, so on a fresh session (or before the first
-           * click) `slotLayout.bottom` had never recorded what this band was already showing —
-           * `movePanel` refuses when its panel is not shown in EITHER slot, so "move to the right"
-           * was a silent no-op the very first time. `openPanel` places it regardless of whether
-           * `panelSlots` had ever heard of it there, which is exactly right: what the band is
-           * showing right now IS what the person means to move.
+           * `moveSlotPanel(id, 'rail')` — a genuine placement change, not merely an open. The docked
+           * band's own `cli`/`shell` preference (`shellBand.ts`'s `target`) is never written through
+           * `panelSlots` except on an explicit tab click, so on a fresh session `slotLayout.bottom`
+           * may never have recorded what this band was already showing; `movePanel` no longer
+           * refuses for that reason (it always sets placement AND opens, regardless of prior
+           * visibility — see `panelSlots.ts`'s own header), so what the band shows right now is
+           * always exactly what moves.
            */
-          onMoveToRight={id => openSlotPanel(id, 'right')}
+          onMoveToRight={id => moveSlotPanel(id, 'rail')}
         />
-      ) : bottomBand === 'contents' ? (
+      ) : bottomBand !== 'bar-only' && bottomBand !== 'none' ? (
+        /* ANY OTHER PANEL DOCKED AT THE BOTTOM — one of the ten former Contents tabs, or hardware.
+           ONE generalized band for all of them (widened from the pre-rail `'contents'`/`'hardware'`
+           pair) — none holds client-only state a remount could lose, so a single `SimpleDockedBand`
+           keyed by the panel id itself covers every one of them. */
         <SimpleDockedBand
           key={session.id}
-          panel="contents"
-          panelName={pt ? 'Conteúdo' : 'Contents'}
+          panel={bottomBand}
+          panelName={panelTitle(bottomBand, pt)}
           lang={lang}
           open={slotLayout.bottomOpen}
           columnHeight={columnHeight}
           onToggleOpen={() => setBottomOpen(!slotLayout.bottomOpen)}
-          // `closeSlotPanel('contents')` FIRST — Contents at the bottom is tracked through
-          // `panelSlots` (`slotLayout.bottom`), but at the right it is still tracked through the
-          // legacy `artifactsStore` flag alone (`panelSlots.ts`'s own header). `openArtifacts()`
-          // never clears `slotLayout.bottom`, so skipping this would leave BOTH stores claiming
-          // Contents — lit in the bar twice, for two different slots at once.
-          onMoveToRight={() => { closeSlotPanel('contents'); openArtifacts() }}
+          onMoveToRight={() => moveSlotPanel(bottomBand, 'rail')}
           barEntries={barEntries}
           onBarPick={onPanelBarPick}
           studioSeen={studioSeen}
           taskControl={taskControl}
-          fullscreen={contentsFullscreen === true}
-          onFullscreenChange={onContentsFullscreenChange ?? (() => {})}
+          fullscreen={bottomTabFullscreen === true}
+          onFullscreenChange={onBottomTabFullscreenChange ?? (() => {})}
           {...(session.harness ? { harness: session.harness } : {})}
         >
-          {contentsPane}
-        </SimpleDockedBand>
-      ) : bottomBand === 'hardware' ? (
-        <SimpleDockedBand
-          key={session.id}
-          panel="hardware"
-          panelName={pt ? 'Hardware' : 'Hardware'}
-          lang={lang}
-          open={slotLayout.bottomOpen}
-          columnHeight={columnHeight}
-          onToggleOpen={() => setBottomOpen(!slotLayout.bottomOpen)}
-          onMoveToRight={() => openSlotPanel('hardware', 'right')}
-          barEntries={barEntries}
-          onBarPick={onPanelBarPick}
-          studioSeen={studioSeen}
-          taskControl={taskControl}
-          fullscreen={hardwareFullscreen === true}
-          onFullscreenChange={onHardwareFullscreenChange ?? (() => {})}
-          {...(session.harness ? { harness: session.harness } : {})}
-        >
-          {hardwarePane}
+          {bottomTabPane}
         </SimpleDockedBand>
       ) : bottomBand === 'bar-only' && (
         /* THE ONLY CASE LEFT (design item 1: "It must also be present when no terminal is shown at
@@ -683,6 +633,10 @@ function StudioBand({
   // one. `null` when there is no aside on screen — see `fullscreenInsetRight`'s own header.
   const rightAsideEdge = useRightAsideEdge()
   const viewportWidth = useViewportWidth()
+  // THE RAIL (spec §2) — full screen must also stop short of IT, even when the aside itself shows
+  // nothing (`rightAsideEdge === null`; see `fullscreenInsetRight`'s own header on why that case
+  // needs the width handed back explicitly). Desktop only — a phone has no rail at all.
+  const isMobile = useIsMobile()
   // FULL SCREEN IS A PROPERTY OF THE PANEL, NOT OF THE SLOT — `bandPanelFull` reads only THIS
   // panel's ('studio') own entry, so a DIFFERENT panel moved into this same bottom band afterward
   // never inherits it. See `BandPrefs.full`'s own header in `shellBand.ts`.
@@ -734,7 +688,7 @@ function StudioBand({
       ...(fullscreen
         ? {
           position: 'fixed', top: 0, left: 0, bottom: 0,
-          right: fullscreenInsetRight(rightAsideEdge, viewportWidth),
+          right: fullscreenInsetRight(rightAsideEdge, viewportWidth, isMobile ? 0 : RAIL_WIDTH_PX),
           zIndex: PANEL_FULLSCREEN_Z,
         }
         : open && heightPrefs.full
@@ -866,7 +820,7 @@ function SimpleDockedBand({
   panel, panelName, lang, open, columnHeight, onToggleOpen, onMoveToRight, barEntries, onBarPick,
   studioSeen, taskControl, fullscreen, onFullscreenChange, harness, children,
 }: {
-  panel: 'contents' | 'hardware'
+  panel: Exclude<PanelId, 'cli' | 'shell' | 'studio'>
   panelName: string
   lang: 'pt' | 'en'
   open: boolean
@@ -888,6 +842,7 @@ function SimpleDockedBand({
   // Same reason `StudioBand` reads these — see that component's own header on `fullscreenInsetRight`.
   const rightAsideEdge = useRightAsideEdge()
   const viewportWidth = useViewportWidth()
+  const isMobile = useIsMobile()
   // THE SAME persisted height record `StudioBand`/`ShellBand` already share (`shellBand.ts`'s
   // `agentistics-shell-band` key) — one memory for "drag near the top to fill the column", however
   // many kinds of panel a reader has parked there over time. `full` is the ONE field that does NOT
@@ -913,7 +868,7 @@ function SimpleDockedBand({
     if (!open && fullscreen) onFullscreenChange(false)
   }, [open, fullscreen, onFullscreenChange])
   const gearEntries: readonly BandOverflowEntry[] = panelMenuEntries({
-    panel, slot: 'bottom', lang, panelName,
+    panel, placement: 'bottom', lang, panelName,
   }).map(entry => ({
     id: entry.id, label: entry.label, icon: panelMenuIconFor(entry.iconId),
     onSelect: onMoveToRight,
@@ -925,7 +880,7 @@ function SimpleDockedBand({
       ...(fullscreen
         ? {
           position: 'fixed', top: 0, left: 0, bottom: 0,
-          right: fullscreenInsetRight(rightAsideEdge, viewportWidth),
+          right: fullscreenInsetRight(rightAsideEdge, viewportWidth, isMobile ? 0 : RAIL_WIDTH_PX),
           zIndex: PANEL_FULLSCREEN_Z,
         }
         : open && heightPrefs.full

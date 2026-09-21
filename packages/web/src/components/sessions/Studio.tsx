@@ -790,7 +790,9 @@ export function studioGearEntries({
         : (pt ? 'Mover árvore para a esquerda' : 'Move tree to the left'),
     })
   }
-  for (const entry of panelMenuEntries({ panel: 'studio', slot, lang, panelName: 'Studio' })) {
+  for (const entry of panelMenuEntries({
+    panel: 'studio', placement: slot === 'right' ? 'rail' : 'bottom', lang, panelName: 'Studio',
+  })) {
     items.push({ id: entry.id, label: entry.label, iconId: entry.iconId })
   }
   return items

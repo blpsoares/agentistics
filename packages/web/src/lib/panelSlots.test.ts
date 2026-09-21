@@ -1,14 +1,16 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import {
-  DEFAULT_LAST_SLOT, EMPTY_SLOT_LAYOUT, PANEL_IDS, allowed, closePanel, dockedShowsTarget,
-  getPanelLayout, hidePanel, isPanelShown, movePanel, openPanel, readLayout, relocatePanel,
-  resetPanelSlots, resolveForGates, resolveForViewport, rightSlotShowing, setBottomOpen, setRightOpen,
-  setSlotRightOpen, showPanel, subscribePanelLayout,
-  type PanelGates, type PanelId, type SlotId, type SlotLayout,
+  DEFAULT_PLACEMENT, EMPTY_SLOT_LAYOUT, PANEL_IDS, allowed, bottomPanels, closePanel,
+  getPanelLayout, hidePanel, hiddenPanels, hidePanelPlacement, isPanelId, isPanelShown, movePanel,
+  openPanel, railPanels, readLayout, relocatePanel, reorderPlacement, resetPanelSlots,
+  resolveForGates, resolveForViewport, restorePanelPlacement, rightSlotShowing, setBandOpen,
+  setBottomOpen, setPlacement, setRightOpen, setSlotRightOpen, showPanel, subscribePanelLayout,
+  type OpenPlacement, type PanelGates, type Placement,
 } from './panelSlots'
 import { answerUnsaved, getUnsaved, reportUnsaved, resetUnsaved } from './unsavedBuffers'
 
-const SLOTS: readonly SlotId[] = ['right', 'bottom']
+const PLACEMENTS: readonly Placement[] = ['rail', 'bottom', 'hidden']
+const OPEN_PLACEMENTS: readonly OpenPlacement[] = ['rail', 'bottom']
 
 function memory(): Storage {
   const map = new Map<string, string>()
@@ -22,616 +24,561 @@ function memory(): Storage {
   } as unknown as Storage
 }
 
-describe('allowed — the closed sets', () => {
-  test('right hosts all five panels', () => {
-    for (const p of PANEL_IDS) expect(allowed('right', p)).toBe(true)
+// ---------------------------------------------------------------------------------------------
+// The fourteen panels, and `allowed`
+// ---------------------------------------------------------------------------------------------
+
+describe('PANEL_IDS', () => {
+  test('is exactly the fourteen panels — the ten former Contents tabs plus studio/hardware/cli/shell', () => {
+    expect(PANEL_IDS.slice().sort()).toEqual([
+      'agents', 'cli', 'forks', 'gallery', 'hardware', 'live', 'mcps', 'metrics', 'prs', 'shell',
+      'skills', 'studio', 'tasks', 'workflows',
+    ])
   })
 
-  // DECISION, 2026-09-19 (owner: "o hardware nao ta com a opcao de abrir no componente inferior e
-  // nem o Conteúdo, ambos também deveriam estar aparecendo"): `contents`/`hardware` used to be
-  // right-only ("a tabbed list does not fit a band" / "no useful shape under the composer, nobody
-  // asked for it there") — this test used to pin exactly that restriction and now pins its reversal.
-  test('bottom hosts all five panels — every panel reaches both slots', () => {
-    for (const p of PANEL_IDS) expect(allowed('bottom', p)).toBe(true)
+  test('has no duplicate', () => {
+    expect(new Set(PANEL_IDS).size).toBe(PANEL_IDS.length)
   })
+})
 
-  test('EVERY panel × slot combination is allowed — the "all five behave alike" guarantee, pinned', () => {
-    for (const slot of SLOTS) {
-      for (const p of PANEL_IDS) expect(allowed(slot, p)).toBe(true)
+describe('isPanelId', () => {
+  test('accepts every PANEL_IDS member and nothing else, including the retired "contents"', () => {
+    for (const id of PANEL_IDS) expect(isPanelId(id)).toBe(true)
+    expect(isPanelId('contents')).toBe(false)
+    expect(isPanelId('bogus')).toBe(false)
+    expect(isPanelId(null)).toBe(false)
+    expect(isPanelId(42)).toBe(false)
+  })
+})
+
+describe('allowed — every panel reaches every placement', () => {
+  test('rail/bottom/hidden are all allowed for all fourteen panels', () => {
+    for (const placement of PLACEMENTS) {
+      for (const panel of PANEL_IDS) expect(allowed(placement, panel)).toBe(true)
     }
   })
 })
 
-describe('openPanel — exhaustive, every panel × slot × starting occupant', () => {
-  test('opening into an empty slot with an explicit slot places it there and remembers it', () => {
-    for (const panel of PANEL_IDS) {
-      for (const slot of SLOTS) {
-        if (!allowed(slot, panel)) continue
-        const next = openPanel(EMPTY_SLOT_LAYOUT, panel, slot)
-        expect(next[slot]).toBe(panel)
-        expect(next.lastSlot[panel]).toBe(slot)
-        // The other slot is untouched.
-        const other: SlotId = slot === 'right' ? 'bottom' : 'right'
-        expect(next[other]).toBe(EMPTY_SLOT_LAYOUT[other])
-      }
+// ---------------------------------------------------------------------------------------------
+// Defaults (spec §1)
+// ---------------------------------------------------------------------------------------------
+
+describe('DEFAULT_PLACEMENT / EMPTY_SLOT_LAYOUT — a machine that has never touched this', () => {
+  test('cli and shell default to bottom, every other panel defaults to rail', () => {
+    for (const id of PANEL_IDS) {
+      const want: Placement = id === 'cli' || id === 'shell' ? 'bottom' : 'rail'
+      expect(DEFAULT_PLACEMENT[id]).toBe(want)
     }
   })
 
-  // Was "an illegal placement is REFUSED" against `contents`/`bottom` — that placement is legal as
-  // of 2026-09-19 (see `allowed`'s own test above), so this now pins the OPPOSITE: it succeeds.
-  test('contents can now open at the bottom — no longer an illegal placement', () => {
-    const next = openPanel(EMPTY_SLOT_LAYOUT, 'contents', 'bottom')
-    expect(next.bottom).toBe('contents')
+  test('nothing is hidden by default', () => {
+    for (const id of PANEL_IDS) expect(EMPTY_SLOT_LAYOUT.placement[id]).not.toBe('hidden')
   })
 
-  test('with no slot given, it falls back to lastSlot, then to the panel’s default', () => {
-    expect(openPanel(EMPTY_SLOT_LAYOUT, 'studio').right).toBe('studio')
-    expect(openPanel(EMPTY_SLOT_LAYOUT, 'cli').bottom).toBe('cli')
-    expect(openPanel(EMPTY_SLOT_LAYOUT, 'hardware').right).toBe('hardware')
-    const remembered: SlotLayout = {
-      ...EMPTY_SLOT_LAYOUT, lastSlot: { ...DEFAULT_LAST_SLOT, cli: 'right' },
+  test('nothing is open by default — placement is not occupancy', () => {
+    expect(EMPTY_SLOT_LAYOUT.right).toBeNull()
+    expect(EMPTY_SLOT_LAYOUT.bottom).toBeNull()
+    expect(EMPTY_SLOT_LAYOUT.bottomOpen).toBe(false)
+  })
+
+  test('railPanels/bottomPanels/hiddenPanels partition PANEL_IDS exactly, on the default layout', () => {
+    const rail = railPanels(EMPTY_SLOT_LAYOUT)
+    const bottom = bottomPanels(EMPTY_SLOT_LAYOUT)
+    const hidden = hiddenPanels(EMPTY_SLOT_LAYOUT)
+    expect(hidden).toEqual([])
+    expect(bottom.slice().sort()).toEqual(['cli', 'shell'])
+    expect(new Set([...rail, ...bottom])).toEqual(new Set(PANEL_IDS))
+    expect(rail.length + bottom.length).toBe(PANEL_IDS.length)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// setPlacement / movePanel / hide / restore / reorder
+// ---------------------------------------------------------------------------------------------
+
+describe('setPlacement', () => {
+  test('changes only the named panel’s placement', () => {
+    const next = setPlacement(EMPTY_SLOT_LAYOUT, 'skills', 'bottom')
+    expect(next.placement.skills).toBe('bottom')
+    for (const id of PANEL_IDS) {
+      if (id !== 'skills') expect(next.placement[id]).toBe(EMPTY_SLOT_LAYOUT.placement[id])
     }
-    expect(openPanel(remembered, 'cli').right).toBe('cli')
   })
 
-  // Was "hardware can never land at the bottom" — reversed by the same 2026-09-19 decision.
-  test('hardware can now land at the bottom when asked for explicitly', () => {
-    expect(openPanel(EMPTY_SLOT_LAYOUT, 'hardware', 'bottom').bottom).toBe('hardware')
+  test('is a no-op (same reference) when the panel is already there', () => {
+    const next = setPlacement(EMPTY_SLOT_LAYOUT, 'cli', 'bottom')
+    expect(next).toBe(EMPTY_SLOT_LAYOUT)
   })
 
-  test('opening a panel where another already sits DISPLACES it — the other stops being shown anywhere', () => {
-    const withCli = openPanel(EMPTY_SLOT_LAYOUT, 'cli', 'right')
-    const next = openPanel(withCli, 'studio', 'right')
-    expect(next.right).toBe('studio')
-    expect(isPanelShown(next, 'cli')).toBe(false)
+  test('does NOT change which panel is the active occupant, unless hiding it', () => {
+    const opened = openPanel(EMPTY_SLOT_LAYOUT, 'skills')
+    expect(opened.right).toBe('skills')
+    const moved = setPlacement(opened, 'skills', 'bottom')
+    // placement changed; occupancy untouched (movePanel is the one that also reopens)
+    expect(moved.placement.skills).toBe('bottom')
+    expect(moved.right).toBe('skills')
   })
 
-  test('opening a panel already in the OTHER slot MOVES it rather than duplicating it', () => {
-    const bottomCli = openPanel(EMPTY_SLOT_LAYOUT, 'cli', 'bottom')
-    const next = openPanel(bottomCli, 'cli', 'right')
-    expect(next.right).toBe('cli')
-    expect(next.bottom).toBeNull()
+  test('hiding a panel that is the active occupant removes it from that slot', () => {
+    const opened = openPanel(EMPTY_SLOT_LAYOUT, 'skills')
+    const hidden = setPlacement(opened, 'skills', 'hidden')
+    expect(hidden.placement.skills).toBe('hidden')
+    expect(hidden.right).toBeNull()
   })
 
-  test('opening bottom always expands the band', () => {
-    const next = openPanel({ ...EMPTY_SLOT_LAYOUT, bottomOpen: false }, 'shell', 'bottom')
-    expect(next.bottomOpen).toBe(true)
+  test('hiding remembers restoreTo from the placement it was hidden FROM', () => {
+    const onBottom = setPlacement(EMPTY_SLOT_LAYOUT, 'live', 'bottom')
+    const hidden = setPlacement(onBottom, 'live', 'hidden')
+    expect(hidden.restoreTo.live).toBe('bottom')
   })
 
-  test('opening the panel already exactly where it is is a genuine no-op (idempotent) beyond the values', () => {
-    const once = openPanel(EMPTY_SLOT_LAYOUT, 'studio', 'right')
-    const twice = openPanel(once, 'studio', 'right')
-    expect(twice.right).toBe('studio')
-    expect(twice.bottom).toBeNull()
+  test('hiding an already-hidden panel keeps its existing restoreTo', () => {
+    const onBottom = setPlacement(EMPTY_SLOT_LAYOUT, 'live', 'bottom')
+    const hidden = setPlacement(onBottom, 'live', 'hidden')
+    const rehidden = setPlacement(hidden, 'live', 'hidden') // no-op, same ref
+    expect(rehidden).toBe(hidden)
   })
 
-  test('every panel can open into every slot that allows it, from every starting occupant, including itself', () => {
-    for (const slot of SLOTS) {
-      for (const panel of PANEL_IDS) {
-        if (!allowed(slot, panel)) continue
-        for (const occupant of [null, ...PANEL_IDS] as (PanelId | null)[]) {
-          if (occupant !== null && !allowed(slot, occupant)) continue
-          const start: SlotLayout = { ...EMPTY_SLOT_LAYOUT, [slot]: occupant }
-          const next = openPanel(start, panel, slot)
-          expect(next[slot]).toBe(panel)
-        }
-      }
+  test('a currently-placed panel’s restoreTo always mirrors its own placement', () => {
+    for (const id of PANEL_IDS) {
+      const restoreTo: string = EMPTY_SLOT_LAYOUT.restoreTo[id]
+      expect(restoreTo).toBe(EMPTY_SLOT_LAYOUT.placement[id])
     }
   })
 })
 
-describe('closePanel', () => {
-  test('removes the panel from wherever it sits', () => {
-    const shown = openPanel(EMPTY_SLOT_LAYOUT, 'studio', 'right')
-    expect(closePanel(shown, 'studio')).toEqual(EMPTY_SLOT_LAYOUT)
+describe('restorePanelPlacement', () => {
+  test('puts a hidden panel back where it was, without opening it', () => {
+    const onBottom = setPlacement(EMPTY_SLOT_LAYOUT, 'live', 'bottom')
+    const opened = openPanel(onBottom, 'live')
+    const hidden = setPlacement(opened, 'live', 'hidden')
+    const restored = restorePanelPlacement(hidden, 'live')
+    expect(restored.placement.live).toBe('bottom')
+    expect(restored.right).toBeNull()
+    expect(restored.bottom).toBeNull()
   })
 
-  test('a panel not shown anywhere closes as a no-op — same object', () => {
-    expect(closePanel(EMPTY_SLOT_LAYOUT, 'studio')).toBe(EMPTY_SLOT_LAYOUT)
-  })
-
-  test('closing one panel never touches the other slot', () => {
-    const both: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'contents', bottom: 'cli', bottomOpen: true }
-    const next = closePanel(both, 'contents')
-    expect(next.bottom).toBe('cli')
-    expect(next.bottomOpen).toBe(true)
-  })
-
-  test('closing the bottom occupant also clears bottomOpen — nothing left to show', () => {
-    const shown = openPanel(EMPTY_SLOT_LAYOUT, 'shell', 'bottom')
-    expect(closePanel(shown, 'shell').bottomOpen).toBe(false)
+  test('is a no-op for a panel that is not hidden', () => {
+    const next = restorePanelPlacement(EMPTY_SLOT_LAYOUT, 'live')
+    expect(next).toBe(EMPTY_SLOT_LAYOUT)
   })
 })
 
-describe('movePanel', () => {
-  test('moves a shown panel to the other slot, displacing whatever was there', () => {
-    const start: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'studio', bottom: 'cli', bottomOpen: true }
-    const next = movePanel(start, 'studio', 'bottom')
-    expect(next.bottom).toBe('studio')
-    expect(next.right).toBeNull()
-    expect(isPanelShown(next, 'cli')).toBe(false)
+describe('hidePanelPlacement', () => {
+  test('is setPlacement(..., "hidden") by another name', () => {
+    const a = hidePanelPlacement(EMPTY_SLOT_LAYOUT, 'skills')
+    const b = setPlacement(EMPTY_SLOT_LAYOUT, 'skills', 'hidden')
+    expect(a).toEqual(b)
+  })
+})
+
+describe('reorderPlacement', () => {
+  test('reorders panels within one placement to match the given sequence', () => {
+    const rail = railPanels(EMPTY_SLOT_LAYOUT)
+    const reversed = [...rail].reverse()
+    const next = reorderPlacement(EMPTY_SLOT_LAYOUT, 'rail', reversed)
+    expect(railPanels(next)).toEqual(reversed)
   })
 
-  test('a panel not shown anywhere cannot be moved — no-op', () => {
-    expect(movePanel(EMPTY_SLOT_LAYOUT, 'studio', 'bottom')).toBe(EMPTY_SLOT_LAYOUT)
+  test('an id from the OTHER placement in the given sequence is ignored', () => {
+    const next = reorderPlacement(EMPTY_SLOT_LAYOUT, 'bottom', ['shell', 'live', 'cli'])
+    expect(bottomPanels(next)).toEqual(['shell', 'cli'])
   })
 
-  test('moving to the slot it is already in is a no-op', () => {
-    const start = openPanel(EMPTY_SLOT_LAYOUT, 'shell', 'bottom')
-    expect(movePanel(start, 'shell', 'bottom')).toBe(start)
+  test('never touches placement, only order', () => {
+    const next = reorderPlacement(EMPTY_SLOT_LAYOUT, 'rail', [...railPanels(EMPTY_SLOT_LAYOUT)].reverse())
+    expect(next.placement).toEqual(EMPTY_SLOT_LAYOUT.placement)
+  })
+})
+
+describe('movePanel — the gear’s verb', () => {
+  test('sets placement AND opens the panel at the destination, displacing whatever was there', () => {
+    const withCli = openPanel(EMPTY_SLOT_LAYOUT, 'cli') // bottom
+    const moved = movePanel(withCli, 'skills', 'bottom')
+    expect(moved.placement.skills).toBe('bottom')
+    expect(moved.bottom).toBe('skills') // displaced cli
   })
 
-  // Was "a move to an illegal slot is refused" against `contents` → `bottom` — legal since
-  // 2026-09-19, so this now pins that the move actually lands.
-  test('contents can now move to the bottom', () => {
-    const start = openPanel(EMPTY_SLOT_LAYOUT, 'contents', 'right')
-    const next = movePanel(start, 'contents', 'bottom')
-    expect(next.bottom).toBe('contents')
-    expect(next.right).toBeNull()
+  test('moving to the placement it is already in still (re)opens it there', () => {
+    const next = movePanel(EMPTY_SLOT_LAYOUT, 'live', 'rail')
+    expect(next.right).toBe('live')
   })
 
-  test('every legal move, from every legal starting position, lands exactly where asked', () => {
-    for (const panel of PANEL_IDS) {
-      for (const from of SLOTS) {
-        if (!allowed(from, panel)) continue
-        for (const to of SLOTS) {
-          if (to === from || !allowed(to, panel)) continue
-          const start = openPanel(EMPTY_SLOT_LAYOUT, panel, from)
-          const next = movePanel(start, panel, to)
-          expect(next[to]).toBe(panel)
-          expect(next[from]).toBeNull()
-        }
-      }
-    }
-  })
-
-  test('vacating the bottom slot resets bottomOpen — a panel moved to the right leaves no orphaned flag (M2)', () => {
-    const start = openPanel(EMPTY_SLOT_LAYOUT, 'studio', 'bottom')
-    expect(start.bottomOpen).toBe(true)
-    const next = movePanel(start, 'studio', 'right')
-    expect(next.bottom).toBeNull()
-    expect(next.bottomOpen).toBe(false)
-  })
-
-  // Owner feedback, 2026-09-17: "pressing 'Mover para baixo' only CLOSES the right aside instead of
-  // moving that panel to the bottom band … add a panelSlots test per panel for both directions".
-  // The exhaustive loop above already walks this table, but a bug reported by name deserves a test
-  // that reads back as the same sentence — a reader checking the fix does not have to run the loop
-  // in their head to see that "Studio, right to bottom" is covered. The FIX itself was never in this
-  // pure function (verified live: it was the docked band's own local `target` preference going
-  // stale when a move landed in `panelSlots` from OUTSIDE that band's own click handler — see
-  // `ShellBand.tsx`'s own header and its new `useEffect`), but that is exactly why this module's own
-  // contract has to be pinned in the open: if `movePanel` itself ever regressed, the wiring fix
-  // would have nothing correct to react to.
-  for (const panel of ['studio', 'cli', 'shell'] as const) {
-    test(`${panel}: right → bottom actually moves it, never just vacates the right slot`, () => {
-      const start = openPanel(EMPTY_SLOT_LAYOUT, panel, 'right')
-      const next = movePanel(start, panel, 'bottom')
-      expect(next.right).toBeNull()
-      expect(next.bottom).toBe(panel)
-      expect(isPanelShown(next, panel)).toBe(true)
-    })
-
-    test(`${panel}: bottom → right actually moves it, never just closes the band`, () => {
-      const start = openPanel(EMPTY_SLOT_LAYOUT, panel, 'bottom')
-      const next = movePanel(start, panel, 'right')
-      expect(next.bottom).toBeNull()
-      expect(next.right).toBe(panel)
-      expect(isPanelShown(next, panel)).toBe(true)
+  for (const to of OPEN_PLACEMENTS) {
+    test(`move to ${to} refreshes restoreTo to match`, () => {
+      const next = movePanel(EMPTY_SLOT_LAYOUT, 'skills', to)
+      expect(next.restoreTo.skills).toBe(to)
     })
   }
 })
 
-describe('isPanelShown', () => {
-  test('true in either slot, including a collapsed bottom band', () => {
-    expect(isPanelShown({ ...EMPTY_SLOT_LAYOUT, right: 'contents' }, 'contents')).toBe(true)
-    expect(isPanelShown({ ...EMPTY_SLOT_LAYOUT, bottom: 'shell', bottomOpen: false }, 'shell')).toBe(true)
-  })
+// ---------------------------------------------------------------------------------------------
+// openPanel / closePanel / isPanelShown / rightSlotShowing
+// ---------------------------------------------------------------------------------------------
 
-  test('false when it sits nowhere', () => {
-    expect(isPanelShown(EMPTY_SLOT_LAYOUT, 'studio')).toBe(false)
-  })
-})
-
-describe('rightSlotShowing — the one "what is shown" selector (C2)', () => {
-  test('the right slot\'s own occupant always wins, whatever Contents\' own open flag says', () => {
-    expect(rightSlotShowing({ ...EMPTY_SLOT_LAYOUT, right: 'cli' }, false)).toBe('cli')
-    expect(rightSlotShowing({ ...EMPTY_SLOT_LAYOUT, right: 'cli' }, true)).toBe('cli')
-    expect(rightSlotShowing({ ...EMPTY_SLOT_LAYOUT, right: 'shell' }, true)).toBe('shell')
-    expect(rightSlotShowing({ ...EMPTY_SLOT_LAYOUT, right: 'studio' }, true)).toBe('studio')
-  })
-
-  test('Contents only decides the answer once nothing else occupies the slot', () => {
-    expect(rightSlotShowing(EMPTY_SLOT_LAYOUT, true)).toBe('contents')
-    expect(rightSlotShowing(EMPTY_SLOT_LAYOUT, false)).toBeNull()
-  })
-})
-
-describe('dockedShowsTarget — exclusivity between the docked band and the right slot (C3)', () => {
-  test('shown when nothing (or the OTHER target) sits at right', () => {
-    expect(dockedShowsTarget(EMPTY_SLOT_LAYOUT, 'shell')).toBe(true)
-    expect(dockedShowsTarget({ ...EMPTY_SLOT_LAYOUT, right: 'cli' }, 'shell')).toBe(true)
-    expect(dockedShowsTarget({ ...EMPTY_SLOT_LAYOUT, right: 'studio' }, 'cli')).toBe(true)
-  })
-
-  test('excluded once the right slot holds this EXACT target', () => {
-    expect(dockedShowsTarget({ ...EMPTY_SLOT_LAYOUT, right: 'shell' }, 'shell')).toBe(false)
-    expect(dockedShowsTarget({ ...EMPTY_SLOT_LAYOUT, right: 'cli' }, 'cli')).toBe(false)
-  })
-
-  test('moving the panel away from the right hands the docked band back its target, unprompted', () => {
-    const atRight: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'shell' }
-    expect(dockedShowsTarget(atRight, 'shell')).toBe(false)
-    const movedAway = closePanel(atRight, 'shell')
-    expect(dockedShowsTarget(movedAway, 'shell')).toBe(true)
-  })
-})
-
-describe('setBottomOpen', () => {
-  test('flips the flag without touching the occupant', () => {
-    const start: SlotLayout = { ...EMPTY_SLOT_LAYOUT, bottom: 'cli', bottomOpen: true }
-    expect(setBottomOpen(start, false)).toEqual({ ...start, bottomOpen: false })
-  })
-
-  test('setting the same value is a no-op — same object', () => {
-    expect(setBottomOpen(EMPTY_SLOT_LAYOUT, false)).toBe(EMPTY_SLOT_LAYOUT)
-  })
-})
-
-describe('setRightOpen — the right slot\'s own minimize/restore, EMPTY_SLOT_LAYOUT.rightOpen defaults true', () => {
-  test('EMPTY_SLOT_LAYOUT reads open — absent is never a silently minimized panel', () => {
-    expect(EMPTY_SLOT_LAYOUT.rightOpen).toBe(true)
-  })
-
-  test('flips the flag without touching the occupant', () => {
-    const start: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'studio', rightOpen: true }
-    expect(setRightOpen(start, false)).toEqual({ ...start, rightOpen: false })
-  })
-
-  test('setting the same value is a no-op — same object', () => {
-    expect(setRightOpen(EMPTY_SLOT_LAYOUT, true)).toBe(EMPTY_SLOT_LAYOUT)
-  })
-
-  test('opening ANY panel at the right always starts open — a stale minimize never survives a fresh open', () => {
-    const minimized: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'studio', rightOpen: false }
-    // Opening the CLI pane there (displacing the Studio) must not inherit the Studio's own
-    // minimized state.
-    const next = openPanel(minimized, 'cli', 'right')
-    expect(next.right).toBe('cli')
+describe('openPanel', () => {
+  test('opens a rail-placed panel into the right slot', () => {
+    const next = openPanel(EMPTY_SLOT_LAYOUT, 'skills')
+    expect(next.right).toBe('skills')
     expect(next.rightOpen).toBe(true)
   })
 
-  test('re-opening the SAME panel at the same slot also clears a minimize — the click that restores it', () => {
-    const minimized: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'studio', rightOpen: false }
-    expect(openPanel(minimized, 'studio', 'right').rightOpen).toBe(true)
+  test('opens a bottom-placed panel into the bottom slot', () => {
+    const next = openPanel(EMPTY_SLOT_LAYOUT, 'cli')
+    expect(next.bottom).toBe('cli')
+    expect(next.bottomOpen).toBe(true)
   })
 
-  test('vacating the right slot resets rightOpen to true (M2\'s own rule, mirrored) — never a stale minimize left for the next occupant', () => {
-    const minimized: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'studio', rightOpen: false }
-    expect(closePanel(minimized, 'studio').rightOpen).toBe(true)
-    expect(movePanel(minimized, 'studio', 'bottom').rightOpen).toBe(true)
+  test('is REFUSED for a hidden panel — no icon or tab to have clicked', () => {
+    const hidden = setPlacement(EMPTY_SLOT_LAYOUT, 'skills', 'hidden')
+    const next = openPanel(hidden, 'skills')
+    expect(next).toBe(hidden)
+    expect(next.right).toBeNull()
   })
 
-  test('minimizing never touches the bottom slot, and vice versa', () => {
-    const both: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'studio', bottom: 'cli', bottomOpen: true }
-    expect(setRightOpen(both, false).bottom).toBe('cli')
-    expect(setRightOpen(both, false).bottomOpen).toBe(true)
-    expect(setBottomOpen(both, false).right).toBe('studio')
-    expect(setBottomOpen(both, false).rightOpen).toBe(true)
-  })
-})
-
-describe('resolveForViewport — the phone reading', () => {
-  test('a stored bottom studio becomes the fullscreen right sheet on a phone', () => {
-    const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, bottom: 'studio', bottomOpen: true }
-    const seen = resolveForViewport(stored, true)
-    expect(seen.right).toBe('studio')
-    expect(seen.bottom).toBeNull()
+  test('opening a second rail panel displaces the first, never both at once', () => {
+    const first = openPanel(EMPTY_SLOT_LAYOUT, 'skills')
+    const second = openPanel(first, 'gallery')
+    expect(second.right).toBe('gallery')
+    expect(isPanelShown(second, 'skills')).toBe(false)
   })
 
-  test('desktop reads the layout untouched', () => {
-    const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, bottom: 'studio', bottomOpen: true }
-    expect(resolveForViewport(stored, false)).toBe(stored)
-  })
-
-  test('cli/shell in the bottom are the one exception — untouched, SessionPanel draws its own mobile terminal', () => {
-    for (const panel of ['cli', 'shell'] as const) {
-      const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, bottom: panel, bottomOpen: true }
-      expect(resolveForViewport(stored, true)).toBe(stored)
-    }
-  })
-
-  // GENERALIZED, 2026-09-19 (alongside `contents`/`hardware` joining `BOTTOM_PANELS`): any
-  // desktop-only bottom occupant reads as the right sheet on a phone, not only `'studio'`.
-  test('a stored bottom contents/hardware ALSO becomes the fullscreen right sheet on a phone', () => {
-    for (const panel of ['contents', 'hardware'] as const) {
-      const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, bottom: panel, bottomOpen: true }
-      const seen = resolveForViewport(stored, true)
-      expect(seen.right).toBe(panel)
-      expect(seen.bottom).toBeNull()
-      expect(seen.rightOpen).toBe(true)
-    }
-  })
-
-  test('turning the phone back into a desktop restores the ORIGINAL stored layout — nothing was rewritten', () => {
-    const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, bottom: 'studio', bottomOpen: true }
-    resolveForViewport(stored, true) // read as a phone once
-    // The desktop reading is computed fresh from the SAME stored value, never from the phone's view.
-    expect(resolveForViewport(stored, false)).toEqual(stored)
+  test('opening a rail panel never touches the bottom occupant, and vice versa', () => {
+    const withCli = openPanel(EMPTY_SLOT_LAYOUT, 'cli')
+    const withSkills = openPanel(withCli, 'skills')
+    expect(withSkills.bottom).toBe('cli')
+    expect(withSkills.right).toBe('skills')
   })
 })
 
-describe('resolveForGates — a closed gate reads the panel as absent (C1)', () => {
+describe('closePanel / isPanelShown', () => {
+  test('closes the active occupant, placement untouched', () => {
+    const opened = openPanel(EMPTY_SLOT_LAYOUT, 'skills')
+    const closed = closePanel(opened, 'skills')
+    expect(closed.right).toBeNull()
+    expect(closed.placement.skills).toBe('rail')
+  })
+
+  test('is a no-op for a panel that is not shown', () => {
+    const next = closePanel(EMPTY_SLOT_LAYOUT, 'skills')
+    expect(next).toBe(EMPTY_SLOT_LAYOUT)
+  })
+
+  test('isPanelShown reads true for a collapsed-but-occupying bottom panel', () => {
+    const opened = setBottomOpen(openPanel(EMPTY_SLOT_LAYOUT, 'cli'), false)
+    expect(isPanelShown(opened, 'cli')).toBe(true)
+  })
+})
+
+describe('rightSlotShowing', () => {
+  test('is a plain read of layout.right — every panel carries its own field now', () => {
+    expect(rightSlotShowing(EMPTY_SLOT_LAYOUT)).toBeNull()
+    expect(rightSlotShowing(openPanel(EMPTY_SLOT_LAYOUT, 'metrics'))).toBe('metrics')
+  })
+})
+
+describe('setBottomOpen / setRightOpen', () => {
+  test('toggle without touching the occupant', () => {
+    const opened = openPanel(EMPTY_SLOT_LAYOUT, 'cli')
+    const collapsed = setBottomOpen(opened, false)
+    expect(collapsed.bottom).toBe('cli')
+    expect(collapsed.bottomOpen).toBe(false)
+  })
+
+  test('are no-ops (same reference) when already at that value', () => {
+    expect(setBottomOpen(EMPTY_SLOT_LAYOUT, false)).toBe(EMPTY_SLOT_LAYOUT)
+    expect(setRightOpen(EMPTY_SLOT_LAYOUT, true)).toBe(EMPTY_SLOT_LAYOUT)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// resolveForViewport / resolveForGates
+// ---------------------------------------------------------------------------------------------
+
+describe('resolveForViewport', () => {
+  test('desktop: untouched', () => {
+    const layout = openPanel(EMPTY_SLOT_LAYOUT, 'skills')
+    expect(resolveForViewport(layout, false)).toBe(layout)
+  })
+
+  test('mobile: a bottom-only panel reads as the right sheet instead', () => {
+    const layout = movePanel(EMPTY_SLOT_LAYOUT, 'skills', 'bottom')
+    const mobile = resolveForViewport(layout, true)
+    expect(mobile.right).toBe('skills')
+    expect(mobile.bottom).toBeNull()
+    expect(mobile.rightOpen).toBe(true)
+  })
+
+  test('mobile: cli/shell are exempt — SessionPanel draws its own toggle for them', () => {
+    const layout = openPanel(EMPTY_SLOT_LAYOUT, 'cli')
+    expect(resolveForViewport(layout, true)).toBe(layout)
+  })
+
+  /**
+   * LIVE BUG, FOUND VERIFYING THE MOBILE SWITCHER: with `bottom` holding a non-cli/shell panel
+   * (e.g. `studio`, moved there by the gear, or carried over from a migrated layout) and NOTHING on
+   * `right` yet, the fold correctly opens it as the sheet — but the mobile switcher's own click only
+   * ever writes `right` (`SessionsPage.tsx`'s `openSlotPanel`, which never touches `bottom`), so
+   * without this guard the NEXT render folded `bottom` straight back over whatever was just picked.
+   * Measured live: tapping "Skills" while `bottom` held `studio` left the panel on Studio forever —
+   * the switcher was reachable but inert.
+   */
+  test('mobile: once something real sits on the right, the fold stops overriding it', () => {
+    const layout = movePanel(EMPTY_SLOT_LAYOUT, 'studio', 'bottom')
+    const firstFold = resolveForViewport(layout, true)
+    expect(firstFold.right).toBe('studio') // the fold's own first-time behaviour, unchanged
+
+    // The reader picks something else from the mobile switcher — writes RAW `right` only.
+    const picked = openPanel(layout, 'skills')
+    expect(picked.bottom).toBe('studio') // untouched — the switcher never writes `bottom`
+    const resolved = resolveForViewport(picked, true)
+    expect(resolved.right).toBe('skills') // the pick wins, not another fold of `bottom`
+  })
+
+  test('mobile: nothing at the bottom is untouched', () => {
+    expect(resolveForViewport(EMPTY_SLOT_LAYOUT, true)).toBe(EMPTY_SLOT_LAYOUT)
+  })
+})
+
+describe('resolveForGates', () => {
   const OPEN: PanelGates = { editorEnabled: true, shellEnabled: true, relayed: false }
 
-  test('every gate open leaves the layout untouched', () => {
-    const layout = openPanel(openPanel(EMPTY_SLOT_LAYOUT, 'studio', 'right'), 'shell', 'bottom')
+  test('every panel stays when every gate is open', () => {
+    const layout = openPanel(openPanel(EMPTY_SLOT_LAYOUT, 'studio'), 'shell')
     expect(resolveForGates(layout, OPEN)).toBe(layout)
   })
 
-  test('editorEnabled off removes a right-slot Studio — the C1 repro', () => {
-    const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'studio' }
-    const resolved = resolveForGates(stored, { ...OPEN, editorEnabled: false })
-    expect(resolved.right).toBeNull()
-    expect(isPanelShown(resolved, 'studio')).toBe(false)
+  test('a shown studio closes when editorEnabled is false', () => {
+    const layout = openPanel(EMPTY_SLOT_LAYOUT, 'studio')
+    const gated = resolveForGates(layout, { ...OPEN, editorEnabled: false })
+    expect(gated.right).toBeNull()
   })
 
-  test('editorEnabled off removes a bottom-slot Studio too, and clears bottomOpen with it', () => {
-    const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, bottom: 'studio', bottomOpen: true }
-    const resolved = resolveForGates(stored, { ...OPEN, editorEnabled: false })
-    expect(resolved.bottom).toBeNull()
-    expect(resolved.bottomOpen).toBe(false)
+  test('cli/shell close when relayed', () => {
+    const layout = openPanel(EMPTY_SLOT_LAYOUT, 'cli')
+    const gated = resolveForGates(layout, { ...OPEN, relayed: true })
+    expect(gated.bottom).toBeNull()
   })
 
-  test('shellEnabled off removes shell, cli is untouched', () => {
-    const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'shell', bottom: 'cli', bottomOpen: true }
-    const resolved = resolveForGates(stored, { ...OPEN, shellEnabled: false })
-    expect(resolved.right).toBeNull()
-    expect(resolved.bottom).toBe('cli')
-  })
-
-  test('a relayed session has no cli or shell stream — both are removed wherever they sit', () => {
-    const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'cli', bottom: 'shell', bottomOpen: true }
-    const resolved = resolveForGates(stored, { ...OPEN, relayed: true })
-    expect(resolved.right).toBeNull()
-    expect(resolved.bottom).toBeNull()
-  })
-
-  test('contents has no gate of its own', () => {
-    const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'contents' }
-    expect(resolveForGates(stored, { editorEnabled: false, shellEnabled: false, relayed: true })).toBe(stored)
-  })
-
-  test('hardware has no gate of its own either — it is a client-side read, not a session capability', () => {
-    const stored: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'hardware' }
-    expect(resolveForGates(stored, { editorEnabled: false, shellEnabled: false, relayed: true })).toBe(stored)
-  })
-
-  test('every panel × every gate combination: a closed gate never leaves its panel shown', () => {
-    for (const editorEnabled of [true, false]) {
-      for (const shellEnabled of [true, false]) {
-        for (const relayed of [true, false]) {
-          const gates: PanelGates = { editorEnabled, shellEnabled, relayed }
-          for (const panel of PANEL_IDS) {
-            for (const slot of SLOTS) {
-              if (!allowed(slot, panel)) continue
-              const layout = openPanel(EMPTY_SLOT_LAYOUT, panel, slot)
-              const resolved = resolveForGates(layout, gates)
-              const shouldBeOpen =
-                panel === 'contents' ? true
-                : panel === 'hardware' ? true
-                : panel === 'studio' ? editorEnabled
-                : panel === 'cli' ? !relayed
-                : shellEnabled && !relayed
-              expect(isPanelShown(resolved, panel)).toBe(shouldBeOpen)
-            }
-          }
-        }
-      }
-    }
-  })
-
-  test('reading through the gate never touches the live layout — pure in, pure out', () => {
-    resetPanelSlots()
-    showPanel('studio', 'right')
-    const live = getPanelLayout()
-    // A caller reading through a closed gate sees the Studio gone...
-    expect(resolveForGates(live, { ...OPEN, editorEnabled: false }).right).toBeNull()
-    // ...but the LIVE layout — what every other reader still sees, and what gets persisted — is
-    // exactly what it was. `resolveForGates` never commits, exactly like `resolveForViewport`.
-    expect(getPanelLayout()).toBe(live)
-    expect(getPanelLayout().right).toBe('studio')
+  test('the ten former Contents tabs and hardware carry no gate of their own', () => {
+    const layout = openPanel(EMPTY_SLOT_LAYOUT, 'metrics')
+    const gated = resolveForGates(layout, { editorEnabled: false, shellEnabled: false, relayed: true })
+    expect(gated.right).toBe('metrics')
   })
 })
 
-describe('the storage guard — readLayout', () => {
-  test('no stored value reads as the empty layout', () => {
+// ---------------------------------------------------------------------------------------------
+// Migration — readLayout
+// ---------------------------------------------------------------------------------------------
+
+describe('readLayout — a fresh machine', () => {
+  test('no stored value at all reads as the plain defaults', () => {
     expect(readLayout(memory())).toEqual(EMPTY_SLOT_LAYOUT)
   })
+})
 
-  test('round-trips a real layout', () => {
+describe('readLayout — unreadable or unrecognisable storage', () => {
+  test('non-JSON never throws, reads as defaults', () => {
     const s = memory()
-    const layout = openPanel(openPanel(EMPTY_SLOT_LAYOUT, 'studio', 'right'), 'shell', 'bottom')
-    s.setItem('agentistics-panel-slots', JSON.stringify(layout))
-    expect(readLayout(s)).toEqual(layout)
-  })
-
-  // `hardware` was ABSENT from `isPanelId` — a full `PanelId` that `readLayout` silently dropped on
-  // every reload, the one panel this function could never actually restore. Walking every member of
-  // `PANEL_IDS` (rather than naming `hardware` alone) is what makes this the test that would have
-  // caught it AND catches the next such omission.
-  test('round-trips every PANEL_IDS member, individually, at the right slot', () => {
-    for (const panel of PANEL_IDS) {
-      const s = memory()
-      const layout = openPanel(EMPTY_SLOT_LAYOUT, panel, 'right')
-      s.setItem('agentistics-panel-slots', JSON.stringify(layout))
-      expect(readLayout(s).right).toBe(panel)
-    }
-  })
-
-  test('rightOpen round-trips both ways, and ABSENT reads as open (M2\'s own convention, mirrored)', () => {
-    const s = memory()
-    const minimized: SlotLayout = { ...EMPTY_SLOT_LAYOUT, right: 'studio', rightOpen: false }
-    s.setItem('agentistics-panel-slots', JSON.stringify(minimized))
-    expect(readLayout(s).rightOpen).toBe(false)
-
-    const s2 = memory()
-    s2.setItem('agentistics-panel-slots', JSON.stringify({ right: 'studio', bottom: null, bottomOpen: false }))
-    expect(readLayout(s2).rightOpen).toBe(true)
-  })
-
-  test('a storage that throws on read costs nothing', () => {
-    const hostile = { getItem() { throw new Error('blocked') } } as unknown as Storage
-    expect(() => readLayout(hostile)).not.toThrow()
-    expect(readLayout(hostile)).toEqual(EMPTY_SLOT_LAYOUT)
-  })
-
-  test('junk in storage reads as empty rather than as a broken layout', () => {
-    const s = memory()
-    s.setItem('agentistics-panel-slots', 'not json')
+    s.setItem('agentistics-panel-slots', 'not json at all {{{')
     expect(readLayout(s)).toEqual(EMPTY_SLOT_LAYOUT)
   })
 
-  test('an occupant that is not even a PanelId, recorded by hand (or by an older build), is dropped, not trusted', () => {
+  test('a bare JSON primitive (not an object) reads as defaults', () => {
     const s = memory()
-    s.setItem('agentistics-panel-slots', JSON.stringify({ right: null, bottom: 'not-a-panel', bottomOpen: true }))
-    expect(readLayout(s).bottom).toBeNull()
+    s.setItem('agentistics-panel-slots', '42')
+    expect(readLayout(s)).toEqual(EMPTY_SLOT_LAYOUT)
   })
 
-  // Was "an illegal occupant... 'contents' [at bottom]" — that placement is legal as of 2026-09-19
-  // (every panel reaches both slots), so this now pins that a stored `contents` at the bottom is
-  // TRUSTED and round-trips, rather than silently dropped the way it used to be.
-  test('contents recorded at the bottom round-trips — no longer an illegal occupant to distrust', () => {
-    const s = memory()
-    s.setItem('agentistics-panel-slots', JSON.stringify({ right: null, bottom: 'contents', bottomOpen: true }))
-    expect(readLayout(s).bottom).toBe('contents')
+  test('a storage whose getItem throws reads as defaults, never propagates', () => {
+    const s = {
+      getItem: () => { throw new Error('blocked') },
+    } as unknown as Storage
+    expect(readLayout(s)).toEqual(EMPTY_SLOT_LAYOUT)
   })
 
-  test('bottomOpen with no bottom occupant reads as false — nothing to show', () => {
-    const s = memory()
-    s.setItem('agentistics-panel-slots', JSON.stringify({ right: null, bottom: null, bottomOpen: true }))
-    expect(readLayout(s).bottomOpen).toBe(false)
-  })
-
-  test('an unreadable lastSlot entry falls back to the default for that panel only', () => {
+  test('a value "from a future version" — unknown top-level fields, a placement id this build does not know — degrades to known fields rather than throwing', () => {
     const s = memory()
     s.setItem('agentistics-panel-slots', JSON.stringify({
-      right: null, bottom: null, bottomOpen: false,
-      // `contents` CAN now host at the bottom (2026-09-19, kept), `cli`'s value is not even a slot
-      // name (dropped, falls back to its own default), and `studio` really can sit at the bottom
-      // too — also kept.
-      lastSlot: { contents: 'bottom', cli: 'nowhere', studio: 'bottom' },
+      version: 99,
+      placement: { ...DEFAULT_PLACEMENT, skills: 'bottom', someFuturePanel: 'rail' },
+      order: { skills: 3 },
+      restoreTo: { skills: 'bottom' },
+      right: 'someFuturePanel',
+      bottom: 'skills',
+      bottomOpen: true,
+      rightOpen: true,
+      aBrandNewField: { nested: true },
     }))
-    expect(readLayout(s).lastSlot).toEqual({ ...DEFAULT_LAST_SLOT, contents: 'bottom', studio: 'bottom' })
+    const layout = readLayout(s)
+    expect(layout.placement.skills).toBe('bottom')
+    // the unknown id is simply not a PanelId — never adopted as an occupant or a placement key
+    expect(layout.right).toBeNull()
+    expect(layout.bottom).toBe('skills')
+    expect(layout.order.skills).toBe(3)
   })
 })
 
-describe('the imperative store — showPanel / hidePanel / relocatePanel', () => {
+describe('readLayout — migrating the OLD (pre-rail) shape', () => {
+  test('a bare fresh-defaults-shaped legacy value (nothing ever opened) still reads as today’s defaults', () => {
+    const s = memory()
+    s.setItem('agentistics-panel-slots', JSON.stringify({
+      right: null, bottom: null, bottomOpen: false, rightOpen: true,
+      lastSlot: {
+        contents: 'right', studio: 'right', cli: 'bottom', shell: 'bottom', hardware: 'right',
+      },
+    }))
+    const layout = readLayout(s)
+    expect(layout.placement).toEqual(DEFAULT_PLACEMENT)
+    expect(layout.right).toBeNull()
+    expect(layout.bottom).toBeNull()
+  })
+
+  test('studio parked at the bottom under the old model stays at the bottom under the new one', () => {
+    const s = memory()
+    s.setItem('agentistics-panel-slots', JSON.stringify({
+      right: null, bottom: 'studio', bottomOpen: true, rightOpen: true,
+      lastSlot: { contents: 'right', studio: 'bottom', cli: 'bottom', shell: 'bottom', hardware: 'right' },
+    }))
+    const layout = readLayout(s)
+    expect(layout.placement.studio).toBe('bottom')
+    expect(layout.bottom).toBe('studio')
+    expect(layout.bottomOpen).toBe(true)
+  })
+
+  test('"contents" open on the RIGHT migrates to its ten descendants placed on the rail, opened on "live"', () => {
+    const s = memory()
+    s.setItem('agentistics-panel-slots', JSON.stringify({
+      right: 'contents', bottom: null, bottomOpen: false, rightOpen: true,
+      lastSlot: { contents: 'right', studio: 'right', cli: 'bottom', shell: 'bottom', hardware: 'right' },
+    }))
+    const layout = readLayout(s)
+    for (const id of ['live', 'gallery', 'skills', 'agents', 'forks', 'workflows', 'mcps', 'prs', 'tasks', 'metrics'] as const) {
+      expect(layout.placement[id]).toBe('rail')
+    }
+    expect(layout.right).toBe('live')
+  })
+
+  test('"contents" DOCKED AT THE BOTTOM still places its ten descendants on the RAIL, not the bottom — the spec’s own rule, not "wherever contents was"', () => {
+    const s = memory()
+    s.setItem('agentistics-panel-slots', JSON.stringify({
+      right: null, bottom: 'contents', bottomOpen: true, rightOpen: true,
+      lastSlot: { contents: 'bottom', studio: 'right', cli: 'bottom', shell: 'bottom', hardware: 'right' },
+    }))
+    const layout = readLayout(s)
+    for (const id of ['live', 'gallery', 'skills', 'agents', 'forks', 'workflows', 'mcps', 'prs', 'tasks', 'metrics'] as const) {
+      expect(layout.placement[id]).toBe('rail')
+    }
+    expect(layout.bottom).toBe('live')
+  })
+
+  test('hardware on the right, shell at the bottom — both preserved', () => {
+    const s = memory()
+    s.setItem('agentistics-panel-slots', JSON.stringify({
+      right: 'hardware', bottom: 'shell', bottomOpen: true, rightOpen: true,
+      lastSlot: { contents: 'right', studio: 'right', cli: 'bottom', shell: 'bottom', hardware: 'right' },
+    }))
+    const layout = readLayout(s)
+    expect(layout.placement.hardware).toBe('rail')
+    expect(layout.right).toBe('hardware')
+    expect(layout.placement.shell).toBe('bottom')
+    expect(layout.bottom).toBe('shell')
+  })
+
+  test('migration never throws on a legacy value missing lastSlot entirely', () => {
+    const s = memory()
+    s.setItem('agentistics-panel-slots', JSON.stringify({ right: 'studio', bottom: null }))
+    const layout = readLayout(s)
+    expect(layout.right).toBe('studio')
+    expect(layout.placement.studio).toBe('rail')
+  })
+})
+
+describe('readLayout — round-trips every PANEL_IDS member through write→read', () => {
+  for (const id of PANEL_IDS) {
+    test(`${id} on the rail`, () => {
+      const s = memory()
+      const written = movePanel(EMPTY_SLOT_LAYOUT, id, 'rail')
+      s.setItem('agentistics-panel-slots', JSON.stringify({ version: 2, ...written }))
+      expect(readLayout(s).right).toBe(id)
+    })
+
+    test(`${id} at the bottom`, () => {
+      const s = memory()
+      const written = movePanel(EMPTY_SLOT_LAYOUT, id, 'bottom')
+      s.setItem('agentistics-panel-slots', JSON.stringify({ version: 2, ...written }))
+      expect(readLayout(s).bottom).toBe(id)
+    })
+
+    test(`${id} hidden — round-trips its placement and restoreTo`, () => {
+      const s = memory()
+      const written = hidePanelPlacement(EMPTY_SLOT_LAYOUT, id)
+      s.setItem('agentistics-panel-slots', JSON.stringify({ version: 2, ...written }))
+      const read = readLayout(s)
+      expect(read.placement[id]).toBe('hidden')
+      expect(read.restoreTo[id]).toBe(written.restoreTo[id])
+    })
+  }
+})
+
+// ---------------------------------------------------------------------------------------------
+// The imperative store — showPanel / hidePanel / relocatePanel / the unsaved-Studio hold
+// ---------------------------------------------------------------------------------------------
+
+describe('the imperative store', () => {
   beforeEach(() => { resetPanelSlots(); resetUnsaved() })
 
-  test('showPanel places a panel and notifies subscribers', () => {
+  test('showPanel opens and persists; a fresh getPanelLayout/subscribe pair see it', () => {
     let notified = 0
     const unsub = subscribePanelLayout(() => { notified += 1 })
-    showPanel('studio')
-    expect(getPanelLayout().right).toBe('studio')
+    showPanel('skills')
+    expect(getPanelLayout().right).toBe('skills')
     expect(notified).toBe(1)
     unsub()
   })
 
-  test('relocatePanel moves without asking, even with unsaved buffers', () => {
-    showPanel('studio', 'right')
-    reportUnsaved('studio', ['README.md'])
+  test('showPanel over an already-open Studio with unsaved buffers HOLDS, asking first', () => {
+    showPanel('studio')
+    reportUnsaved('studio', ['a.ts'])
+    showPanel('skills') // would displace the dirty Studio
+    expect(getPanelLayout().right).toBe('studio') // not yet displaced
+    expect(getUnsaved().question?.cause).toBe('close')
+    answerUnsaved(true) // discard
+    expect(getPanelLayout().right).toBe('skills')
+  })
+
+  test('showPanel moving the Studio to another slot never asks — it stays shown throughout', () => {
+    showPanel('studio')
+    reportUnsaved('studio', ['a.ts'])
     relocatePanel('studio', 'bottom')
     expect(getPanelLayout().bottom).toBe('studio')
     expect(getUnsaved().question).toBeNull()
   })
 
-  test('displacing a dirty Studio out of every slot is HELD until the reader discards', () => {
-    showPanel('studio', 'right')
-    reportUnsaved('studio', ['README.md'])
-    showPanel('contents', 'right')
-    // Held: the Studio is still the one shown, nothing committed yet.
-    expect(getPanelLayout().right).toBe('studio')
-    expect(getUnsaved().question).toEqual({ cause: 'close' })
-    answerUnsaved(true)
-    expect(getPanelLayout().right).toBe('contents')
-  })
-
-  test('"keep editing" leaves the Studio exactly where it was', () => {
-    showPanel('studio', 'right')
-    reportUnsaved('studio', ['README.md'])
-    showPanel('contents', 'right')
-    answerUnsaved(false)
-    expect(getPanelLayout().right).toBe('studio')
-  })
-
-  test('hidePanel on a dirty Studio asks too', () => {
+  test('hidePanel on the Studio with unsaved buffers holds; "keep editing" leaves it shown', () => {
     showPanel('studio')
     reportUnsaved('studio', ['a.ts'])
-    hidePanel('studio')
-    expect(isPanelShown(getPanelLayout(), 'studio')).toBe(true)
-    answerUnsaved(true)
-    expect(isPanelShown(getPanelLayout(), 'studio')).toBe(false)
-  })
-
-  test('closing a clean Studio asks nothing', () => {
-    showPanel('studio')
-    hidePanel('studio')
-    expect(isPanelShown(getPanelLayout(), 'studio')).toBe(false)
-    expect(getUnsaved().question).toBeNull()
-  })
-
-  test('displacing something that is not the Studio never asks', () => {
-    showPanel('cli', 'right')
-    showPanel('studio', 'right')
+    let afterRan = false
+    hidePanel('studio', () => { afterRan = true })
     expect(getPanelLayout().right).toBe('studio')
-    expect(getUnsaved().question).toBeNull()
+    expect(afterRan).toBe(false)
+    answerUnsaved(false) // keep editing
+    expect(getPanelLayout().right).toBe('studio')
+    expect(afterRan).toBe(false)
   })
 
-  test('hidePanel’s `after` runs immediately when there was nothing to close', () => {
-    let ran = 0
-    hidePanel('studio', () => { ran += 1 })
-    expect(ran).toBe(1)
+  test('relocatePanel moves and opens at the destination', () => {
+    showPanel('live')
+    relocatePanel('live', 'bottom')
+    expect(getPanelLayout().bottom).toBe('live')
+    expect(getPanelLayout().placement.live).toBe('bottom')
   })
 
-  test('hidePanel’s `after` runs immediately on a clean close', () => {
-    showPanel('studio')
-    let ran = 0
-    hidePanel('studio', () => { ran += 1 })
-    expect(ran).toBe(1)
-    expect(isPanelShown(getPanelLayout(), 'studio')).toBe(false)
-  })
-
-  test('hidePanel’s `after` is HELD with the question, and runs only on discard — this is I2’s fix', () => {
-    showPanel('studio', 'right')
-    reportUnsaved('studio', ['README.md'])
-    let ran = 0
-    hidePanel('studio', () => { ran += 1 })
-    expect(ran).toBe(0)
-    expect(isPanelShown(getPanelLayout(), 'studio')).toBe(true)
-    answerUnsaved(true)
-    expect(ran).toBe(1)
-    expect(isPanelShown(getPanelLayout(), 'studio')).toBe(false)
-  })
-
-  test('hidePanel’s `after` never runs on "keep editing"', () => {
-    showPanel('studio', 'right')
-    reportUnsaved('studio', ['README.md'])
-    let ran = 0
-    hidePanel('studio', () => { ran += 1 })
-    answerUnsaved(false)
-    expect(ran).toBe(0)
-    expect(isPanelShown(getPanelLayout(), 'studio')).toBe(true)
-  })
-
-  test('setSlotRightOpen minimizes/restores WITHOUT asking, even with unsaved buffers — it never unmounts anything', () => {
-    showPanel('studio', 'right')
-    reportUnsaved('studio', ['README.md'])
+  test('setBandOpen / setSlotRightOpen toggle the persisted layout', () => {
+    showPanel('cli')
+    setBandOpen(false)
+    expect(getPanelLayout().bottomOpen).toBe(false)
     setSlotRightOpen(false)
-    expect(getPanelLayout().right).toBe('studio') // still assigned — parked, not closed
     expect(getPanelLayout().rightOpen).toBe(false)
-    expect(getUnsaved().question).toBeNull() // never asked — nothing was dropped
-    setSlotRightOpen(true)
-    expect(getPanelLayout().rightOpen).toBe(true)
   })
 })

@@ -1,57 +1,38 @@
 /**
- * artifactsStore.ts — the artifacts panel's open state and its count, shared by two components that
- * do not contain one another.
+ * artifactsStore.ts — the session's own file-count badge, plus a compatibility `openArtifacts` shim.
  *
- * The BUTTON lives in the unified header (`App.tsx`'s sessions strip, beside the Chat/Terminal
- * tabs); the PANEL and the list it counts live in `SessionsPage`. Neither is an ancestor of the
- * other, so the state has to sit beside them both.
+ * BEFORE THE RIGHT ICON RAIL, this store carried an `open`/`dismissed`/`tabRequest` trio for the
+ * SINGLE `contents` panel — the ten tabs it now covers shared one open flag because they shared one
+ * container. Each of the ten is its own `PanelId` now (`panelSlots.ts`), with its own occupancy
+ * tracked directly in `SlotLayout` exactly like `studio`/`cli`/`shell`/`hardware` always were — so
+ * `open`/`dismissed` have nothing left to answer that `panelSlots.isPanelShown` does not already.
  *
- * An external store rather than a context, matching `notifications.ts` — the alternative is
- * threading two values and a setter through the page shell, the strip and the panel, which is four
- * files that must agree about a boolean. Kept deliberately small: an open flag, a count, and which
- * session they describe.
- *
- * `sessionId` is on the record for a reason. The count belongs to ONE conversation, and a stale
- * count on the header of a different session is exactly the class of confident-wrong-answer this
- * codebase refuses elsewhere — so a reader that does not recognise the session shows nothing rather
- * than the last session's number.
+ * WHAT SURVIVES:
+ *  - `count` — the header's "N files" badge, a fact about the SESSION, unrelated to which panel (if
+ *    any) is currently showing.
+ *  - `live` / `setArtifactLive` / `useArtifactLive` — what the session is doing RIGHT NOW, published
+ *    by `SessionsPage` for the session-metrics card's References section, which `App.tsx` draws
+ *    outside the page that actually reads the conversation. Orthogonal to the panel/tab machinery
+ *    above; it survived this pass unchanged in shape, only re-homed onto the simpler `ArtifactsState`.
+ *  - `openArtifacts(tab, ref)` — the compatibility shim every existing caller (note chips, the task
+ *    flag, the metrics card's "see everything" link, the edge strip) already calls with a tab id and
+ *    an optional row reference. It now opens straight through `panelSlots.showPanel`, and — when a
+ *    `ref` is given — publishes it to `panelFocusRequest` below, which `ArtifactsAside` reads once it
+ *    is mounted as that tab's active content.
  */
 
 import { useSyncExternalStore } from 'react'
-import { getPanelLayout, hidePanel, rightSlotShowing, showPanel } from './panelSlots'
+import { isPanelId, showPanel, type PanelId } from './panelSlots'
 import type { EdgeHint } from './artifactLayout'
 
 /** What the session is doing this instant — the edge strip's own fact, see `currentAction`. */
 export type ArtifactLive = EdgeHint
 
 export interface ArtifactsState {
-  /** Which session the count and the open flag describe. `null` before one is selected. */
+  /** Which session the count (and the live fact, below) describe. `null` before one is selected. */
   sessionId: string | null
-  open: boolean
   /** How many files that session has touched, for the header's badge. */
   count: number
-  /**
-   * The person closed it for THIS session.
-   *
-   * Kept so the panel does not open itself again while the same session keeps writing — see
-   * `shouldAutoOpen`. Cleared by selecting a different session, because a decision about one
-   * conversation says nothing about the next.
-   */
-  dismissed: boolean
-  /**
-   * WHICH TAB an opener asked for, and when it asked.
-   *
-   * The panel remembers the tab the reader last chose, which is right for the header's button —
-   * you press it to go back to what you were looking at. It is wrong for the edge marker, whose
-   * whole sentence is "the harness is running something": pressing that and landing on the file
-   * list is an answer to a question nobody asked.
-   *
-   * The `at` stamp is what makes it a REQUEST rather than a setting. Without it the panel could
-   * never leave the requested tab — the reader clicks Files, the prop still says `live`, and the
-   * next render puts them back. Asking twice for the same tab is two requests, so the stamp changes
-   * even when the tab does not.
-   */
-  tabRequest: { tab: string; at: number; ref?: string } | null
   /**
    * WHAT THE SESSION IS DOING RIGHT NOW, for the surfaces that are not descendants of the page that
    * reads the conversation.
@@ -66,9 +47,7 @@ export interface ArtifactsState {
   live?: ArtifactLive
 }
 
-const EMPTY: ArtifactsState = {
-  sessionId: null, open: false, count: 0, dismissed: false, tabRequest: null,
-}
+const EMPTY: ArtifactsState = { sessionId: null, count: 0 }
 
 let state: ArtifactsState = EMPTY
 const listeners = new Set<() => void>()
@@ -77,9 +56,7 @@ function emit(next: ArtifactsState): void {
   // Reference equality is what `useSyncExternalStore` compares, so an unchanged state must keep the
   // same object or every poll re-renders both consumers.
   if (
-    next.sessionId === state.sessionId && next.open === state.open &&
-    next.count === state.count && next.dismissed === state.dismissed &&
-    next.tabRequest === state.tabRequest && next.live === state.live
+    next.sessionId === state.sessionId && next.count === state.count && next.live === state.live
   ) return
   state = next
   for (const l of listeners) l()
@@ -88,14 +65,6 @@ function emit(next: ArtifactsState): void {
 /** The current record. Exists for tests and for callers that read once rather than subscribe. */
 export function getArtifacts(): ArtifactsState {
   return state
-}
-
-export function useArtifacts(): ArtifactsState {
-  return useSyncExternalStore(
-    cb => { listeners.add(cb); return () => { listeners.delete(cb) } },
-    () => state,
-    () => EMPTY,
-  )
 }
 
 /**
@@ -111,7 +80,7 @@ export function useArtifacts(): ArtifactsState {
 export function setArtifactLive(sessionId: string, live: ArtifactLive | null): void {
   if (state.sessionId !== sessionId) {
     if (live === null) return
-    emit({ sessionId, count: 0, open: false, dismissed: false, tabRequest: null, live })
+    emit({ sessionId, count: 0, live })
     return
   }
   const same = live !== null && state.live !== undefined &&
@@ -132,81 +101,62 @@ export function useArtifactLive(sessionId: string | undefined): ArtifactLive | n
 
 /** The panel's page reports which session it is showing and how many files it found. */
 export function setArtifactCount(sessionId: string, count: number): void {
-  emit(state.sessionId === sessionId
-    ? { ...state, count }
-    // A different session: the count is its own, and so is the decision to have closed the panel.
-    : { sessionId, count, open: false, dismissed: false, tabRequest: null })
+  emit(state.sessionId === sessionId ? { ...state, count } : { sessionId, count })
 }
 
-export function openArtifacts(tab?: string, ref?: string): void {
-  // THE STUDIO IS NO LONGER A MODE OF THIS PANEL — see `panelSlots.ts`. This is kept as a thin
-  // compatibility shim so the header button and the mobile session menu (which both still call
-  // `openArtifacts('studio')`) need no second import: a request for it opens the STUDIO panel in
-  // its own slot and touches nothing here. This store's `open`/`dismissed`/`tabRequest` describe the
-  // CONTENTS panel alone, exactly as `contents` is its own `PanelId` in the new model.
-  if (tab === 'studio') { showPanel('studio'); return }
-  const show = () => emit({
-    ...state, open: true,
-    // `ref` names a STEP to open once the tab is there — the edge strip names an action, and
-    // pressing it should land on that row rather than on the top of a feed to be searched.
-    ...(tab === undefined ? {} : { tabRequest: { tab, at: Date.now(), ...(ref ? { ref } : {}) } }),
-  })
-  // CONTENTS AND WHATEVER ELSE HOLDS THE RIGHT SLOT SHARE IT. Opening Contents while ANY panel sits
-  // there — the Studio, and now `cli`/`shell` too (C2, this defect's second showing: I2 fixed it for
-  // the Studio alone and the same gap reopened the moment `cli`/`shell` could reach the slot) — must
-  // DISPLACE it, asking first only when the Studio is dirty, through the very `hidePanel` that
-  // already asks for a direct close — or Contents lights as "open" behind a panel the reader never
-  // left: the header's button, a note chip's `openArtifacts('live', ref)`, the metrics card's
-  // `openArtifacts('metrics')` and the right switcher's own "Conteúdo" tab all go through this one
-  // function. `after` is what fixes the second half of that: Contents opens only once the occupant
-  // has actually gone, whether that is immediate (nothing dirty) or after the reader answers
-  // "discard" — never eagerly, which is what let it light up behind a Studio kept via "Continuar
-  // editando". `hidePanel` only ever asks for the Studio (`panelSlots.hidePanel`'s own studio-only
-  // hold) — displacing `cli`/`shell` here asks nothing, which is correct: nothing of theirs is
-  // dropped by leaving the slot.
-  const occupant = getPanelLayout().right
-  if (occupant !== null) { hidePanel(occupant, show); return }
-  show()
+// ---------------------------------------------------------------------------------------------
+// A REQUESTED ROW, for a tab an opener asked to land ON, not merely open.
+// ---------------------------------------------------------------------------------------------
+
+export interface PanelFocusRequest {
+  tab: PanelId
+  ref?: string
+  /** The stamp that makes this a REQUEST rather than a setting — see `openArtifacts`'s own header
+   *  on why. */
+  at: number
+}
+
+let focus: PanelFocusRequest | null = null
+const focusListeners = new Set<() => void>()
+
+export function getPanelFocusRequest(): PanelFocusRequest | null {
+  return focus
+}
+
+export function usePanelFocusRequest(): PanelFocusRequest | null {
+  return useSyncExternalStore(
+    cb => { focusListeners.add(cb); return () => { focusListeners.delete(cb) } },
+    () => focus,
+    () => null,
+  )
+}
+
+function setPanelFocusRequest(next: PanelFocusRequest): void {
+  focus = next
+  for (const l of focusListeners) l()
 }
 
 /**
- * Closing is also a DECISION not to be reopened automatically — see `ArtifactsState.dismissed`.
+ * Open a panel by id (compatibility shim; see this module's own header). `tab` defaults to `'live'`
+ * — the historical default tab, and the sentence every no-argument caller (the session-actions menu,
+ * a displaced-Contents re-open) already relied on before `contents` had ten separate ids.
  *
- * IT NO LONGER ASKS ABOUT THE STUDIO. This panel used to unmount the Studio along with itself — one
- * DOM tree, one close — so a close with dirty Monaco buffers was a silent discard, and the question
- * was asked here, in the one function every close went through. The Studio is now its OWN panel
- * (`panelSlots.ts`), placed in its own slot independently of this one: closing Contents no longer
- * touches it at all, so asking about its buffers here would hold a close that drops nothing. The
- * hold moved with the buffers — `panelSlots.ts`'s `showPanel` / `hidePanel` ask before the Studio
- * itself is displaced or closed, through the very same `unsavedBuffers.ts`.
+ * `ref` names a STEP to land on once the tab is there — the edge strip names an action, and pressing
+ * it should land on that row rather than on the top of a feed to be searched. It is published
+ * through `panelFocusRequest`, stamped so a second request for the SAME tab/ref is still a distinct
+ * request (asking twice for "Live" must still re-focus the latest row, not be a no-op because the
+ * tab id did not change).
  */
-export function closeArtifacts(): void {
-  closeNow()
-}
-
-function closeNow(): void {
-  emit({ ...state, open: false, dismissed: true })
-}
-
-/**
- * TOGGLE READS THE SAME "WHAT IS SHOWN" SELECTOR THE HEADER'S `aria-pressed` DOES (C2), not this
- * store's own `open` flag in isolation. Found live, after the displacement fix above: `state.open`
- * stays whatever it last was set to by THIS store alone, and `cli`/`shell` reaching the right slot
- * through the switcher's own tab (which calls `panelSlots.openPanel` directly, never
- * `openArtifacts`/`closeArtifacts`) does not touch it. So opening Contents, then picking `cli` from
- * the switcher, left `state.open === true` while the slot showed the terminal — and the header
- * button's NEXT press, reading only `state.open`, called `closeArtifacts()` instead of displacing
- * `cli`: the button visibly did nothing (the terminal stayed, `aria-pressed` stayed `false`, which
- * was already correct) and it took a THIRD press to actually reach Contents. `rightSlotShowing` is
- * the one place that already reconciles the slot's own occupant with this store's flag; reading it
- * here as well is what makes one press behave like Contents is either showing or it is not.
- */
-export function toggleArtifacts(): void {
-  if (rightSlotShowing(getPanelLayout(), state.open) === 'contents') closeArtifacts(); else openArtifacts()
+export function openArtifacts(tab?: string, ref?: string): void {
+  const panel: PanelId = isPanelId(tab) ? tab : 'live'
+  showPanel(panel)
+  if (ref !== undefined) setPanelFocusRequest({ tab: panel, ref, at: Date.now() })
 }
 
 /** For tests: forget everything. */
 export function resetArtifacts(): void {
   state = EMPTY
+  focus = null
   for (const l of listeners) l()
+  for (const l of focusListeners) l()
 }

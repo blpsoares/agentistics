@@ -76,9 +76,13 @@ describe('SessionsPage holds the pane drop behind the question', () => {
     expect(guardBesidePane(PAGE)).toBe(true)
   })
 
-  test('the pane is closed through the store close that asks, not a bypass', () => {
+  test('the pane is closed through panelSlots.closePanel (which asks for the Studio), not a bypass', () => {
+    // Post-rail: every one of the ten former Contents tabs carries its OWN `onClose`, closing
+    // exactly the panel it belongs to through `closeSlotPanel` (`panelSlots.ts`'s `closePanel`) —
+    // the same function `hidePanel` already asks through for the Studio. There is no separate
+    // `closeArtifacts` bypass left to check for; its retirement is pinned below.
     const aside = PAGE.slice(PAGE.indexOf('<ArtifactsAside'), PAGE.indexOf('const leaveGuard'))
-    expect(aside.includes('onClose={closeArtifacts}')).toBe(true)
+    expect(aside.includes('onClose={() => closeSlotPanel(id)}')).toBe(true)
   })
 
   test('the scan still sees the defect it exists to catch', () => {
@@ -97,20 +101,18 @@ describe('SessionsPage holds the pane drop behind the question', () => {
 
 describe('the links the guard depends on', () => {
   /**
-   * WHERE THE ASK NOW LIVES — updated for the panels-and-slots feature (design §1).
+   * WHERE THE ASK NOW LIVES — updated for the right-icon-rail pass.
    *
-   * This test used to pin the ask INSIDE `closeArtifacts`, from before the Studio was pulled out of
-   * `ArtifactsAside` into its own panel (`lib/panelSlots.ts`). That commit deleted the pinned line
-   * and this test stayed green regardless — a full `bun test` run at HEAD is red on it, which is
-   * exactly the gap a lint test exists to close.
-   *
-   * THE NEW INVARIANT: `closeArtifacts` holds NOTHING (the Studio is no longer its concern — see the
-   * doc comment on `artifactsStore.closeArtifacts` and `artifactsStore.test.ts`'s own coverage of
-   * that), and the ask moved to the ONE place that can actually displace or close the Studio now:
-   * `panelSlots.ts`'s `showPanel` (a displacing open) and `hidePanel` (a direct close).
+   * This test used to pin the ask INSIDE `closeArtifacts`, from before `contents` stopped existing
+   * as a single panel. Every one of its ten former tabs is a genuine `PanelId` now, tracked directly
+   * in `SlotLayout` exactly like `studio`/`cli`/`shell`/`hardware` always were — so `closeArtifacts`
+   * (and the `closeNow`/`dismissed` machinery it stood on) had nothing left to answer that
+   * `panelSlots.closePanel` does not already, and is RETIRED rather than kept as a thin, ask-nothing
+   * wrapper. `artifactsStore.test.ts` covers what remains of that module.
    */
-  test('closeArtifacts itself holds nothing — the Studio is its own panel now, not this one\'s', () => {
-    expect(STORE.includes('export function closeArtifacts(): void {\n  closeNow()\n}')).toBe(true)
+  test('closeArtifacts is RETIRED — every panel closes straight through panelSlots.closePanel now', () => {
+    expect(/\bcloseArtifacts\b/.test(STORE)).toBe(false)
+    expect(/\bcloseNow\b/.test(STORE)).toBe(false)
   })
 
   test('showPanel asks before a displacing open drops the Studio, and hidePanel asks before a direct close', () => {
