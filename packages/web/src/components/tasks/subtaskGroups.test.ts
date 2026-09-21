@@ -1,6 +1,8 @@
 import { test, expect } from 'bun:test'
+import { sortSubtasks } from '@agentistics/core'
 import {
-  createGroupCandidates, groupMembers, groupOf, isGroupMember, isGroupSubtask, joinGroupCandidates,
+  clusterSubtaskRows, createGroupCandidates, groupMembers, groupOf, isGroupMember, isGroupSubtask,
+  joinGroupCandidates,
 } from './subtaskGroups'
 import type { Subtask } from '../../lib/tasks'
 
@@ -89,4 +91,37 @@ test('joinGroupCandidates: every group of the delivery, nothing else', () => {
 
 test('joinGroupCandidates: empty when the delivery has no groups yet', () => {
   expect(joinGroupCandidates([sub({ id: 's1' }), sub({ id: 's2' })])).toEqual([])
+})
+
+// --- sorting a list that has groups in it ------------------------------------------------------
+// The sort orders the FLAT list and `clusterSubtaskRows` rebuilds the clusters from it, so a group
+// and its members can never be pulled apart. Pinned here because it is a property of the pair.
+
+test('sorting keeps every group whole: header first, members right under it, in sorted order', () => {
+  const list = [
+    sub({ id: 'loose-b', title: 'b loose' }),
+    sub({ id: 'm-z', title: 'zulu', parentGroupId: 'g' }),
+    sub({ id: 'g', title: 'mid group', isGroup: true }),
+    sub({ id: 'loose-a', title: 'a loose' }),
+    sub({ id: 'm-a', title: 'alpha', parentGroupId: 'g' }),
+  ]
+  const asc = clusterSubtaskRows(sortSubtasks(list, { key: 'title', dir: 'asc' })).map(r => r.subtask.id)
+  // loose rows and the group block are ordered among themselves; members inside their group
+  expect(asc).toEqual(['loose-a', 'loose-b', 'g', 'm-a', 'm-z'])
+  const desc = clusterSubtaskRows(sortSubtasks(list, { key: 'title', dir: 'desc' })).map(r => r.subtask.id)
+  expect(desc).toEqual(['g', 'm-z', 'm-a', 'loose-b', 'loose-a'])
+  for (const order of [asc, desc]) {
+    const g = order.indexOf('g')
+    expect(new Set(order.slice(g + 1, g + 3))).toEqual(new Set(['m-a', 'm-z']))
+  }
+})
+
+test('sorting keeps an orphaned member as a loose row and never drops a row', () => {
+  const list = [
+    sub({ id: 'orphan', title: 'a', parentGroupId: 'gone' }),
+    sub({ id: 's', title: 'b' }),
+  ]
+  const out = clusterSubtaskRows(sortSubtasks(list, { key: 'title', dir: 'desc' }))
+  expect(out.map(r => r.subtask.id)).toEqual(['s', 'orphan'])
+  expect(out.every(r => !r.clustered)).toBe(true)
 })

@@ -16,12 +16,19 @@
  * explaining why is the same defect as a confident zero.
  */
 
-import { useMemo, useState, type CSSProperties } from 'react'
+import { Fragment, useMemo, useState, type CSSProperties } from 'react'
 import { Laptop, Layers, Rows3 } from 'lucide-react'
-import { fmtCost } from '@agentistics/core'
+import {
+  cycleSort, fmtCost, sortRowsBy, type SortKey, type SortSpec, type SortableRow,
+} from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import type { CentralTaskMachine, CentralTaskRow } from '../../lib/tasks'
-import { NA, button, fmtInt, fmtTokens, microLabel, numeric, pill, statusStyle, surface } from './board'
+import {
+  NA, button, fmtInt, fmtTokens, liveStatusOrder, microLabel, numeric, pill, statusStyle, surface,
+} from './board'
+import { SortTh } from './SortHeader'
+import { SortControl } from './SortControl'
+import { boardCopy } from './copy'
 import { TaskProgressBar } from './TaskProgressBar'
 import { HarnessBadges } from './HarnessBadges'
 
@@ -44,6 +51,31 @@ function StatusPill({ status }: { status: string }) {
   const s = statusStyle(null, status)
   return <span style={{ ...pill(s.color), background: s.dim }}>{s.label}</span>
 }
+
+/**
+ * The Sessions column prints `sessionsLinked` — what this central actually holds — so that is what
+ * it is ordered by (see `RepoTasksTab`'s `asSortable`, the same reasoning).
+ */
+const asSortable = (r: CentralTaskRow): SortableRow => ({
+  ...r, rollup: { ...r.rollup, sessionsUsed: r.rollup.sessionsLinked },
+})
+
+/**
+ * A central has no live status list to order by (see `StatusPill`), so a status sort follows the
+ * fixed legacy pipeline; a status only that machine defined sorts after every known one.
+ */
+const STATUS_ORDER = liveStatusOrder(null)
+
+const SORT_OPTIONS = (pt: boolean): Array<{ key: SortKey; label: string }> => [
+  { key: 'title', label: pt ? 'Entrega' : 'Delivery' },
+  { key: 'status', label: 'Status' },
+  { key: 'progress', label: pt ? 'Progresso' : 'Progress' },
+  { key: 'sessions', label: pt ? 'Sessões' : 'Sessions' },
+  { key: 'rounds', label: pt ? 'Seus prompts' : 'Your prompts' },
+  { key: 'tokens', label: 'Tokens' },
+  { key: 'cost', label: pt ? 'Custo' : 'Cost' },
+  { key: 'harnesses', label: 'Harnesses' },
+]
 
 /** What this central cannot see of a delivery, in words — never a silently smaller number. */
 function shortfall(row: CentralTaskRow, pt: boolean): string | null {
@@ -68,6 +100,12 @@ export function CentralTaskBoard(p: CentralTaskBoardProps) {
   const isMobile = useIsMobile()
   const pt = p.lang === 'pt'
   const [flat, setFlat] = useState(false)
+  // One order for the whole board, machines and the flat list alike. `null` = the order the rows
+  // arrive in (most recently touched first in the flat list) and the way back from any header.
+  const [sort, setSort] = useState<SortSpec | null>(null)
+  const L = boardCopy(p.lang).list
+  const order = (rows: CentralTaskRow[]) =>
+    sort ? sortRowsBy(rows, sort, asSortable, { statusOrder: STATUS_ORDER }) : rows
   const cost = (n: number | null) => (n === null ? NA : fmtCost(n, p.currency, p.brlRate))
 
   const all = useMemo(
@@ -102,8 +140,21 @@ export function CentralTaskBoard(p: CentralTaskBoardProps) {
         </div>
       </div>
 
+      {isMobile && (
+        // A phone has no column titles to press; the same order is one control, above every list.
+        <SortControl
+          label={L.sortBy}
+          options={SORT_OPTIONS(pt)}
+          current={sort}
+          onPick={k => setSort(k === null ? null : { key: k, dir: 'asc' })}
+          onDir={() => setSort(cur => cur && { key: cur.key, dir: cur.dir === 'asc' ? 'desc' : 'asc' })}
+          defaultLabel={L.sortDefault} ascLabel={L.sortAsc} descLabel={L.sortDesc}
+          mobile
+        />
+      )}
+
       {flat
-        ? <RowList rows={all} showMachine lang={p.lang} cost={cost} isMobile={isMobile} />
+        ? <RowList rows={order(all)} showMachine lang={p.lang} cost={cost} isMobile={isMobile} sort={sort} onSort={setSort} />
         : p.machines.map(m => (
           <section key={m.memberId} style={{ display: 'grid', gap: 8 }}>
             <h2 style={{
@@ -123,21 +174,34 @@ export function CentralTaskBoard(p: CentralTaskBoardProps) {
                     : 'This machine shares no delivery with this central.'}
                 </div>
               )
-              : <RowList rows={m.rows} lang={p.lang} cost={cost} isMobile={isMobile} />}
+              : <RowList rows={order(m.rows)} lang={p.lang} cost={cost} isMobile={isMobile} sort={sort} onSort={setSort} />}
           </section>
         ))}
     </div>
   )
 }
 
-function RowList({ rows, showMachine, lang, cost, isMobile }: {
+function RowList({ rows, showMachine, lang, cost, isMobile, sort, onSort }: {
   rows: CentralTaskRow[]
   showMachine?: boolean
   lang: 'pt' | 'en'
   cost: (n: number | null) => string
   isMobile: boolean
+  sort: SortSpec | null
+  onSort: (next: SortSpec | null) => void
 }) {
   const pt = lang === 'pt'
+  const L = boardCopy(lang).list
+  const columns: Array<{ key: SortKey; label: string; numeric?: boolean }> = [
+    { key: 'title', label: pt ? 'Entrega' : 'Delivery' },
+    { key: 'status', label: 'Status' },
+    { key: 'progress', label: pt ? 'Progresso' : 'Progress' },
+    { key: 'sessions', label: pt ? 'Sessões' : 'Sessions', numeric: true },
+    { key: 'rounds', label: pt ? 'Seus prompts' : 'Your prompts', numeric: true },
+    { key: 'tokens', label: 'Tokens', numeric: true },
+    { key: 'cost', label: pt ? 'Custo' : 'Cost', numeric: true },
+    { key: 'harnesses', label: 'Harnesses' },
+  ]
 
   // Cards on a phone, a table on a desktop — the same rows either way.
   if (isMobile) {
@@ -183,15 +247,19 @@ function RowList({ rows, showMachine, lang, cost, isMobile }: {
       <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: showMachine ? 860 : 760 }}>
         <thead>
           <tr>
-            <th style={th}>{pt ? 'Entrega' : 'Delivery'}</th>
-            {showMachine && <th style={th}>{pt ? 'Máquina' : 'Machine'}</th>}
-            <th style={th}>Status</th>
-            <th style={th}>{pt ? 'Progresso' : 'Progress'}</th>
-            <th style={{ ...th, textAlign: 'right' }}>{pt ? 'Sessões' : 'Sessions'}</th>
-            <th style={{ ...th, textAlign: 'right' }}>{pt ? 'Seus prompts' : 'Your prompts'}</th>
-            <th style={{ ...th, textAlign: 'right' }}>Tokens</th>
-            <th style={{ ...th, textAlign: 'right' }}>{pt ? 'Custo' : 'Cost'}</th>
-            <th style={th}>Harnesses</th>
+            {columns.map(c => (
+              <Fragment key={c.key}>
+                <SortTh
+                  label={c.label} sortKey={c.key} current={sort} mobile={false}
+                  onSort={k => onSort(cycleSort(sort, k))}
+                  title={L.sortByColumn.replace('{column}', c.label)}
+                  style={{ ...th, textAlign: c.numeric ? 'right' : 'left' }}
+                />
+                {/* The machine is a column of its own only in the flat list. It is not a sort key
+                    (`SortKey` orders deliveries, and a machine is where one lives), so it is plain. */}
+                {c.key === 'title' && showMachine && <th style={th}>{pt ? 'Máquina' : 'Machine'}</th>}
+              </Fragment>
+            ))}
           </tr>
         </thead>
         <tbody>
