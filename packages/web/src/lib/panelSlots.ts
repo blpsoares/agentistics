@@ -62,6 +62,7 @@
  */
 
 import { reorderByDrag } from './dragReorder'
+import { clampRailWidth, RAIL_WIDTH_FLOOR_PX } from './railFit'
 import { createElement, useSyncExternalStore, type ComponentType, type ReactElement } from 'react'
 import { holdIfUnsaved } from './unsavedBuffers'
 
@@ -146,6 +147,11 @@ export interface SlotLayout {
    *  own park-not-unmount minimize reads this; every other panel closes outright on minimize instead
    *  and never sees it turn `false`). */
   rightOpen: boolean
+  /** THE RAIL'S OWN WIDTH, in pixels (owner, 2026-09-21) — clamped to `[RAIL_WIDTH_FLOOR_PX,
+   *  RAIL_WIDTH_CEILING_PX]` (`lib/railFit.ts`) by every writer, so a reader never has to re-check
+   *  it. Persisted in this SAME record (`agentistics-panel-slots`) rather than a separate key,
+   *  because it is exactly as much "how this reader's rail looks" as placement/order already are. */
+  railWidth: number
 }
 
 export const EMPTY_SLOT_LAYOUT: SlotLayout = {
@@ -153,6 +159,7 @@ export const EMPTY_SLOT_LAYOUT: SlotLayout = {
   order: defaultOrder(),
   restoreTo: defaultRestoreTo(),
   right: null, bottom: null, bottomOpen: false, rightOpen: true,
+  railWidth: RAIL_WIDTH_FLOOR_PX,
 }
 
 /** May this panel ever sit in this placement? As of this pass every panel reaches every placement —
@@ -253,17 +260,30 @@ export function setRightOpen(layout: SlotLayout, open: boolean): SlotLayout {
 }
 
 /**
- * MOVE `panel` TO `to` ('rail' or 'bottom') — the gear's own verb (spec §3: "the gear menu keeps
- * both verbs... always reachable"). Sets the placement AND, mirroring the pre-rail model's own
- * `movePanel` ("a move is simply an open that happens to keep the panel visible throughout"), opens
- * the panel there — the panel a reader just moved is the panel they meant to keep looking at,
- * displacing whatever already occupied that slot. `restoreTo` is refreshed to the new placement too,
- * so a LATER hide-then-restore puts it back where this move actually left it, not where it was
- * before.
+ * MOVE `panel` TO `to` ('rail' or 'bottom') — the gear's own verb (spec §3), the icon's own
+ * right-click "Mover", and the drag's cross-bar case (`planPanelDrop`, below) all route through this
+ * ONE function, which is what lets this rule live in exactly one place instead of three that could
+ * disagree.
+ *
+ * A MOVE CARRIES THE PANEL'S OPEN STATE — IT NEVER CREATES ONE (owner, 2026-09-21, replacing this
+ * function's own former "a move is simply an open that happens to keep the panel visible
+ * throughout"): moving a panel that was NOT currently shown just relocates its icon/tab and leaves
+ * it closed, touching neither slot's occupant — reported live as the annoyance this replaces, where
+ * moving ANY panel (including ones never opened) silently seized the destination away from whatever
+ * a reader was actually looking at. Moving a panel that WAS shown reopens it at the destination, and
+ * — for free, not as a second rule — MINIMIZES wherever it left: `openPanel` clears the OLD slot's
+ * occupancy through `withoutOccupant` before assigning the new one, and clearing a slot's occupant
+ * is already exactly what collapses the bottom band (`bottomOpen: false`) or empties the right slot.
+ * A slot whose occupant was NOT the panel being moved is untouched either way, since nothing here
+ * ever calls `withoutOccupant` for a panel that provably is not occupying anything.
+ *
+ * `restoreTo` is refreshed to the new placement regardless (inside `setPlacement`), so a LATER
+ * hide-then-restore puts it back where this move actually left it, not where it was before —
+ * unaffected by whether the move itself opened anything.
  */
 export function movePanel(layout: SlotLayout, panel: PanelId, to: OpenPlacement): SlotLayout {
   const placed = setPlacement(layout, panel, to)
-  return openPanel(placed, panel)
+  return isPanelShown(layout, panel) ? openPanel(placed, panel) : placed
 }
 
 /**
@@ -551,7 +571,7 @@ function migrateLegacy(r: Record<string, unknown>): SlotLayout {
   for (const id of PANEL_IDS) restoreTo[id] = placement[id] === 'bottom' ? 'bottom' : 'rail'
   const bottomOpen = bottom !== null && r.bottomOpen === true
   const rightOpen = r.rightOpen !== false
-  return { placement, order, restoreTo, right, bottom, bottomOpen, rightOpen }
+  return { placement, order, restoreTo, right, bottom, bottomOpen, rightOpen, railWidth: RAIL_WIDTH_FLOOR_PX }
 }
 
 /** Read the persisted layout. Exported so the storage guard is directly testable with an injected
@@ -578,6 +598,10 @@ export function readLayout(storage?: Storage): SlotLayout {
       bottom: readOccupant(r.bottom, placement, 'bottom'),
       bottomOpen: readOccupant(r.bottom, placement, 'bottom') !== null && r.bottomOpen === true,
       rightOpen: r.rightOpen !== false,
+      // Absent (an older build's record) migrates to the floor — never NaN, never a throw — and a
+      // stored value outside the current clamp (a hand-edited file, or a future build with a wider
+      // range) is re-clamped to what THIS build allows, same as every other field here.
+      railWidth: clampRailWidth(typeof r.railWidth === 'number' ? r.railWidth : RAIL_WIDTH_FLOOR_PX),
     }
   } catch {
     return EMPTY_SLOT_LAYOUT
@@ -656,10 +680,46 @@ export function setBandOpen(open: boolean): void {
   commit(setBottomOpen(state, open))
 }
 
+/**
+ * "Ocultar" (spec §5), imperatively — a panel goes to `hidden`: no icon, no tab, reachable only
+ * through the config area's eye. Built on the pure `hidePanelPlacement`, which already removes the
+ * panel as the active occupant of whichever slot it was showing in (a hidden panel has no icon or
+ * tab a reader could have clicked to see it — see that function's own header).
+ *
+ * ASKS ONLY when hiding the Studio while it is CURRENTLY the active occupant would discard unsaved
+ * edits — the exact same risk `hidePanel` (the ordinary close) already guards, because hiding it
+ * removes it as an occupant identically to closing it. Hiding any other panel, or hiding the Studio
+ * while it is not currently shown, never asks.
+ */
+export function concealPanel(panel: PanelId): void {
+  const next = hidePanelPlacement(state, panel)
+  if (next === state) return
+  const studioDisplaced = panel === 'studio' && isPanelShown(state, 'studio')
+  if (studioDisplaced && holdIfUnsaved('close', () => commit(next))) return
+  commit(next)
+}
+
+/**
+ * The eye's "put it back where it was" verb (spec §5), imperatively — restores a hidden panel to
+ * its remembered `restoreTo` placement. Never asks: restoring only ever ADDS an icon or a tab back
+ * to the rail/bottom, it never displaces anything that is currently shown.
+ */
+export function revealPanel(panel: PanelId): void {
+  commit(restorePanelPlacement(state, panel))
+}
+
 /** Minimize or restore the right slot's own content — never asks: it never unmounts anything (the
  *  Studio's own host stays parked), so there is nothing here for `holdIfUnsaved` to protect. */
 export function setSlotRightOpen(open: boolean): void {
   commit(setRightOpen(state, open))
+}
+
+/** The rail's own resize grip, imperatively — clamps and persists (owner, 2026-09-21). Never asks:
+ *  resizing the rail displaces no occupant and discards no buffer. */
+export function setRailWidth(width: number): void {
+  const clamped = clampRailWidth(width)
+  if (clamped === state.railWidth) return
+  commit({ ...state, railWidth: clamped })
 }
 
 /** For tests: forget everything. */
@@ -677,6 +737,12 @@ export interface PanelSlotsApi {
   dropPanel: (panel: PanelId, target: PanelDropTarget) => void
   setBottomOpen: (open: boolean) => void
   setRightOpen: (open: boolean) => void
+  /** "Ocultar" (spec §5) — see `concealPanel`. */
+  hidePanelToConfig: (panel: PanelId) => void
+  /** The eye's restore verb (spec §5) — see `revealPanel`. */
+  restorePanel: (panel: PanelId) => void
+  /** The rail's own resize grip (owner, 2026-09-21) — see `setRailWidth`. */
+  setRailWidth: (width: number) => void
 }
 
 /** The one hook every panel-aware component reads. Bound actions carry the same names as the pure
@@ -691,7 +757,25 @@ export function usePanelSlots(): PanelSlotsApi {
     dropPanel,
     setBottomOpen: setBandOpen,
     setRightOpen: setSlotRightOpen,
+    hidePanelToConfig: concealPanel,
+    restorePanel: revealPanel,
+    setRailWidth,
   }
+}
+
+/**
+ * THE RAIL'S OWN LIVE WIDTH, ALONE — every "stay clear of the rail" reader (`SessionsPage.tsx`'s
+ * `closedRightEdge` report, both bands' `fullscreenInsetRight` call, `PanelRail.tsx`'s own DOM
+ * width) needs this ONE number and nothing else `SlotLayout` carries. `usePanelSlots()` would work
+ * too — `layout.railWidth` is right there — but it re-renders on every reorder, open and drop
+ * anywhere on the rail or the bottom band, which is none of THOSE three consumers' own concern.
+ * `useSyncExternalStore`'s snapshot here is a bare number, so `Object.is` skips the re-render
+ * whenever a layout change leaves the width untouched — which is most of them.
+ */
+export function useRailWidth(): number {
+  return useSyncExternalStore(
+    subscribePanelLayout, () => getPanelLayout().railWidth, () => RAIL_WIDTH_FLOOR_PX,
+  )
 }
 
 /**

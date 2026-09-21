@@ -69,6 +69,22 @@ function guardDefined(src: string): boolean {
   return /const leaveGuard = \(\s*<UnsavedChangesGuard\b[\s\S]{0,200}?sessionKeys=\{/.test(src)
 }
 
+/**
+ * One exported function's own body, from `export function <name>(` to the next `export function` —
+ * `showPanel` and `concealPanel` (spec §5's "Ocultar") both guard a Studio displacement with the
+ * BYTE-IDENTICAL line `if (studioDisplaced && holdIfUnsaved('close', () => commit(next))) return`,
+ * so a whole-file `.replace()` (which only ever touches the FIRST occurrence) silently stopped
+ * proving `showPanel`'s own guarantee the moment `concealPanel` gained the same line — the second
+ * occurrence survived every planted removal and the test kept passing regardless. Scoping to one
+ * function's own text is what makes each guarantee provable on its own.
+ */
+function sliceFunction(src: string, name: string): string {
+  const start = src.indexOf(`export function ${name}(`)
+  if (start === -1) return ''
+  const next = src.indexOf('export function ', start + 1)
+  return next === -1 ? src.slice(start) : src.slice(start, next)
+}
+
 describe('SessionsPage holds the pane drop behind the question', () => {
   test('the guard is defined with the session keys, and rendered in the return that holds the pane', () => {
     expect(PAGE.includes("import { UnsavedChangesGuard } from '../components/sessions/UnsavedChangesGuard'")).toBe(true)
@@ -183,11 +199,30 @@ describe('the links the guard depends on', () => {
       "export function closeArtifacts(): void {\n  if (state.open && holdIfUnsaved('close', closeNow)) return\n  closeNow()\n}",
     )
     expect(oldShape.includes('export function closeArtifacts(): void {\n  closeNow()\n}')).toBe(false)
-    // `showPanel` stops asking before a displacing open drops the Studio.
-    const noAskOnShow = PANEL_SLOTS.replace(
+    // `showPanel` stops asking before a displacing open drops the Studio. Scoped to `showPanel`'s
+    // OWN body (`sliceFunction`) — `concealPanel` (spec §5's "Ocultar") guards the identical line,
+    // and a whole-file replace only ever strips the FIRST of the two, leaving this coverage unable
+    // to tell "showPanel stopped asking" from "concealPanel still asks".
+    const showPanelSrc = sliceFunction(PANEL_SLOTS, 'showPanel')
+    expect(showPanelSrc.includes(
+      "if (studioDisplaced && holdIfUnsaved('close', () => commit(next))) return",
+    )).toBe(true)
+    const noAskOnShow = showPanelSrc.replace(
       "if (studioDisplaced && holdIfUnsaved('close', () => commit(next))) return", '',
     )
     expect(noAskOnShow.includes(
+      "if (studioDisplaced && holdIfUnsaved('close', () => commit(next))) return",
+    )).toBe(false)
+    // `concealPanel` (spec §5) stops asking before hiding the Studio while it is the active
+    // occupant — the SAME guarantee, the OTHER call site, proven independently for the same reason.
+    const concealPanelSrc = sliceFunction(PANEL_SLOTS, 'concealPanel')
+    expect(concealPanelSrc.includes(
+      "if (studioDisplaced && holdIfUnsaved('close', () => commit(next))) return",
+    )).toBe(true)
+    const noAskOnConceal = concealPanelSrc.replace(
+      "if (studioDisplaced && holdIfUnsaved('close', () => commit(next))) return", '',
+    )
+    expect(noAskOnConceal.includes(
       "if (studioDisplaced && holdIfUnsaved('close', () => commit(next))) return",
     )).toBe(false)
     // `hidePanel` stops asking before a direct close drops the Studio.

@@ -29,7 +29,7 @@ import {
 import { StudioHost, type StudioHostProps } from '../components/sessions/StudioHost'
 import { ResizeGrip } from '../components/ResizeGrip'
 import {
-  isPanelShown, isTabPanelId, mountPanel, railPanels, resolveForGates,
+  hiddenPanels, isPanelShown, isTabPanelId, mountPanel, railPanels, resolveForGates,
   resolveForViewport, usePanelSlots, type PanelGates, type PanelId, type TabPanelId,
 } from '../lib/panelSlots'
 import { panelIconFor } from '../lib/panelIcons'
@@ -64,11 +64,14 @@ import {
   resolveArtifactLayout, type ArtifactLayout,
 } from '../lib/artifactLayout'
 import {
-  openArtifacts, setArtifactCount, setArtifactLive, usePanelFocusRequest,
+  openArtifacts, setArtifactCount, setArtifactLive, useArtifactLive, usePanelFocusRequest,
 } from '../lib/artifactsStore'
 import { studioMenuRow } from '../lib/studioMenuRow'
-import { closedRightEdge, RAIL_WIDTH_PX, restingLeftEdge, setRightAsideEdge } from '../lib/rightAsideEdge'
+import { closedRightEdge, restingLeftEdge, setRightAsideEdge } from '../lib/rightAsideEdge'
+import { useLeftAsideEdge } from '../lib/leftAsideEdge'
 import { useViewportWidth } from '../hooks/useViewportWidth'
+import { railActivityFromHint } from '../lib/railActivity'
+import { useHardwarePressureWatch } from '../hooks/useHardwarePressureWatch'
 import type { SessionDrilldownProps } from '../components/SessionDrilldown'
 import type { Artifact } from '../lib/sessionArtifacts'
 import { liveEvents, type LiveTurn } from '../lib/artifactTabs'
@@ -627,6 +630,7 @@ export default function SessionsPage() {
   const {
     layout: rawSlotLayout, openPanel: openSlotPanel, closePanel: closeSlotPanel,
     movePanel: moveSlotPanel, dropPanel: dropSlotPanel, setRightOpen,
+    hidePanelToConfig: hideSlotPanel, restorePanel: revealSlotPanel, setRailWidth,
   } = usePanelSlots()
   const panelFocus = usePanelFocusRequest()
   const panelGates: PanelGates = { editorEnabled, shellEnabled, relayed }
@@ -999,17 +1003,33 @@ export default function SessionsPage() {
    */
   const hardwareOffered = !isCentral
   /**
-   * THE RAIL'S OWN LIST (spec §2) — `panelSlots.railPanels` already sorts by the stored order;
-   * this narrows it by the same server/per-session gates `panelBarEntries` applies to the bottom
-   * band's tabs, so a panel this machine cannot actually serve never gets a clickable icon.
+   * THE GATE — a single predicate, shared by the rail's own icon list AND its hidden list (spec
+   * §5's eye): the same server/per-session gates `panelBarEntries` applies to the bottom band's
+   * tabs, so a panel this machine cannot actually serve never gets a clickable icon OR a tile in the
+   * eye's dropdown (a "restore" verb for a panel that could never be shown here would be a control
+   * that is present and refusing, the one shape this codebase always avoids).
    */
-  const gatedRailPanels = railPanels(slotLayout).filter(id => {
+  const railGateOpen = (id: PanelId): boolean => {
     if (id === 'studio') return editorEnabled === true
     if (id === 'cli') return !relayed
     if (id === 'shell') return shellEnabled === true && !relayed
     if (id === 'hardware') return hardwareOffered
     return true
-  })
+  }
+  /** THE RAIL'S OWN LIST (spec §2) — `panelSlots.railPanels` already sorts by the stored order. */
+  const gatedRailPanels = railPanels(slotLayout).filter(railGateOpen)
+  /** THE EYE'S OWN LIST (spec §5) — everything currently `hidden`, gated the same way. */
+  const gatedHiddenPanels = hiddenPanels(slotLayout).filter(railGateOpen)
+  /** THE ACTIVITY DOT (addendum item 5) — the session's own live hint, already published to
+   *  `artifactsStore.ts` a few lines below (`setArtifactLive`) for the metrics card's References
+   *  section; read back here through the SAME store rather than recomputed, so the rail can never
+   *  disagree with what that card is currently saying about this exact session. */
+  const railActivity = railActivityFromHint(useArtifactLive(selected?.id))
+  /** THE HARDWARE ICON'S OWN RED (addendum item 6) — see `useHardwarePressureWatch`'s own header
+   *  for why this reuses `useHardwareSnapshot` rather than a second reader of the machine. Runs
+   *  whenever this workspace is mounted, not only while the rail itself is on screen — a reader on
+   *  a phone still gets the notification even though there is no rail icon here for them to see. */
+  const { critical: hardwareCritical } = useHardwarePressureWatch(pt ? 'pt' : 'en')
   const rightActivePanel: PanelId | null = slotLayout.right
   // The 44px mobile touch target is PROJECTED by the `.ag-tap-icon` class already on both buttons
   // below (`index.css`'s invisible-hitbox rule), never painted here — a literal `width/height:
@@ -1212,13 +1232,22 @@ export default function SessionsPage() {
    * assumes it is painted over the page's own surface, which a `position: fixed` escape hatch no
    * longer guarantees on its own.
    *
-   * STOPS SHORT OF THE RAIL (spec §2: "full screen respects the rail") — `right` follows
-   * `RAIL_WIDTH_PX` on desktop rather than reaching `inset: 0`'s own viewport edge, or the overlay
-   * would paint straight over the one control that could get the reader back out of it.
+   * STOPS SHORT OF THE RAIL (spec §2: "full screen respects the rail") — `right` follows the rail's
+   * LIVE width (`rawSlotLayout.railWidth`, owner, 2026-09-21: the rail is resizable now) on desktop
+   * rather than reaching `inset: 0`'s own viewport edge, or the overlay would paint straight over the
+   * one control that could get the reader back out of it.
+   *
+   * STOPS SHORT OF THE LEFT SESSIONS LIST TOO (owner: "a esquerda da listagem de sessoes deveria
+   * continuar visivel") — this is the THIRD `PANEL_FULLSCREEN_Z` overlay in the sessions workspace,
+   * beside `StudioBand`'s and `SimpleDockedBand`'s own two in `SessionPanel.tsx`; all three must
+   * agree on what "full screen" leaves alone, so `left` reads the same `useLeftAsideEdge()` bridge
+   * those two already read rather than the `left: 0` this one still had.
    */
+  const leftAsideEdge = useLeftAsideEdge()
   const rightSlotContent = rightSlotFullscreen ? (
     <div style={{
-      position: 'fixed', top: 0, left: 0, bottom: 0, right: isMobile ? 0 : RAIL_WIDTH_PX,
+      position: 'fixed', top: 0, left: isMobile ? 0 : leftAsideEdge, bottom: 0,
+      right: isMobile ? 0 : rawSlotLayout.railWidth,
       zIndex: PANEL_FULLSCREEN_Z,
       display: 'flex', flexDirection: 'column', background: 'var(--bg-surface)',
     }}>
@@ -1297,7 +1326,6 @@ export default function SessionsPage() {
       hardwareOffered={hardwareOffered}
       // The Studio entry's first-open dot — one flag, read wherever the bar renders it.
       studioSeen={ctx.studioSeen}
-      onTaskLinked={refresh}
     />
   )
 
@@ -1565,7 +1593,10 @@ export default function SessionsPage() {
     // chips' closed-aside fallback painted 12px into the rail's icons because this used to report
     // `null` here unconditionally, and their own margin was 12px short of the rail's width).
     if (isMobile || artShell === 'none') {
-      setRightAsideEdge(closedRightEdge(!isMobile && selected !== undefined, viewportWidth))
+      // The rail's LIVE width (owner, 2026-09-21) — a rail dragged out to its ceiling must push
+      // this fallback edge with it, or the Filtros chips paint back into the wider icons exactly
+      // the way the original regression `closedRightEdge`'s own header describes did.
+      setRightAsideEdge(closedRightEdge(!isMobile && selected !== undefined, viewportWidth, rawSlotLayout.railWidth))
       return
     }
     if (artShell === 'fullscreen' || !el) {
@@ -1592,7 +1623,7 @@ export default function SessionsPage() {
       el.removeEventListener('transitionend', onTransformSettled)
       el.removeEventListener('transitioncancel', onTransformSettled)
     }
-  }, [isMobile, artShell, splitRoom, asideIn, selected, viewportWidth])
+  }, [isMobile, artShell, splitRoom, asideIn, selected, viewportWidth, rawSlotLayout.railWidth])
   useEffect(() => () => setRightAsideEdge(null), [])
 
   /**
@@ -2169,8 +2200,13 @@ export default function SessionsPage() {
       {!isMobile && selected && (
         <PanelRail
           panels={gatedRailPanels}
+          hidden={gatedHiddenPanels}
           active={slotLayout.right}
           rightOpen={slotLayout.rightOpen}
+          activity={railActivity}
+          hardwareCritical={hardwareCritical}
+          railWidth={rawSlotLayout.railWidth}
+          onResizeWidth={setRailWidth}
           lang={pt ? 'pt' : 'en'}
           {...(selected.harness ? { harness: selected.harness } : {})}
           onOpen={openSlotPanel}
@@ -2185,6 +2221,8 @@ export default function SessionsPage() {
               : closeSlotPanel(id)
           )}
           onMove={id => moveSlotPanel(id, 'bottom')}
+          onHide={hideSlotPanel}
+          onReveal={revealSlotPanel}
           onDrop={dropSlotPanel}
         />
       )}

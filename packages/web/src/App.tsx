@@ -106,6 +106,7 @@ import {
   filtrosPanelInert, sessionsFiltersShouldReturnFocus, filtrosPanelBoundsRight, metricsTabBoundsRight,
 } from './lib/sessionsFiltersPanel'
 import { useRightAsideEdge } from './lib/rightAsideEdge'
+import { setLeftAsideEdge } from './lib/leftAsideEdge'
 import { CentralSessions } from './components/sessions/CentralSessions'
 // The sessions workspace's container geometry, named ONCE (see FleetOverview's header): the
 // filter row in the strip and the body under it have to move together at every width.
@@ -1679,6 +1680,13 @@ export default function AppLayout() {
   // Only the sessions workspace offers the handle, but whatever it is dragged to applies to both.
   const liveAsideWidth = asideWidth
   const inSessionsWorkspace = modeOfPath(location.pathname) === 'sessions'
+  // PUBLISHED for `SessionPanel.tsx`/`ShellBand.tsx`'s full-screen surfaces, deep inside
+  // `SessionsPage.tsx` — see `leftAsideEdge.ts`'s own header for the bug this fixes (full screen
+  // reaching through the left sessions list). `0` on mobile: that layout has no fixed left sidebar
+  // for a full-screen surface to avoid, and mobile panels cover the viewport by design anyway.
+  useEffect(() => {
+    setLeftAsideEdge(isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth))
+  }, [isMobile, sidebarCollapsed, liveAsideWidth])
 
   /**
    * THE PHONE'S SESSIONS WORKSPACE, AND THE TWO WAYS ITS DOCUMENT MOVED WHEN IT SHOULD NOT HAVE.
@@ -3360,10 +3368,15 @@ export default function AppLayout() {
           }}>
             {selectedFleetSession.title}
           </span>
-          {/* THE TASK CONTROL MOVED DOWN (design item 3) — `SessionTitleFlag` now renders at the
-              bottom bar's left end (`SessionPanel.tsx`'s `taskControl`), with a clipboard icon
-              instead of a flag. The header is left with only the title and its state, per the
-              owner's drawing: "the top bar becomes clean and dedicated to the title etc." */}
+          {/* THE TASK CONTROL MOVED DOWN, THEN AWAY (design item 3, then owner 2026-09-21) — it
+              first moved from this header into the bottom bar's own left end
+              (`SessionPanel.tsx`'s `taskControl`, now gone), then was removed from there entirely
+              once `tasks` became a rail-capable panel like any other ("pode remover o icone fixo
+              de tarefas tbm... pq agora temos na barra da direita") — a second, always-on shortcut
+              to the same board was the one control left standing once a reader emptied the bottom
+              band by moving everything to the rail. The header is left with only the title and its
+              state, per the owner's original drawing: "the top bar becomes clean and dedicated to
+              the title etc." */}
           {/* Gives up before the title does: the name is what identifies the session, and the state
               is repeated on its own row in the aside two centimetres away. */}
           <span style={{
