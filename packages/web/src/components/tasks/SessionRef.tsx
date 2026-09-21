@@ -22,9 +22,17 @@ export interface SessionRefProps {
   /** Unfile it from here. Absent = this surface does not offer that. */
   onUnfile?: (id: string) => void
   lang?: 'pt' | 'en'
+  /**
+   * A conversation filed on the board with no session behind it. There is nothing to open, so it is
+   * NEVER offered as a control (a chip that navigates to a page that does not exist is the dead link
+   * this product refuses everywhere) and says what it is in a word instead. Unfiling still works:
+   * the server takes the link's own id.
+   */
+  historical?: boolean
 }
 
-export function SessionRef({ id, title, harness, onOpen, onUnfile, lang = 'en' }: SessionRefProps) {
+export function SessionRef({ id, title, harness, onOpen: openIfLive, onUnfile, lang = 'en', historical }: SessionRefProps) {
+  const onOpen = historical ? undefined : openIfLive
   const colour = harness ? (HARNESS_COLORS as Record<string, string>)[harness] : undefined
   const label = title?.trim() || id.slice(0, 8)
   return (
@@ -40,7 +48,9 @@ export function SessionRef({ id, title, harness, onOpen, onUnfile, lang = 'en' }
             },
           }
           : {})}
-        title={`${label}\n${id}`}
+        title={historical
+          ? `${label}\n${id}\n${lang === 'pt' ? 'Conversa histórica: sem sessão para abrir.' : 'Historical conversation: no session to open.'}`
+          : `${label}\n${id}`}
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0,
           padding: '2px 8px', borderRadius: 999, maxWidth: 260,
@@ -61,6 +71,11 @@ export function SessionRef({ id, title, harness, onOpen, onUnfile, lang = 'en' }
           {label}
         </span>
         {onOpen && <ExternalLink size={10} style={{ flexShrink: 0, opacity: 0.6 }} />}
+        {historical && (
+          <span style={{ flexShrink: 0, fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+            {lang === 'pt' ? 'histórica' : 'historical'}
+          </span>
+        )}
       </span>
       {onUnfile && (
         <button

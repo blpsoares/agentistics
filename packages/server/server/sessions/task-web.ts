@@ -11,6 +11,8 @@ import {
   canDeleteStatus, isKnownStatusId, isValidStatusColor, nextStatusId, sortTaskStatuses,
 } from '@agentistics/core'
 import { loadTaskWorld } from './task-source'
+import { historicalLinkId, type HistoricalSession } from './task-model'
+import { planConversationFiling } from './task-historical'
 import { buildTaskDetail, buildTaskList, findTask, rowsOfTask } from './task-report'
 import { planDeliveryEvidence, type DeliveryEvidence } from './task-evidence'
 import { buildBoardOverview, type BoardOverview } from './task-overview'
@@ -25,7 +27,7 @@ import {
 import { boardProgress, DEFAULT_LEASE_MS, planNext } from './task-next'
 import { checkParentGroup, planAttach, sanitizeSubtaskBlockedBy } from './task-attach'
 import { planMove } from './task-rank'
-import { compareBy } from '@agentistics/core'
+import { compareBy, repoShortName, sessionLabel } from '@agentistics/core'
 import { deleteTaskFile, deleteTaskFiles, readTaskFile, writeTaskFile } from './task-files'
 import type { TaskDetail, TaskListRow } from './task-report'
 
@@ -57,7 +59,7 @@ export async function listTasks(filter?: TaskFilter): Promise<TaskListReply> {
     tasks: buildTaskList({
       tasks: w.book.tasks,
       attempts: w.book.attempts,
-      rows: w.rows,
+      rows: w.rollupRows,
       metas: scoped.metas,
       costOf: w.costOf,
       comments: w.book.comments,
@@ -65,7 +67,7 @@ export async function listTasks(filter?: TaskFilter): Promise<TaskListReply> {
       files: w.book.files,
     }),
     overview: buildBoardOverview({
-      tasks: w.book.tasks, rows: w.rows, metas: scoped.metas, costOf: w.costOf,
+      tasks: w.book.tasks, rows: w.rollupRows, metas: scoped.metas, costOf: w.costOf,
       statusIds: w.book.statuses.map(s => s.id),
     }),
     excludedByFilter: scoped.excluded,
@@ -85,7 +87,7 @@ export async function showTask(
     task: buildTaskDetail({
       task,
       attempts: w.book.attempts,
-      rows: w.rows,
+      rows: w.rollupRows,
       metas: scoped.metas,
       costOf: w.costOf,
       comments: w.book.comments.filter(c => c.taskId === task.id),
@@ -497,7 +499,13 @@ export async function patchSubtask(subtaskId: string, patch: {
   // filed on it right now, regardless of what it is currently filed under. Read by `checkParentGroup`
   // (`subtask_has_sessions`) and by the `done_needs_session` gate further down — both ask the exact
   // same question.
-  const hasSession = w.rows.some(r => r.subtaskId === found.id)
+  //
+  // Read from `rollupRows`, so a HISTORICAL conversation filed on this subtask (`HistoricalSession`)
+  // counts exactly like a live one: the recovered subtask is the whole reason those exist, and a
+  // done gate that could not see them would go on refusing the very subtasks they were filed to
+  // close. It also keeps the group-join rule honest (`subtask_has_sessions`) — a member gets no
+  // bucket of its own, so a historical link sitting on it would drop out of every breakdown too.
+  const hasSession = w.rollupRows.some(r => r.subtaskId === found.id)
 
   // The EFFECTIVE post-patch `parentGroupId` — what this subtask's group membership will be AFTER
   // this write, not what `found` (the pre-patch record) currently holds. A single PATCH can combine
@@ -766,7 +774,15 @@ export async function removeLink(ref: string, linkId: string): Promise<boolean> 
  * finalizou". A caller that only wants the yes/no still gets it: `ok` is always there.
  */
 export type AttachResult =
-  | { ok: true }
+  | {
+    ok: true
+    /**
+     * Where the session WAS filed, when this write moved it (filing is a MOVE, never an add). Absent
+     * when it was unfiled, or when it already sat exactly where it was asked to go — `ok` alone does
+     * not say which of those happened, and a caller retrying a filing needs to.
+     */
+    movedFrom?: FilingTarget
+  }
   | {
     ok: false
     reason: 'no_such_task' | 'no_such_session' | 'no_such_subtask' | 'needs_subtask'
@@ -774,6 +790,12 @@ export type AttachResult =
     /** Set only for `reason: 'blocked'` — the subtask ids still open. */
     blockedBy?: readonly string[]
   }
+
+/** A place a conversation can be filed: a delivery, and optionally one of its subtasks. */
+export interface FilingTarget {
+  taskId: string
+  subtaskId?: string
+}
 
 export async function attachSession(
   ref: string,
@@ -783,7 +805,9 @@ export async function attachSession(
   const w = await loadTaskWorld()
   const task = findTask(ref, w.book.tasks)
   if (!task) return { ok: false, reason: 'no_such_task' }
-  const row = w.rows.find(r => r.id === sessionId)
+  // The REGISTRY, never `rollupRows`: this resolves a session id to a row it will PATCH, and a
+  // historical link has no row to patch (it is refiled through `attachConversation`).
+  const row = w.registryRows.find(r => r.id === sessionId)
   if (!row) return { ok: false, reason: 'no_such_session' }
 
   // Direct filing under the task is allowed too — `o.subtaskId` is optional. `planAttach` decides
@@ -806,6 +830,15 @@ export async function attachSession(
   // caller named a task, and honouring a subtask outside it would file the work somewhere nobody
   // asked for.
   if (plan.taskId !== task.id) return { ok: false, reason: 'wrong_delivery' }
+
+  // What this write displaces, read from the row BEFORE it is patched. An empty `taskId` is the mark a
+  // detach leaves (`detachSession`) and means "filed nowhere"; the same target is not a move.
+  const before: FilingTarget | undefined = row.taskId
+    ? { taskId: row.taskId, ...(row.subtaskId ? { subtaskId: row.subtaskId } : {}) }
+    : undefined
+  const movedFrom = before && (before.taskId !== task.id || (before.subtaskId ?? null) !== plan.subtaskId)
+    ? before
+    : undefined
 
   const { patchSession } = await import('./registry')
   const ok = await patchSession(row.id, {
@@ -838,7 +871,120 @@ export async function attachSession(
   await w.store.logEvents([event(task.id, row.label || sessionId, 'session', {
     to: sessionId, detail: row.harness,
   })])
-  return { ok: true }
+  return { ok: true, ...(movedFrom ? { movedFrom } : {}) }
+}
+
+/**
+ * File a HISTORICAL conversation — one the consolidate store holds and the fleet registry does not —
+ * under a delivery or one of its subtasks. The other door into `attachSession`'s job, for the case it
+ * cannot serve: it resolves a live REGISTRY row, and a conversation whose row was purged has none.
+ *
+ * The link is written on the BOARD (`TaskStore.fileHistorical`), never as a stub registry row — see
+ * `HistoricalSession` for why. Everything else mirrors `attachSession` on purpose, and shares its
+ * rules rather than restating them: `planAttach` decides the target (so `no_such_task`,
+ * `no_such_subtask`, `subtask_in_group`, `blocked` and `wrong_delivery` are the very same refusals),
+ * the progress nudge is `statusAfterAttach`, the repository is inherited the same way, and a
+ * `session` event is logged.
+ *
+ * Two refusals are this door's own (`planConversationFiling`): `no_such_conversation` (nothing in the
+ * store to price — never a link that reads as a delivery that cost nothing) and
+ * `conversation_in_fleet` (a registry row exists: file THAT one with `attachSession`; the answer names
+ * its id).
+ *
+ * It is a MOVE: a conversation holds one link, so filing it elsewhere REPLACES the old one and the
+ * answer says where it came from (`movedFrom`).
+ */
+export type AttachConversationResult =
+  | {
+    ok: true
+    /** The link's own id (`hist:<conversationId>`) — what `detachSession` also accepts. */
+    id: string
+    conversationId: string
+    harness: string
+    movedFrom?: FilingTarget
+  }
+  | {
+    ok: false
+    reason: 'no_such_task' | 'no_such_subtask' | 'needs_subtask' | 'wrong_delivery' | 'blocked'
+      | 'subtask_in_group' | 'no_such_conversation' | 'conversation_in_fleet'
+    /** Set only for `blocked` — the subtask ids still open. */
+    blockedBy?: readonly string[]
+    /** Set only for `conversation_in_fleet` — the registry row to file instead. */
+    sessionId?: string
+  }
+
+export async function attachConversation(
+  ref: string,
+  conversationId: string,
+  o: { subtaskId?: string; harness?: string; note?: string } = {},
+): Promise<AttachConversationResult> {
+  const w = await loadTaskWorld()
+  const task = findTask(ref, w.book.tasks)
+  if (!task) return { ok: false, reason: 'no_such_task' }
+
+  const conv = planConversationFiling({
+    conversationId: conversationId.trim(),
+    ...(o.harness ? { harness: o.harness } : {}),
+    metas: w.metas,
+    registryRows: w.registryRows,
+  })
+  if (!conv.ok) {
+    return conv.reason === 'conversation_in_fleet'
+      ? { ok: false, reason: 'conversation_in_fleet', sessionId: conv.sessionId }
+      : { ok: false, reason: 'no_such_conversation' }
+  }
+
+  const plan = planAttach({
+    target: o.subtaskId ? { kind: 'subtask', id: o.subtaskId } : { kind: 'task', id: task.id },
+    taskIds: w.book.tasks.map(t => t.id),
+    subtasks: w.book.subtasks.map(st => ({
+      id: st.id, taskId: st.taskId, done: st.done, blockedBy: st.blockedBy,
+      parentGroupId: st.parentGroupId,
+    })),
+  })
+  if (!plan.ok) {
+    return plan.reason === 'blocked'
+      ? { ok: false, reason: 'blocked', blockedBy: plan.blockedBy }
+      : { ok: false, reason: plan.reason }
+  }
+  if (plan.taskId !== task.id) return { ok: false, reason: 'wrong_delivery' }
+
+  const conversation = conversationId.trim()
+  const link: HistoricalSession = {
+    id: historicalLinkId(conversation),
+    conversationId: conversation,
+    harness: conv.harness,
+    taskId: task.id,
+    ...(plan.subtaskId ? { subtaskId: plan.subtaskId } : {}),
+    linkedAt: new Date().toISOString(),
+    ...(o.note?.trim() ? { note: o.note.trim() } : {}),
+  }
+  const { replaced } = await w.store.fileHistorical(link)
+  const movedFrom: FilingTarget | undefined = replaced
+    && (replaced.taskId !== link.taskId || (replaced.subtaskId ?? null) !== (link.subtaskId ?? null))
+    ? { taskId: replaced.taskId, ...(replaced.subtaskId ? { subtaskId: replaced.subtaskId } : {}) }
+    : undefined
+
+  const label = sessionLabel(conv.meta) || conversation
+  const advanced = statusAfterAttach(task.status)
+  if (advanced) await markTask(task.id, advanced, label)
+
+  // The meta names where the conversation ran, which is all a purged row would have told us. Live git
+  // first (the directory may well still exist), then the store's own remote — the same order
+  // `attachSession` reads the record and then live git, and it never overwrites a repo already set.
+  if (!task.repo) {
+    const { repoFacts } = await import('./repo-facts')
+    const facts = await repoFacts(conv.meta.project_path ?? '').catch(() => null)
+    const repo = facts?.repo || (conv.meta.git_remote ? repoShortName(conv.meta.git_remote) : '')
+    if (repo) await w.store.patchTask(task.id, { repo, updatedAt: new Date().toISOString() })
+  }
+  await w.store.logEvents([event(task.id, label, 'session', {
+    to: conversation, detail: `${conv.harness} · historical`,
+  })])
+  return {
+    ok: true, id: link.id, conversationId: conversation, harness: conv.harness,
+    ...(movedFrom ? { movedFrom } : {}),
+  }
 }
 
 /**
@@ -847,14 +993,30 @@ export async function attachSession(
  * The row keeps existing and keeps its history — only the attribution goes. `patchSession` writes
  * fields rather than clearing them, so the empty strings here are what "no longer filed" looks like
  * on this record; `rowsOfTask` matches on a non-empty id or name, so an empty one belongs to no task.
+ *
+ * **The empty `taskId` is also read as a STATEMENT** by `conversationOwners` (task-conversations.ts):
+ * it is the only thing that tells "the person took this conversation off its task" from "a reopen
+ * that did not carry the filing" (`taskId` ABSENT). Writing `undefined`/deleting the key here would
+ * make a detach fall back to an older row still filed on another task, so the conversation would
+ * come back to it. Keep writing `''`.
  */
 export async function detachSession(sessionId: string): Promise<boolean> {
   const { patchSession } = await import('./registry')
   // The SUBTASK goes with it. Unfiling a session that left a `subtaskId` behind would leave it
   // drawn under a subtask of a delivery it is no longer part of.
-  return await patchSession(sessionId, {
+  const unfiled = await patchSession(sessionId, {
     taskId: '', attemptId: '', task: '', subtaskId: null,
   })
+  if (unfiled) return true
+
+  // No registry row by that id: it may name a HISTORICAL link — by its own id (`hist:<conv>`, what a
+  // task's `sessions` list reports for one) or by the conversation id it was filed with. Dropping the
+  // link removes the filing STATEMENT and writes nothing else: unlike a registry row there is no older
+  // row of the same conversation to fall back to, so no explicit "unfiled" mark is needed —
+  // `conversationOwners` finds no statement at all and the conversation belongs to no task, which is
+  // what a detach means. (Were a registry row for it to appear later, its own filing speaks for it.)
+  const w = await loadTaskWorld()
+  return (await w.store.unfileHistorical(sessionId)) !== null
 }
 
 export async function markTask(
@@ -916,7 +1078,7 @@ export async function markTask(
    * already-done task) must not re-trigger it. Computed once and reused below for the
    * delivery-evidence block, rather than calling `rowsOfTask` a second time.
    */
-  const mine = to === 'done' && task.status !== 'done' ? rowsOfTask(task, w.rows) : undefined
+  const mine = to === 'done' && task.status !== 'done' ? rowsOfTask(task, w.rollupRows) : undefined
   if (mine && mine.length === 0) return { ok: false, message: 'done_needs_session' }
 
   // `done` is the ONE status that stamps a delivery. Every other move is a change of where the work
@@ -961,7 +1123,7 @@ export async function markTask(
 
   if (!done) return { ok: true }
 
-  const rows = mine ?? rowsOfTask(task, w.rows)
+  const rows = mine ?? rowsOfTask(task, w.rollupRows)
   const dirs = [...new Set(rows.map(r => r.cwd).filter(Boolean))]
   const bySha = new Map<string, { sha: string; message: string; atMs: number }>()
   for (const dir of dirs) {

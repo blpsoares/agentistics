@@ -13,7 +13,8 @@ import type {
   Attempt, AttemptStatus, Subtask, Task, TaskComment, TaskFile,
 } from './task-model'
 import { groupMembers, isGroupMember, isGroupSubtask, legacyTaskId } from './task-model'
-import { distinctConversations } from './task-conversations'
+import { conversationOwners, distinctConversations } from './task-conversations'
+import { isHistoricalRow } from './task-historical'
 import { rollupAttempt, type AttemptRollup, type RollupSession } from './task-rollup'
 import { scopedTaskStats, taskStats, type TaskStats } from './task-stats'
 import type { ManagedSession } from './types'
@@ -48,6 +49,12 @@ export interface TaskSessionRow {
   endedAt?: string
   label?: string
   conversationId?: string
+  /**
+   * True for a conversation filed on the board with NO session behind it (`HistoricalSession`): its
+   * numbers are real and it counts everywhere, but there is nothing to open — `id` (`hist:<conv>`)
+   * names no session, so a surface must not link to `/sessions/<id>` for it.
+   */
+  historical?: boolean
   /** Null when the conversation is not in the store — see `RollupSession.meta`. */
   tokens: number | null
   costUSD: number | null
@@ -99,11 +106,28 @@ export interface TaskDetail {
  * The sessions of a task: those stamped with its id, plus those carrying its NAME from before ids
  * existed. The second half is exactly what `legacyTaskId` is for — it is what makes the feature
  * useful on a machine that has been running for months rather than only for work started after it.
+ *
+ * **A CONVERSATION IS ONE TASK'S, NEVER TWO.** A row that matches is kept only when the conversation
+ * it points at BELONGS to this task (`conversationOwners`: the newest filing statement wins). Without
+ * that, a conversation moved from task A to task B — filing is a move written on one row, so the
+ * older row still says A — was listed and priced by BOTH, and every sum across tasks
+ * (`buildBoardOverview`'s headline) counted it twice. A row with no `conversationId` cannot be shown
+ * to belong to anyone else and keeps belonging to whatever task it names.
+ *
+ * `rows` MUST be the whole registry: ownership is a fact about every row of a conversation, so a
+ * caller handing over a pre-filtered subset would compute it from the rows that agree with `task`.
+ * Callers that ask about many tasks pass `owners` (computed once, `conversationOwners(rows)`) instead
+ * of paying for it per task.
  */
-export function rowsOfTask(task: Task, rows: readonly ManagedSession[]): ManagedSession[] {
+export function rowsOfTask(
+  task: Task,
+  rows: readonly ManagedSession[],
+  owners: ReadonlyMap<string, string> = conversationOwners(rows),
+): ManagedSession[] {
   return rows.filter(r =>
-    r.taskId === task.id
-    || (r.task !== undefined && legacyTaskId(r.task) === task.id))
+    (r.taskId === task.id
+      || (r.task !== undefined && legacyTaskId(r.task) === task.id))
+    && (!r.conversationId || owners.get(r.conversationId) === task.id))
 }
 
 // The rule lives in `task-conversations.ts` (see there); re-exported so this module stays the one
@@ -348,8 +372,10 @@ export function buildTaskList(o: {
   subtasks?: readonly Subtask[]
   files?: readonly TaskFile[]
 }): TaskListRow[] {
+  // Ownership is decided ONCE over the whole registry, not once per task.
+  const owners = conversationOwners(o.rows)
   return o.tasks.map(task => {
-    const mine = rowsOfTask(task, o.rows)
+    const mine = rowsOfTask(task, o.rows, owners)
     const subs = (o.subtasks ?? []).filter(t => t.taskId === task.id)
     return {
       task,
@@ -421,6 +447,7 @@ export function buildTaskDetail(o: {
         ...(r.endedAt ? { endedAt: r.endedAt } : {}),
         ...(r.label ? { label: r.label } : {}),
         ...(r.conversationId ? { conversationId: r.conversationId } : {}),
+        ...(isHistoricalRow(r) ? { historical: true } : {}),
         tokens: meta ? sessionTokenTotal(meta) : null,
         costUSD: meta ? o.costOf(meta) : null,
         rounds: meta?.user_message_count ?? null,

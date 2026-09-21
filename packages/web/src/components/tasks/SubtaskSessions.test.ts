@@ -69,3 +69,18 @@ test('subtaskSessions: linking a new session always targets this row\'s own subt
   button.props.onClick()
   expect(linked.id).toBe('sub-a')
 })
+
+test('subtaskSessions: a HISTORICAL conversation is flagged so its chip offers no dead link to open', () => {
+  const sessions = [
+    session({ id: 'live1', subtaskId: 'sub-a' }),
+    session({ id: 'hist:c1', subtaskId: 'sub-a', historical: true }),
+  ]
+  const el = subtaskSessions({
+    subtaskId: 'sub-a', subtaskIds: ['sub-a'], sessions, lang: 'en',
+    onLink: noop, onUnfile: noop, onOpen: noop,
+  })
+  const chips = ((el as { props: { children: React.ReactNode[] } }).props.children.flat(Infinity as 1))
+    .filter((c): c is React.ReactElement<{ id: string; historical?: boolean }> =>
+      !!c && typeof c === 'object' && 'props' in c && 'id' in (c as any).props)
+  expect(chips.map(c => [c.props.id, c.props.historical])).toEqual([['live1', false], ['hist:c1', true]])
+})

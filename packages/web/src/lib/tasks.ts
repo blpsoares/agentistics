@@ -203,6 +203,12 @@ export interface TaskSessionRow {
   endedAt?: string
   label?: string
   conversationId?: string
+  /**
+   * A conversation filed on the board with NO session behind it (the fleet row was purged): its
+   * numbers are real and it counts everywhere, but `id` (`hist:<conversationId>`) names nothing the
+   * Sessions workspace can open — a surface must not link to `/sessions/<id>` for it.
+   */
+  historical?: boolean
   tokens: number | null
   costUSD: number | null
   rounds: number | null
