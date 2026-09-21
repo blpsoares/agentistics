@@ -1200,7 +1200,7 @@ export function ShellBand({
   // ---- desktop: the last band of the panel, under the composer ---------------------------------
   return (
     <div
-      {...bandDrop.handlers}
+      ref={bandDrop.ref}
       style={{
       // FULL (design item 7) is an EXPLICIT PIXEL HEIGHT, never `flex: '1 1 auto'` — see
       // `resolveBandDrag`'s own header in `shellBand.ts` for the bug that shape was: two

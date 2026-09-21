@@ -54,7 +54,9 @@
 
 import { useState } from 'react'
 import { Plus } from 'lucide-react'
-import type { StagedSessionDraft, TaskStatusDef } from '@agentistics/core'
+import {
+  cycleSort, type StagedSessionDraft, type SubtaskSortKey, type SubtaskSortSpec, type TaskStatusDef,
+} from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { ConfirmModal } from '../../pages/settings/primitives'
 import {
@@ -71,6 +73,8 @@ import {
   clusterBarStyle, clusterSubtaskRows, clusterTintStyle, groupOf, isGroupMember, isGroupSubtask,
 } from './subtaskGroups'
 import { SessionRef } from './SessionRef'
+import { SortTh } from './SortHeader'
+import { orderedSubtasks } from './subtaskSortView'
 import { StagedSessionCompose } from './StagedSessionCompose'
 import { StagedSessionView } from './StagedSessionView'
 import { boardCopy, statusLabel, type Lang } from './copy'
@@ -228,6 +232,18 @@ export function SubtaskTable(p: SubtaskTableProps) {
   const [deleting, setDeleting] = useState<Subtask | null>(null)
   const [stagedError, setStagedError] = useState<string | null>(null)
   const staged = boardCopy(p.lang).staged
+  const L = boardCopy(p.lang).list
+  /**
+   * The order a column title asked for. `null` is creation order — the list as it came, and the way
+   * back from any sort. Display only: it reorders what is DRAWN (and the cluster is rebuilt from the
+   * sorted list, so a group and its members stay together), never `p.subtasks` and never a write.
+   */
+  const [sort, setSort] = useState<SubtaskSortSpec | null>(null)
+  const ordered = orderedSubtasks(p.subtasks, sort, {
+    views: p.subtaskRollups,
+    sessions: p.sessions,
+    statusOrder: liveStatusOrder(p.statuses),
+  })
 
   const pickStatus = async (t: Subtask, status: TaskStatus) => {
     const result = await p.onPatch(t.id, { status })
@@ -264,17 +280,27 @@ export function SubtaskTable(p: SubtaskTableProps) {
         <thead>
           <tr>
             {/* The leading '' is the gear-menu column (`SubtaskActionsMenu`) — no header text, same
-                convention the old trailing actions column used. */}
-            {['', copy.subtasks, 'Status', copy.owner, copy.start, copy.due, copy.sessions, copy.cost, copy.tokens].map((h, i) => (
-              <th
-                key={i}
+                convention the old trailing actions column used, and no sort: nothing to order by. */}
+            <th style={{ ...microLabel, padding: '6px 9px', fontWeight: 600 }} />
+            {([
+              [copy.subtasks, 'title'], ['Status', 'status'], [copy.owner, 'assignee'],
+              [copy.start, 'start'], [copy.due, 'due'], [copy.sessions, 'sessions'],
+              [copy.cost, 'cost'], [copy.tokens, 'tokens'],
+            ] as Array<[string, SubtaskSortKey]>).map(([h, key]) => (
+              <SortTh
+                key={key}
+                label={h}
+                sortKey={key}
+                current={sort}
+                mobile={isMobile}
+                onSort={k => setSort(cycleSort(sort, k))}
+                title={L.sortByColumn.replace('{column}', h)}
+                align={key === 'cost' || key === 'tokens' ? 'right' : 'left'}
                 style={{
                   ...microLabel, padding: '6px 9px', fontWeight: 600,
-                  textAlign: h === copy.cost || h === copy.tokens ? 'right' : 'left',
+                  textAlign: key === 'cost' || key === 'tokens' ? 'right' : 'left',
                 }}
-              >
-                {h}
-              </th>
+              />
             ))}
           </tr>
         </thead>
@@ -286,7 +312,7 @@ export function SubtaskTable(p: SubtaskTableProps) {
               </td>
             </tr>
           )}
-          {clusterSubtaskRows(p.subtasks).map(({ subtask: t, depth, clustered }) => {
+          {clusterSubtaskRows(ordered).map(({ subtask: t, depth, clustered }) => {
             // A GROUP MEMBER (§F.1) never carries a session of its own — refused server-side
             // (`subtask_in_group`) — so it has no rollup bucket at all (`subtaskViews` excludes it
             // outright). `r` is therefore `undefined` for it by construction, which already renders

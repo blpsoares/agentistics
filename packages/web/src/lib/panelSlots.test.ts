@@ -264,6 +264,28 @@ describe('planPanelDrop — spec §3, drag', () => {
     expect(bottomPanels(next)).toContain('skills')
     expect(railPanels(next)).not.toContain('skills')
   })
+
+  // Pins the exact live scenario (rail-loose-ends, item 1): the bottom band already holds SEVERAL
+  // panels — not just the two defaults — and a rail panel is dropped precisely on a tab in the
+  // MIDDLE of that row. Reproduced live in a real browser (`bandControls.tsx`'s `useBandDropTarget`
+  // now listens natively rather than through React's synthetic props — see that module's own
+  // header — and `BandSegmentTab`'s own `onDrop` still stops propagation so a positioned drop is
+  // never re-read by `PanelBar`'s own blank-space handler as a bare append): dragging a rail icon
+  // onto an EXISTING middle tab landed it immediately before that tab, never at the row's end. This
+  // is the pure arithmetic that outcome rests on — a regression here would silently turn every
+  // positioned drop into a plain append even though the DOM wiring stayed correct.
+  test('a rail panel dropped onto a tab in the MIDDLE of an already-crowded bottom row lands exactly there, not appended', () => {
+    // Build a bottom row of five: cli, shell (defaults) + studio, live, gallery moved there first.
+    let layout = movePanel(EMPTY_SLOT_LAYOUT, 'studio', 'bottom')
+    layout = movePanel(layout, 'live', 'bottom')
+    layout = movePanel(layout, 'gallery', 'bottom')
+    expect(bottomPanels(layout)).toEqual(['cli', 'shell', 'studio', 'live', 'gallery'])
+
+    // Drop a still-rail panel ('skills') precisely onto the middle tab ('studio').
+    const next = planPanelDrop(layout, 'skills', { panel: 'studio' })
+    expect(bottomPanels(next)).toEqual(['cli', 'shell', 'skills', 'studio', 'live', 'gallery'])
+    expect(railPanels(next)).not.toContain('skills')
+  })
 })
 
 describe('railClickAction — the rail is a launcher, the bottom bar is a tab strip', () => {

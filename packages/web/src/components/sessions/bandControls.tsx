@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
   ArrowDown, ArrowRight, EyeOff, Maximize2, Minimize2, Minus, MoreHorizontal, Settings, X,
 } from 'lucide-react'
 import type { PanelBarEntry, PanelBarId } from '../../lib/panelBar'
-import { readDragPayload, setDragPayload } from '../../lib/dragReorder'
+import { hasDragPayload, readDragPayload, setDragPayload } from '../../lib/dragReorder'
 import { panelMoveEntry, type PanelMenuIconId } from '../../lib/panelMenu'
 import type { PanelDropTarget } from '../../lib/panelSlots'
 import { resolveBandDrag, resolveBandHeight } from '../../lib/shellBand'
@@ -313,30 +313,115 @@ export function BandSegment({ label, isMobile, children, onDragOver, onDrop, dro
  * (`{ placement: 'bottom' }`), the same target a drop on the tab strip's own empty space already
  * produced. `onDrop` is OPTIONAL, same convention as `PanelBar`'s: a caller that never wires it
  * renders a band with no drop handling, exactly as before.
+ *
+ * NATIVE LISTENERS, NEVER REACT PROPS (rail-loose-ends, item 2) — and this is not a style choice,
+ * it is the only thing that actually reaches an OPEN Studio's Monaco surface. `StudioHost.tsx`
+ * carries the Studio's own DOM node through `createPortal`, physically `appendChild`-ed into
+ * whichever slot currently shows it (`StudioBand`'s own `contentRef`) — the standard "portal into a
+ * node you move yourself" trick, load-bearing for keeping Monaco's buffers alive across a move. Per
+ * React's own documented portal contract, a **synthetic** event fired inside that portal bubbles
+ * through the portal's REACT ancestry (`StudioHost` → `SessionsPage`, where it is mounted as a
+ * SIBLING of `StudioBand`, never a descendant) — NOT through the DOM ancestry a reader can see on
+ * screen. So `onDrop`/`onDropCapture` react props on `StudioBand`'s own root, however they are
+ * phrased, can NEVER fire for an event that originated inside the Studio's portaled content: React
+ * is not even looking at that subtree when it walks the fiber tree for this dispatch, regardless of
+ * where the DOM node has been moved to. Verified two ways: (1) `onDrop` (bubble, the pre-fix shape)
+ * never reached this root from Monaco's surface, matching the swallowed-drop report exactly; (2)
+ * `onDropCapture` (capture, the FIRST fix attempted here) did not reach it either, even after
+ * disabling the one Monaco feature that was originally blamed (`dropIntoEditor`) — ruling out "some
+ * descendant calls stopPropagation" as the explanation, since a capture listener on an ANCESTOR runs
+ * before any descendant gets a chance regardless. A raw `element.addEventListener(type, fn, true)`
+ * on this SAME root node, by contrast, sees the event correctly (confirmed directly), because it
+ * follows the real DOM tree the portal was physically moved into — exactly where the reader's mouse
+ * is. So this hook now attaches genuine native listeners to the band's root via a ref, in the
+ * capture phase, instead of returning JSX props — the DOM tree is the one thing every panel's
+ * content, portaled or not, actually shares with this band, and native listeners are the only thing
+ * that reads it. `StudioBand`/`SimpleDockedBand`/`ShellBand`'s docked branch each pass `ref` to
+ * their own OUTERMOST element instead of spreading `handlers` — `SimpleDockedBand`'s own children
+ * are plain React descendants (never portaled), so this fix changes nothing about how they behave,
+ * only how the listener is attached.
+ *
+ * THE ONE EXCEPTION IS THE BAND'S OWN TAB STRIP (`role="tablist"`), and it is excluded ON PURPOSE:
+ * `PanelBar`'s own tabs already resolve a POSITIONED drop (spec §3 — "drop precisely on a tab" lands
+ * the panel next to that tab, not merely appended) through their own bubble-phase `onDrop` +
+ * `stopPropagation` (`BandSegmentTab`, below — genuine React children, not portaled, so React's own
+ * bubble dispatch reaches them exactly as documented), and `BandSegment`'s own wrapper already
+ * resolves a drop on the strip's blank space the identical way `PanelBar` always has. Capturing
+ * ahead of THOSE would consume the event before either one ever got to run, collapsing every
+ * positioned drop into a plain append — the exact defect `[planted-revert coverage]` pins in
+ * `panelSlots.test.ts` for the pure arithmetic, now true of the DOM wiring too if this exclusion
+ * were dropped. So the native drop listener defers (returns without acting) whenever the event's
+ * target sits inside a `[role="tablist"]`, letting it fall through to the tab strip's own React
+ * handlers exactly as before this pass. `dragover` still marks the WHOLE band highlighted while a
+ * drag is over ANY of it, tab strip included — "what lights up is exactly what accepts the drop"
+ * (`StudioBand`'s own header) — it only skips `stopPropagation` there, so the tab strip's own
+ * per-tab highlight keeps working underneath it.
+ *
+ * GUARDED BY `hasDragPayload`, never by droppability alone: a FOREIGN drag (an OS file, browser
+ * text) is left entirely alone — no `preventDefault`, no `stopPropagation` — so this never turns
+ * off some other drop behaviour a panel's content might genuinely want for a drag this app did not
+ * originate.
  */
 export function useBandDropTarget(onDrop?: (dragPanel: PanelBarId, target: PanelDropTarget) => void): {
   dropHighlight: boolean
-  handlers: {
-    onDragOver?: (e: React.DragEvent) => void
-    onDragLeave?: (e: React.DragEvent) => void
-    onDrop?: (e: React.DragEvent) => void
-  }
+  /** Attach to the band's own OUTERMOST element — a plain callback ref, never a React prop bag,
+   *  for the reason this function's own header explains at length. */
+  ref: (el: HTMLElement | null) => void
 } {
   const [over, setOver] = useState(false)
-  if (!onDrop) return { dropHighlight: false, handlers: {} }
-  return {
-    dropHighlight: over,
-    handlers: {
-      onDragOver: e => { e.preventDefault(); setOver(true) },
-      onDragLeave: e => { if (e.currentTarget === e.target) setOver(false) },
-      onDrop: e => {
-        e.preventDefault()
-        setOver(false)
-        const key = readDragPayload(e)
-        if (key) onDrop(key as PanelBarId, { placement: 'bottom' })
-      },
-    },
-  }
+  // The LATEST `onDrop`, read from inside the native listeners — a plain prop reference would make
+  // the callback ref below (which attaches once per DOM node, not once per render) close over a
+  // stale function if the caller ever passes a new one.
+  const onDropRef = useRef(onDrop)
+  onDropRef.current = onDrop
+  const cleanupRef = useRef<(() => void) | null>(null)
+
+  const ref = useCallback((el: HTMLElement | null) => {
+    cleanupRef.current?.()
+    cleanupRef.current = null
+    if (!el) return
+    const onTabStrip = (e: DragEvent): boolean =>
+      e.target instanceof Element && e.target.closest('[role="tablist"]') !== null
+    const onDragOverNative = (e: DragEvent) => {
+      if (!hasDragPayload(e)) return
+      e.preventDefault()
+      setOver(true)
+      // Let it keep descending to the tab strip's own dragover (its per-tab highlight) — only
+      // the DROP action is exclusive to one handler or the other, not the highlight.
+      if (!onTabStrip(e)) e.stopPropagation()
+    }
+    const onDragLeaveNative = (e: DragEvent) => {
+      if (!hasDragPayload(e)) return
+      if (e.currentTarget === e.target) setOver(false)
+    }
+    const onDropNative = (e: DragEvent) => {
+      if (!hasDragPayload(e)) return
+      if (onTabStrip(e)) return
+      e.preventDefault()
+      e.stopPropagation()
+      setOver(false)
+      const key = readDragPayload(e)
+      if (key) onDropRef.current?.(key as PanelBarId, { placement: 'bottom' })
+    }
+    el.addEventListener('dragover', onDragOverNative, true)
+    el.addEventListener('dragleave', onDragLeaveNative, true)
+    el.addEventListener('drop', onDropNative, true)
+    cleanupRef.current = () => {
+      el.removeEventListener('dragover', onDragOverNative, true)
+      el.removeEventListener('dragleave', onDragLeaveNative, true)
+      el.removeEventListener('drop', onDropNative, true)
+    }
+    // Attaches once per DOM NODE (mount/unmount of the element itself), never per render — a
+    // `useEffect` keyed on `onDrop`'s identity would tear the listeners down and rebuild them on
+    // every render where the caller passes a fresh inline function, and keying on `elRef.current`
+    // instead does not reliably re-run when only the ref (not a render) changes.
+  }, [])
+
+  // `onDrop` absent entirely: no listeners are ever attached (the ref callback still runs, finds
+  // nothing to do beyond its own cleanup) — same convention as the old bubble-prop shape, a caller
+  // that never wires it renders a band with no drop handling.
+  if (!onDrop) return { dropHighlight: false, ref: () => {} }
+  return { dropHighlight: over, ref }
 }
 
 export function PanelBar({

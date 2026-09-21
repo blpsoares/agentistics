@@ -682,6 +682,21 @@ export function monacoOptions({ isMobile, theme }: { isMobile: boolean; theme: s
 Monaco.editor.IEditorOptions & Monaco.editor.IGlobalEditorOptions {
   return {
     theme,
+    // MONACO'S OWN "drop into editor" FEATURE IS OFF (rail-loose-ends, item 2). It defaults to
+    // `true` and, on a plain HTML5 drop, reads `text/plain` off the `DataTransfer` and inserts it
+    // as a snippet — which is exactly what a panel dragged from the rail carries (`dragReorder.ts`'s
+    // `setDragPayload` sets `text/plain` too, as the fallback `readDragPayload` needs for a drop
+    // target outside this app's own control). Verified live: dropping the "Live" rail icon onto an
+    // OPEN Studio's Monaco surface inserted the literal text `live$0` into the buffer and the panel
+    // never moved — the band's own `useBandDropTarget` (`bandControls.tsx`) never saw the event at
+    // all, because Monaco's drop handler consumes and stops it before it can bubble to the band
+    // root. Disabling the feature here is the band-level fix: it removes the ONE competing handler
+    // this editor installs on itself, so the drop simply bubbles to the band's own listener like
+    // every other drop already does — no capture-phase workaround, which would have had to thread a
+    // "is this actually a positioned drop onto one of the tab strip's own tabs" exception through to
+    // avoid breaking the tab strip's own `stopPropagation`-based positioning (see this repo's
+    // `useBandDropTarget` and `PanelBar`'s own `BandSegmentTab`).
+    dropIntoEditor: { enabled: false },
     automaticLayout: true,
     minimap: { enabled: false },
     scrollBeyondLastLine: false,

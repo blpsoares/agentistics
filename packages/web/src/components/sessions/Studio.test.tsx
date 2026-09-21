@@ -784,7 +784,7 @@ describe('Studio', () => {
   const render = (turns: LiveTurn[] = [], lang: 'pt' | 'en' = 'en') => renderToStaticMarkup(
     <Studio
       sessionId="s1" lang={lang} autosave={false} turns={turns} onExit={() => {}}
-      slot="right" onMove={() => {}}
+      slot="right" placement="rail" onMove={() => {}}
     />,
   )
 
@@ -829,7 +829,10 @@ describe('Studio', () => {
 describe('studioGearEntries — the gear menu\'s own rows, as data', () => {
   const base = {
     lang: 'en' as const, treeCollapsible: false, treeCollapsed: false, treeSide: 'left' as const,
-    slot: 'right' as const,
+    // The Studio's own REAL placement (`lib/panelSlots.ts`'s `OpenPlacement`) — never folded for a
+    // phone's viewport the way the old `slot` param this replaced could be (rail-loose-ends, item
+    // 4). `'rail'` is the desktop-right-slot reading the old `slot: 'right'` base used to mean.
+    placement: 'rail' as const,
   }
 
   test('with nothing else offered, the Studio still always offers close — MOVE is gone from here (addendum, 2026-09-21), it lives on the icon\'s own right-click menu now', () => {
@@ -839,7 +842,7 @@ describe('studioGearEntries — the gear menu\'s own rows, as data', () => {
   })
 
   test('at the bottom, still just close — no move row either way any more', () => {
-    const ids = studioGearEntries({ ...base, slot: 'bottom' }).map(e => e.id)
+    const ids = studioGearEntries({ ...base, placement: 'bottom' }).map(e => e.id)
     expect(ids).toEqual(['close'])
   })
 
@@ -892,21 +895,21 @@ describe('studioGearEntries — the gear menu\'s own rows, as data', () => {
 
   test('every row, in order — tree first (what StudioBar used to carry), close LAST — move is gone', () => {
     const everything = studioGearEntries({
-      lang: 'en', treeCollapsible: true, treeCollapsed: false, treeSide: 'left', slot: 'bottom',
+      lang: 'en', treeCollapsible: true, treeCollapsed: false, treeSide: 'left', placement: 'bottom',
     })
     expect(everything.map(e => e.id)).toEqual(['tree-toggle', 'tree-side', 'close'])
   })
 
   test(
-    'ON DESKTOP, MOVE NEVER APPEARS HERE ANY MORE (addendum, 2026-09-21) — in neither slot, since ' +
-    'it now lives exclusively on the icon\'s own right-click menu (`PanelRail`/`PanelBar`), never ' +
-    'duplicated in the gear the way it once was split across two menus (owner, 2026-09-19: "ao ' +
-    'clicar na engrenagem nao aparecem as opcoes corretas de mover")',
+    'ON DESKTOP, MOVE NEVER APPEARS HERE ANY MORE (addendum, 2026-09-21) — in neither placement, ' +
+    'since it now lives exclusively on the icon\'s own right-click menu (`PanelRail`/`PanelBar`), ' +
+    'never duplicated in the gear the way it once was split across two menus (owner, 2026-09-19: ' +
+    '"ao clicar na engrenagem nao aparecem as opcoes corretas de mover")',
     () => {
-      const atRight = studioGearEntries({ ...base, slot: 'right' })
-      expect(atRight.find(e => e.id === 'move-bottom')).toBeUndefined()
-      expect(atRight.find(e => e.id === 'move-right')).toBeUndefined()
-      const atBottom = studioGearEntries({ ...base, slot: 'bottom' })
+      const onRail = studioGearEntries({ ...base, placement: 'rail' })
+      expect(onRail.find(e => e.id === 'move-bottom')).toBeUndefined()
+      expect(onRail.find(e => e.id === 'move-right')).toBeUndefined()
+      const atBottom = studioGearEntries({ ...base, placement: 'bottom' })
       expect(atBottom.find(e => e.id === 'move-right')).toBeUndefined()
       expect(atBottom.find(e => e.id === 'move-bottom')).toBeUndefined()
     },
@@ -917,12 +920,24 @@ describe('studioGearEntries — the gear menu\'s own rows, as data', () => {
     'gesture, and spec §8 already says the gear covers those verbs there. Reproduced live at 390px ' +
     'before this fix: the gear opened with only "Fechar Studio", no way to move it at all.',
     () => {
-      const atRight = studioGearEntries({ ...base, slot: 'right', mobile: true })
-      expect(atRight.map(e => e.id)).toEqual(['move-bottom', 'close'])
-      const atBottom = studioGearEntries({ ...base, slot: 'bottom', mobile: true })
+      const onRail = studioGearEntries({ ...base, placement: 'rail', mobile: true })
+      expect(onRail.map(e => e.id)).toEqual(['move-bottom', 'close'])
+      const atBottom = studioGearEntries({ ...base, placement: 'bottom', mobile: true })
       expect(atBottom.map(e => e.id)).toEqual(['move-right', 'close'])
     },
   )
+
+  // Pins rail-loose-ends item 4: the label/verb must be driven by the panel's REAL placement, not
+  // by a visual occupancy fact a phone's viewport fold can leave stale. Reproduced live: with the
+  // Studio's real placement already `'bottom'`, the OLD code (deriving placement from a folded
+  // `slot: 'right'`) still offered "Mover Studio para baixo" — this is the exact input shape that
+  // bug fed it, asserted directly against the parameter that replaced it.
+  test('the label always names where the panel is NOT — even the exact folded-mobile shape that once got this backwards', () => {
+    const reallyOnBottom = studioGearEntries({ ...base, placement: 'bottom', mobile: true })
+    const moveRow = reallyOnBottom.find(e => e.id === 'move-right' || e.id === 'move-bottom')
+    expect(moveRow?.id).toBe('move-right')
+    expect(moveRow?.label).toBe('Move Studio to the right')
+  })
 
   // PLANTED-REVERT: a version that ignores `mobile` (always calls `panelMenuEntriesWithoutMove`)
   // silently strands mobile without a move verb again — the exact regression found live.
@@ -930,10 +945,10 @@ describe('studioGearEntries — the gear menu\'s own rows, as data', () => {
     function brokenGearEntries(mobileFlag: boolean) {
       // always strips move, regardless of mobileFlag — the bug this test catches
       void mobileFlag
-      return studioGearEntries({ ...base, slot: 'right', mobile: false })
+      return studioGearEntries({ ...base, placement: 'rail', mobile: false })
     }
     const broken = brokenGearEntries(true)
-    const correct = studioGearEntries({ ...base, slot: 'right', mobile: true })
+    const correct = studioGearEntries({ ...base, placement: 'rail', mobile: true })
     expect(broken.map(e => e.id)).not.toEqual(correct.map(e => e.id))
     expect(correct.map(e => e.id)).toContain('move-bottom')
   })
@@ -951,7 +966,7 @@ describe('the Studio draws its gear from the first frame', () => {
   const render = (lang: 'pt' | 'en' = 'en') => renderToStaticMarkup(
     <Studio
       sessionId="s1" lang={lang} autosave={false} turns={[]} onExit={() => {}}
-      slot="right" onMove={() => {}}
+      slot="right" placement="rail" onMove={() => {}}
     />,
   )
 

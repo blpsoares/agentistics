@@ -120,7 +120,7 @@ export interface TaskDetail {
  * of paying for it per task.
  */
 export function rowsOfTask(
-  task: Task,
+  task: Pick<Task, 'id'>,
   rows: readonly ManagedSession[],
   owners: ReadonlyMap<string, string> = conversationOwners(rows),
 ): ManagedSession[] {
@@ -133,6 +133,48 @@ export function rowsOfTask(
 // The rule lives in `task-conversations.ts` (see there); re-exported so this module stays the one
 // door every existing caller imports it through.
 export { distinctConversations }
+
+/**
+ * HOW MANY SESSIONS ARE FILED ON A SUBTASK RIGHT NOW — the ONE answer, read by the write-side gates
+ * (`patchSubtask`'s `subtask_has_sessions` group-join refusal and its `done_needs_session` gate) and
+ * agreeing by construction with the read side (`subtaskViews`, `subtaskStats`), which bucket the very
+ * same rows.
+ *
+ * A subtask "has a session" iff some CONVERSATION, described by its NEWEST row and owned by THIS task,
+ * is filed on it: `distinctConversations(rowsOfTask(task, rows))`, then the ones naming `subtaskId`.
+ * Counting RAW rows instead (`rows.some(r => r.subtaskId === id)`) is the bug this exists to prevent.
+ * Every attach, reopen and restart mints a new managed id for the same conversation and retires the
+ * old row WITHOUT removing it, and filing is a MOVE written on the newest row only — so a conversation
+ * the person moved from subtask X to subtask Y still has an old row saying X. The board shows X with 0
+ * sessions (the read side describes the conversation by its newest row), while a raw-row gate said X
+ * had one: `subtask_has_sessions` on a group join, "detach the session first", with nothing on screen
+ * to detach. Measured on the board task t-0539886b9c, subtask F5.2.
+ *
+ * `rows` MUST be the whole `rollupRows` — the registry plus the historical links — for the same reason
+ * `rowsOfTask` says: ownership is a fact about every row of a conversation. A historical link counts
+ * exactly like a live one (it is why they exist). A row with NO conversation link cannot be shown to
+ * be a duplicate of anything and keeps counting on the subtask it names.
+ *
+ * Callers that ask about many subtasks pass `owners` (computed once) instead of paying for it each time.
+ */
+export function subtaskSessionCount(
+  task: Pick<Task, 'id'>,
+  subtaskId: string,
+  rows: readonly ManagedSession[],
+  owners?: ReadonlyMap<string, string>,
+): number {
+  return distinctConversations(rowsOfTask(task, rows, owners)).filter(r => r.subtaskId === subtaskId).length
+}
+
+/** `subtaskSessionCount(...) > 0` — the question every write-side gate actually asks. */
+export function subtaskHasSession(
+  task: Pick<Task, 'id'>,
+  subtaskId: string,
+  rows: readonly ManagedSession[],
+  owners?: ReadonlyMap<string, string>,
+): boolean {
+  return subtaskSessionCount(task, subtaskId, rows, owners) > 0
+}
 
 /**
  * One `RollupSession` per CONVERSATION (`distinctConversations`).

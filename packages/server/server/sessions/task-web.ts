@@ -13,7 +13,7 @@ import {
 import { loadTaskWorld } from './task-source'
 import { historicalLinkId, type HistoricalSession } from './task-model'
 import { planConversationFiling } from './task-historical'
-import { buildTaskDetail, buildTaskList, findTask, rowsOfTask } from './task-report'
+import { buildTaskDetail, buildTaskList, findTask, rowsOfTask, subtaskHasSession } from './task-report'
 import { planDeliveryEvidence, type DeliveryEvidence } from './task-evidence'
 import { buildBoardOverview, type BoardOverview } from './task-overview'
 import { scopeMetas, type TaskFilter } from './task-filter'
@@ -500,12 +500,17 @@ export async function patchSubtask(subtaskId: string, patch: {
   // (`subtask_has_sessions`) and by the `done_needs_session` gate further down — both ask the exact
   // same question.
   //
+  // Answered by `subtaskHasSession` (`task-report.ts`), NEVER by scanning raw rows: the board shows a
+  // conversation on the subtask its NEWEST row names, so an old registry row still saying this
+  // subtask (the person moved the conversation elsewhere) is history, not "a session filed here" —
+  // counting it refused a group join with "detach the session first" when there was nothing to detach.
+  //
   // Read from `rollupRows`, so a HISTORICAL conversation filed on this subtask (`HistoricalSession`)
   // counts exactly like a live one: the recovered subtask is the whole reason those exist, and a
   // done gate that could not see them would go on refusing the very subtasks they were filed to
   // close. It also keeps the group-join rule honest (`subtask_has_sessions`) — a member gets no
   // bucket of its own, so a historical link sitting on it would drop out of every breakdown too.
-  const hasSession = w.rollupRows.some(r => r.subtaskId === found.id)
+  const hasSession = subtaskHasSession({ id: found.taskId }, found.id, w.rollupRows)
 
   // The EFFECTIVE post-patch `parentGroupId` — what this subtask's group membership will be AFTER
   // this write, not what `found` (the pre-patch record) currently holds. A single PATCH can combine
