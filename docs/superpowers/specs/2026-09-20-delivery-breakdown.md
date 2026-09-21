@@ -151,6 +151,14 @@ the session runs it as one subagent plus its own integration) or the items exist
    do the items itself.
 8. **A subagent's uncertainty survives the integration.** What an item could not verify is named in
    the handback as unverified, attributed to that item.
+9. **A session never changes its own cwd.** It creates its worktree with `git worktree add` and
+   works against that path (`git -C`, absolute paths). Moving the cwd re-files the conversation's
+   transcript under a different project directory, `chat-web.ts` then reads nothing, and the chat
+   the owner is coordinating through goes blank while the terminal keeps working — measured on a
+   live 2,4 MB conversation (see CLAUDE.md, "A TRANSCRIPT THAT IS NOT THERE YET…").
+10. **The handback is a board COMMENT, not a chat message.** Principle #20 of `execucao.md`:
+   nothing relevant exists only in a conversation. A replacement session must be able to resume
+   from the board alone.
 
 ## 6. How the board is filled — waves, and a coordinator
 
