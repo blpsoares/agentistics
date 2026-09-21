@@ -60,10 +60,12 @@ import { UnsavedChangesGuard } from '../components/sessions/UnsavedChangesGuard'
 import { PanelFixedControls, panelMenuIconFor } from '../components/sessions/bandControls'
 import { fullscreenModeFor, panelMenuEntries } from '../lib/panelMenu'
 import {
-  artifactsPanelMax, ASIDE_ANIM_MS, ASIDE_EASE, edgeHint, PANEL_MIN_WIDTH, panelWidth,
+  artifactsPanelMax, ASIDE_ANIM_MS, ASIDE_EASE, currentAction, edgeHint, PANEL_MIN_WIDTH, panelWidth,
   resolveArtifactLayout, type ArtifactLayout,
 } from '../lib/artifactLayout'
-import { openArtifacts, setArtifactCount, usePanelFocusRequest } from '../lib/artifactsStore'
+import {
+  openArtifacts, setArtifactCount, setArtifactLive, usePanelFocusRequest,
+} from '../lib/artifactsStore'
 import { studioMenuRow } from '../lib/studioMenuRow'
 import { RAIL_WIDTH_PX, restingLeftEdge, setRightAsideEdge } from '../lib/rightAsideEdge'
 import type { SessionDrilldownProps } from '../components/SessionDrilldown'
@@ -696,8 +698,31 @@ export default function SessionsPage() {
     setArtifactsUnavailable(a.unavailable)
     setArtifactsOlder(a.older)
     setArtifactsUnlisted(a.unlisted)
-    if (selected) setArtifactCount(selected.id, a.artifacts.length)
+    if (selected) {
+      setArtifactCount(selected.id, a.artifacts.length)
+      // WHAT THE SESSION IS DOING NOW, for the metrics card's Live reference — drawn from `App.tsx`,
+      // outside this page, so it cannot read these turns. Published from HERE because this callback
+      // carries the turns of the conversation that is actually mounted: reading `artifactTurns`
+      // state in an effect would publish the PREVIOUS session's turns under the new one's id for
+      // the first poll after a switch.
+      setArtifactLive(selected.id, currentAction(liveEvents(a.turns)))
+    }
   }, [selected])
+  /**
+   * NOBODY IS READING THE CONVERSATION, SO NOBODY CAN SAY WHAT IT IS DOING.
+   *
+   * The Terminal view unmounts the chat that publishes the live fact, and leaving the page unmounts
+   * this one; either would leave the last "running bun test" in the store for as long as the page is
+   * away. A stale claim of activity on the metrics card is worse than none, so the fact is cleared
+   * whenever its reader goes — and a chat that mounts afterwards publishes again on its own first
+   * report (child effects run after this cleanup).
+   */
+  const selectedId = selected?.id
+  useEffect(() => {
+    if (selectedId === undefined) return
+    if (sessionView !== 'chat') setArtifactLive(selectedId, null)
+    return () => setArtifactLive(selectedId, null)
+  }, [selectedId, sessionView])
 
   /**
    * NOTHING OPENS THIS PANEL BUT A PERSON.
@@ -1778,6 +1803,10 @@ export default function SessionsPage() {
             // costs no id lookup — see `lib/sessionTaskLink.ts`.
             {...(selected.task ? { task: selected.task } : {})}
             onOpenTask={ref => navigate(`/tasks/${encodeURIComponent(ref)}`)}
+            // The Live tab, on the running step when there is one — read from the artifacts store
+            // under this row's id, published by `onArtifacts` below.
+            rowId={selected.id}
+            onOpenLive={ref => openArtifacts('live', ref)}
             // The full reading is a TAB in the aside, not a second dialog over the session —
             // withheld when there is no record, exactly as the tab is.
             {...(sessionMetrics ? { onOpenFull: () => openArtifacts('metrics') } : {})}

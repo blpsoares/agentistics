@@ -3,7 +3,7 @@ import {
   filtrosPanelInert, sessionsFiltersShouldReturnFocus,
   filtrosPanelBounds, FILTROS_PANEL_PREFERRED_WIDTH, FILTROS_PANEL_MIN_WIDTH,
   metricsTabBounds, METRICS_PANEL_PREFERRED_WIDTH, METRICS_PANEL_MIN_WIDTH,
-  filtrosPanelBoundsRight, metricsTabBoundsRight,
+  filtrosPanelBoundsRight, metricsTabBoundsRight, VIEWPORT_EDGE_MARGIN,
 } from './sessionsFiltersPanel'
 
 describe('filtrosPanelInert', () => {
@@ -133,14 +133,23 @@ describe('filtrosPanelBoundsRight — the same clamp, anchored to the artifacts 
     expect(1024 - bounds.right - bounds.width).toBeGreaterThanOrEqual(320)
   })
 
-  test('artifacts aside CLOSED — flush against the viewport\'s own right edge', () => {
+  // Owner complaint (2026-09-21): "os 2 itens ficaram muito grudados a direita" — with the aside
+  // closed, `rightEdge` fell back to the bare `viewportWidth`, so `right` came out to exactly `0`
+  // and the Filtros trigger sat flush against the true browser edge (reproduced live at 1440px: its
+  // own measured right edge landed AT x:1441). `VIEWPORT_EDGE_MARGIN` is the fix — see its own
+  // comment for why it reuses `PAGE_INSET`'s figure.
+  test('artifacts aside CLOSED — kept off the true viewport edge by a small margin, not flush', () => {
     const bounds = filtrosPanelBoundsRight({ left: 0, right: 320 }, null, 1440)
-    expect(bounds).toEqual({ right: 0, width: FILTROS_PANEL_PREFERRED_WIDTH })
+    expect(bounds).toEqual({ right: VIEWPORT_EDGE_MARGIN, width: FILTROS_PANEL_PREFERRED_WIDTH })
+    expect(bounds.right).toBeGreaterThan(0)
   })
 
   test('a closed aside and a present aside agree on WIDTH when the room is the same either way', () => {
     const withAside = filtrosPanelBoundsRight({ left: 0, right: 200 }, { left: 500, right: 900 }, 900)
-    const closedAtSameEdge = filtrosPanelBoundsRight({ left: 0, right: 200 }, null, 500)
+    // The closed fallback now measures its edge `VIEWPORT_EDGE_MARGIN` short of the raw viewport —
+    // so to compare against the SAME 500px edge as `withAside`, the bare viewport passed in must be
+    // that much wider, or the two would legitimately disagree by exactly the margin.
+    const closedAtSameEdge = filtrosPanelBoundsRight({ left: 0, right: 200 }, null, 500 + VIEWPORT_EDGE_MARGIN)
     expect(withAside.width).toBe(closedAtSameEdge.width)
   })
 
@@ -149,14 +158,14 @@ describe('filtrosPanelBoundsRight — the same clamp, anchored to the artifacts 
     expect(bounds).toEqual({ right: 390, width: FILTROS_PANEL_MIN_WIDTH })
   })
 
-  test('the aside MINIMIZED (reported as null) — the same viewport now yields a zero right offset', () => {
+  test('the aside MINIMIZED (reported as null) — the same viewport now falls back to the edge margin, never zero', () => {
     // The reactive half of change #3: minimizing the artifacts aside is a NEW measurement
     // (`rightAsideEdge` going back to `null`), never a second code path — this is the same function
     // called again with a different `rightAside`, exactly as `fullscreenInsetRight` is.
     const open = filtrosPanelBoundsRight({ left: 0, right: 320 }, { left: 820, right: 1440 }, 1440)
     const minimized = filtrosPanelBoundsRight({ left: 0, right: 320 }, null, 1440)
-    expect(open.right).toBeGreaterThan(0)
-    expect(minimized.right).toBe(0)
+    expect(open.right).toBeGreaterThan(VIEWPORT_EDGE_MARGIN)
+    expect(minimized.right).toBe(VIEWPORT_EDGE_MARGIN)
   })
 })
 

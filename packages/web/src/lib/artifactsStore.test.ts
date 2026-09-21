@@ -1,6 +1,7 @@
 import { test, expect, beforeEach } from 'bun:test'
 import {
   getArtifacts, getPanelFocusRequest, openArtifacts, resetArtifacts, setArtifactCount,
+  setArtifactLive,
 } from './artifactsStore'
 import { resetUnsaved } from './unsavedBuffers'
 import { getPanelLayout, isPanelShown, resetPanelSlots } from './panelSlots'
@@ -90,4 +91,40 @@ test('resetArtifacts clears both the count and the focus request', () => {
   resetArtifacts()
   expect(getArtifacts()).toEqual({ sessionId: null, count: 0 })
   expect(getPanelFocusRequest()).toBeNull()
+})
+
+
+test('what the session is doing is recorded against its session, and cleared by null', () => {
+  setArtifactCount('a', 2)
+  setArtifactLive('a', { kind: 'ran', text: 'bun test', ref: 'toolu_1' })
+  expect(getArtifacts().live).toEqual({ kind: 'ran', text: 'bun test', ref: 'toolu_1' })
+  setArtifactLive('a', null)
+  expect('live' in getArtifacts()).toBe(false)
+})
+
+test('an unchanged live fact keeps its object, so a poll does not re-render its readers', () => {
+  setArtifactCount('a', 2)
+  setArtifactLive('a', { kind: 'ran', text: 'bun test', ref: 'toolu_1' })
+  const first = getArtifacts()
+  setArtifactLive('a', { kind: 'ran', text: 'bun test', ref: 'toolu_1' })
+  expect(getArtifacts()).toBe(first)
+  setArtifactLive('a', { kind: 'ran', text: 'bun test', ref: 'toolu_2' })
+  expect(getArtifacts()).not.toBe(first)
+})
+
+test('a live fact belongs to ONE session: switching drops it, and clearing another session is a no-op', () => {
+  setArtifactCount('a', 2)
+  setArtifactLive('a', { kind: 'wrote', text: 'x.ts' })
+  setArtifactCount('b', 0)
+  expect('live' in getArtifacts()).toBe(false)
+  const before = getArtifacts()
+  setArtifactLive('a', null)
+  expect(getArtifacts()).toBe(before)
+})
+
+test('a new count for the same session keeps what it is doing', () => {
+  setArtifactCount('a', 1)
+  setArtifactLive('a', { kind: 'delegated', text: 'Explore', ref: 'r' })
+  setArtifactCount('a', 5)
+  expect(getArtifacts().live).toEqual({ kind: 'delegated', text: 'Explore', ref: 'r' })
 })

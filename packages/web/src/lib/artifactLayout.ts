@@ -105,16 +105,18 @@ export interface EdgeHint {
   ref?: string
 }
 
-export function edgeHint(
-  { open, events, isMobile }: {
-    open: boolean
-    events: readonly { kind: EdgeHint['kind']; text: string; live?: boolean; ref?: string }[]
-    isMobile: boolean
-  },
+/**
+ * WHAT THE SESSION IS DOING RIGHT NOW — the newest event whose turn has not finished, or `null`.
+ *
+ * The edge strip's fact with the strip's own gating taken OFF. `edgeHint` answers "should the
+ * closed panel announce something", which also depends on whether the panel is open and on the
+ * screen being a phone; the session card's References row asks only the fact and must answer it
+ * on both — a phone has no strip but still has a session that is running a command. One reading
+ * of `live` and `ref`, so the two surfaces can never disagree about what "in flight" means.
+ */
+export function currentAction(
+  events: readonly { kind: EdgeHint['kind']; text: string; live?: boolean; ref?: string }[],
 ): EdgeHint | null {
-  // On a phone the panel is full-screen; a tab on the edge would be a control promising to cover
-  // the conversation somebody is reading.
-  if (open || isMobile) return null
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i]!
     // The `ref` travels with it so the press can open that exact row. Omitted rather than
@@ -125,6 +127,18 @@ export function edgeHint(
   return null
 }
 
+export function edgeHint(
+  { open, events, isMobile }: {
+    open: boolean
+    events: readonly { kind: EdgeHint['kind']; text: string; live?: boolean; ref?: string }[]
+    isMobile: boolean
+  },
+): EdgeHint | null {
+  // On a phone the panel is full-screen; a tab on the edge would be a control promising to cover
+  // the conversation somebody is reading.
+  if (open || isMobile) return null
+  return currentAction(events)
+}
 
 /**
  * The conversation's floor.
