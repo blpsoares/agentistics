@@ -58,13 +58,36 @@ export function stepOrder<K>(order: readonly K[], key: K, by: 1 | -1): K[] {
  *  own tab strip (a different React subtree entirely) without either side holding shared state. */
 export const DRAG_KEY_TYPE = 'application/x-agentistics-drag-key'
 
-export function setDragPayload(e: React.DragEvent, key: string): void {
+/** Takes the same narrow structural shape `readDragPayload`/`hasDragPayload` do — see their own
+ *  header. Every real caller passes a `React.DragEvent`, whose `dataTransfer` is never null. */
+export function setDragPayload(e: { dataTransfer: DataTransfer }, key: string): void {
   e.dataTransfer.setData(DRAG_KEY_TYPE, key)
   e.dataTransfer.setData('text/plain', key)
   e.dataTransfer.effectAllowed = 'move'
 }
 
-export function readDragPayload(e: React.DragEvent): string | null {
+/**
+ * Both readers take the narrow STRUCTURAL shape (`{ dataTransfer }`), not `React.DragEvent`
+ * specifically — a native `DragEvent` satisfies it too (its own `dataTransfer` is nullable in the
+ * DOM lib, unlike React's, hence the `| null` here), which `useBandDropTarget`'s own native
+ * listener (`bandControls.tsx`, rail-loose-ends item 2) needs: see that function's own header for
+ * why a band's drop target must listen natively rather than through React's synthetic props.
+ */
+export function readDragPayload(e: { dataTransfer: DataTransfer | null }): string | null {
+  if (!e.dataTransfer) return null
   const v = e.dataTransfer.getData(DRAG_KEY_TYPE) || e.dataTransfer.getData('text/plain')
   return v || null
+}
+
+/**
+ * Does this drag event carry OUR OWN drag key — checked via `dataTransfer.types`, which (unlike
+ * `getData()`) is readable on every drag event, `dragover` included, not only `drop`. A band that
+ * wants to intercept a drop AHEAD of a descendant that might otherwise consume it (rail-loose-ends,
+ * item 2 — Monaco's own native drop handling swallowed a panel dropped onto an open Studio's editor
+ * surface before this existed) needs exactly this: a way to tell "this is one of our own panels" from
+ * "this is some foreign drag (an OS file, a text selection)" during `dragover`, before `getData()`
+ * would even be legal to call.
+ */
+export function hasDragPayload(e: { dataTransfer: DataTransfer | null }): boolean {
+  return e.dataTransfer !== null && Array.from(e.dataTransfer.types).includes(DRAG_KEY_TYPE)
 }

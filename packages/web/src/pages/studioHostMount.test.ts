@@ -30,6 +30,7 @@ const BASE: StudioHostMountParams = {
   composerMounted: true,
   onMention: () => {},
   slot: 'right',
+  placement: 'rail',
   onMove: () => {},
 }
 
@@ -47,7 +48,7 @@ describe('mountStudioHostPanel — the real call site SessionsPage.tsx uses', ()
       sessionId: 'session-1', lang: 'en', autosave: false, turns: [], onExit: BASE.onExit, target: null,
       harness: undefined, composerMounted: true, onMention: BASE.onMention,
       fullscreen: undefined, onToggleFullscreen: undefined,
-      slot: 'right', onMove: BASE.onMove, onMinimizeRight: undefined,
+      slot: 'right', placement: 'rail', onMove: BASE.onMove, onMinimizeRight: undefined,
     })
   })
 

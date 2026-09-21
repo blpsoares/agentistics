@@ -660,7 +660,7 @@ function StudioBand({
   }, [open, fullscreen, onFullscreenChange])
   return (
     <div
-      {...bandDrop.handlers}
+      ref={bandDrop.ref}
       style={{
       // TRUE FULL SCREEN covers the WHOLE VIEWPORT — the sticky header, the fleet aside, everything
       // — not merely the centre column `heightPrefs.full` already fills; `PANEL_FULLSCREEN_Z` sits
@@ -888,7 +888,7 @@ function SimpleDockedBand({
   const bandDrop = useBandDropTarget(onBarDrop)
   return (
     <div
-      {...bandDrop.handlers}
+      ref={bandDrop.ref}
       style={{
       // FULL SCREEN STOPS SHORT OF THE ARTIFACTS ASIDE AND THE LEFT SESSIONS LIST — see `StudioBand`'s
       // own comment on `fullscreenInsetRight`/`leftAsideEdge`; the same reasoning applies unchanged.

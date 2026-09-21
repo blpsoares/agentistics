@@ -34,6 +34,7 @@ const BASE: StudioHostMountParams = {
   composerMounted: true,
   onMention: () => {},
   slot: 'right',
+  placement: 'rail',
   onMove: () => {},
 }
 
