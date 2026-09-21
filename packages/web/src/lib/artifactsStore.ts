@@ -19,6 +19,10 @@
 
 import { useSyncExternalStore } from 'react'
 import { getPanelLayout, hidePanel, rightSlotShowing, showPanel } from './panelSlots'
+import type { EdgeHint } from './artifactLayout'
+
+/** What the session is doing this instant — the edge strip's own fact, see `currentAction`. */
+export type ArtifactLive = EdgeHint
 
 export interface ArtifactsState {
   /** Which session the count and the open flag describe. `null` before one is selected. */
@@ -48,6 +52,18 @@ export interface ArtifactsState {
    * even when the tab does not.
    */
   tabRequest: { tab: string; at: number; ref?: string } | null
+  /**
+   * WHAT THE SESSION IS DOING RIGHT NOW, for the surfaces that are not descendants of the page that
+   * reads the conversation.
+   *
+   * The turns are polled inside `SessionsPage`, and the session-metrics card is drawn from `App.tsx`
+   * — outside it. The card's "Live" reference has to say WHAT is running and open THAT step, so the
+   * page publishes the one fact (`currentAction`) here instead of the card parsing a transcript it
+   * has no access to. ABSENT, never an empty object, when nothing is in flight or when nobody can
+   * say (the terminal view unmounts the conversation, and a stale "running X" is worse than none).
+   * Keyed by `sessionId` like everything else here, and reset with it.
+   */
+  live?: ArtifactLive
 }
 
 const EMPTY: ArtifactsState = {
@@ -63,7 +79,7 @@ function emit(next: ArtifactsState): void {
   if (
     next.sessionId === state.sessionId && next.open === state.open &&
     next.count === state.count && next.dismissed === state.dismissed &&
-    next.tabRequest === state.tabRequest
+    next.tabRequest === state.tabRequest && next.live === state.live
   ) return
   state = next
   for (const l of listeners) l()
@@ -79,6 +95,38 @@ export function useArtifacts(): ArtifactsState {
     cb => { listeners.add(cb); return () => { listeners.delete(cb) } },
     () => state,
     () => EMPTY,
+  )
+}
+
+/**
+ * The panel's page reports what the session is doing right now — or `null` when nothing is in
+ * flight or nobody can say.
+ *
+ * The stored object keeps its IDENTITY while its content is unchanged: the conversation is polled
+ * every few seconds and yields a fresh object each time, and `useSyncExternalStore` compares by
+ * reference, so without this the card would re-render on every poll to say the same thing.
+ * A report for a session the store is not describing is dropped when it is `null` (there is
+ * nothing to clear) and otherwise starts that session's record, exactly as a count does.
+ */
+export function setArtifactLive(sessionId: string, live: ArtifactLive | null): void {
+  if (state.sessionId !== sessionId) {
+    if (live === null) return
+    emit({ sessionId, count: 0, open: false, dismissed: false, tabRequest: null, live })
+    return
+  }
+  const same = live !== null && state.live !== undefined &&
+    state.live.kind === live.kind && state.live.text === live.text && state.live.ref === live.ref
+  if (same) return
+  const { live: _drop, ...rest } = state
+  emit(live === null ? rest : { ...rest, live })
+}
+
+/** The live fact for ONE session, or `null` — and only that slice re-renders its reader. */
+export function useArtifactLive(sessionId: string | undefined): ArtifactLive | null {
+  return useSyncExternalStore(
+    cb => { listeners.add(cb); return () => { listeners.delete(cb) } },
+    () => (sessionId !== undefined && state.sessionId === sessionId ? state.live ?? null : null),
+    () => null,
   )
 }
 

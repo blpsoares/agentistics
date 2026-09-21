@@ -1,6 +1,6 @@
 import { test, expect, beforeEach } from 'bun:test'
 import {
-  closeArtifacts, getArtifacts, openArtifacts, resetArtifacts, setArtifactCount, toggleArtifacts,
+  closeArtifacts, getArtifacts, openArtifacts, resetArtifacts, setArtifactCount, setArtifactLive, toggleArtifacts,
 } from './artifactsStore'
 import { answerUnsaved, getUnsaved, reportUnsaved, resetUnsaved } from './unsavedBuffers'
 import { getPanelLayout, isPanelShown, resetPanelSlots, showPanel } from './panelSlots'
@@ -235,4 +235,40 @@ test('the header button closes Contents in one press when Contents really is wha
   openArtifacts()
   toggleArtifacts()
   expect(getArtifacts()).toMatchObject({ open: false, dismissed: true })
+})
+
+
+test('what the session is doing is recorded against its session, and cleared by null', () => {
+  setArtifactCount('a', 2)
+  setArtifactLive('a', { kind: 'ran', text: 'bun test', ref: 'toolu_1' })
+  expect(getArtifacts().live).toEqual({ kind: 'ran', text: 'bun test', ref: 'toolu_1' })
+  setArtifactLive('a', null)
+  expect('live' in getArtifacts()).toBe(false)
+})
+
+test('an unchanged live fact keeps its object, so a poll does not re-render its readers', () => {
+  setArtifactCount('a', 2)
+  setArtifactLive('a', { kind: 'ran', text: 'bun test', ref: 'toolu_1' })
+  const first = getArtifacts()
+  setArtifactLive('a', { kind: 'ran', text: 'bun test', ref: 'toolu_1' })
+  expect(getArtifacts()).toBe(first)
+  setArtifactLive('a', { kind: 'ran', text: 'bun test', ref: 'toolu_2' })
+  expect(getArtifacts()).not.toBe(first)
+})
+
+test('a live fact belongs to ONE session: switching drops it, and clearing another session is a no-op', () => {
+  setArtifactCount('a', 2)
+  setArtifactLive('a', { kind: 'wrote', text: 'x.ts' })
+  setArtifactCount('b', 0)
+  expect('live' in getArtifacts()).toBe(false)
+  const before = getArtifacts()
+  setArtifactLive('a', null)
+  expect(getArtifacts()).toBe(before)
+})
+
+test('a new count for the same session keeps what it is doing', () => {
+  setArtifactCount('a', 1)
+  setArtifactLive('a', { kind: 'delegated', text: 'Explore', ref: 'r' })
+  setArtifactCount('a', 5)
+  expect(getArtifacts().live).toEqual({ kind: 'delegated', text: 'Explore', ref: 'r' })
 })
