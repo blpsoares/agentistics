@@ -185,6 +185,33 @@ export function SessionStatsMenu({
     }
   }, [open])
 
+  /**
+   * THE PANEL'S OWN HEIGHT CEILING — genuinely measured, never a fixed guess. The card is
+   * `position: absolute` with a `top` offset relative to `boxRef`'s own box, so how much of the
+   * viewport is actually left below it depends on where the TRIGGER sits on the page, not on this
+   * file's own `top` constant alone — a trigger sitting low in a short window can have almost no
+   * room under it at all. Left unbounded, the panel's last sections ("No repositório", the "Ver
+   * tudo no painel" link) simply clip off the bottom of the viewport with no way to reach them —
+   * reported: "o card dos stats da sessao estao passando pra baixo da pagina e nao ta exibindo
+   * tudo corretamente." Measured when the card opens, and again on every `resize` while it stays
+   * open (the same reactive shape `useViewportWidth` already uses for the sibling Filtros panel),
+   * because the trigger's own position on the page is not something this component can know from a
+   * CSS constant alone. Floored well above zero so a trigger pushed off-screen never yields a
+   * negative or unusably thin panel.
+   */
+  const [maxPanelHeight, setMaxPanelHeight] = useState<number | null>(null)
+  useEffect(() => {
+    if (!open) return
+    const measure = () => {
+      const triggerTop = boxRef.current?.getBoundingClientRect().top ?? 0
+      const panelTop = triggerTop + (touch ? 48 : 36)
+      setMaxPanelHeight(Math.max(160, window.innerHeight - panelTop - 16))
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [open, touch])
+
   const h = harness as HarnessId
   const s = sessionStats(h, sessionId, meta)
   const money = (usd: number) => fmtCost(usd, currency, brlRate)
@@ -251,6 +278,9 @@ export function SessionStatsMenu({
           padding: 12, borderRadius: 12,
           background: 'var(--bg-elevated)', border: '1px solid var(--border)',
           boxShadow: '0 12px 32px rgba(0,0,0,0.4)',
+          // See `maxPanelHeight`'s own comment: a card that does not fit between its trigger and
+          // the bottom of the viewport scrolls internally instead of silently clipping.
+          ...(maxPanelHeight !== null ? { maxHeight: maxPanelHeight, overflowY: 'auto' as const } : {}),
         }}>
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10 }}>
             <span style={{
