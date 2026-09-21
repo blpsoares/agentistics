@@ -18,7 +18,8 @@ import { sessionTokens } from '@agentistics/core'
 import { isClosed, type Task } from './task-model'
 import type { Bucket } from './task-stats'
 import type { ManagedSession } from './types'
-import { distinctConversations, rowsOfTask } from './task-report'
+import { distinctConversations } from './task-conversations'
+import { rowsOfTask } from './task-report'
 
 /**
  * One day of board-wide activity — never a zero-filled calendar.

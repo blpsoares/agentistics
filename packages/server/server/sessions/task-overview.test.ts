@@ -146,3 +146,33 @@ describe('buildBoardOverview daily', () => {
     expect(o.daily).toEqual([])
   })
 })
+
+describe('buildBoardOverview — which row stands for a conversation never moves a figure', () => {
+  // The overview reads only the conversation's META, so choosing the NEWEST row (rather than the
+  // first) for a reopened conversation must leave every total exactly where it was: the cost, the
+  // tokens and the session count are all functions of the conversation, not of the row.
+  const rows = (): ManagedSession[] => [
+    row({ id: 'old', taskId: 't1', conversationId: 'c1', createdAt: '2026-09-10T10:00:00.000Z',
+      endedAt: '2026-09-11T10:00:00.000Z' }),
+    row({ id: 'mid', taskId: 't1', conversationId: 'c1', subtaskId: 's1', createdAt: '2026-09-12T10:00:00.000Z',
+      endedAt: '2026-09-12T20:00:00.000Z' }),
+    row({ id: 'live', taskId: 't1', conversationId: 'c1', subtaskId: 's2', createdAt: '2026-09-13T10:00:00.000Z' }),
+    row({ id: 'solo', taskId: 't1', conversationId: 'c2', createdAt: '2026-09-13T11:00:00.000Z' }),
+  ]
+  const metas = metasOf(
+    meta({ session_id: 'c1', input_tokens: 100, output_tokens: 50, user_message_count: 9 }),
+    meta({ session_id: 'c2', input_tokens: 10, output_tokens: 5, user_message_count: 2 }),
+  )
+  const overviewOf = (r: ManagedSession[]) =>
+    buildBoardOverview({ tasks: [task({ id: 't1' })], rows: r, metas, costOf: m => (m.session_id === 'c1' ? 10 : 5) })
+
+  it('counts each conversation once, however many rows it has and in whatever order', () => {
+    const forward = overviewOf(rows())
+    const backward = overviewOf([...rows()].reverse())
+    expect(forward.totalSessions).toBe(2)
+    expect(forward.totalCostUSD).toBe(15)
+    expect(forward.totalTokens).toBe(165)
+    expect(forward.avgRoundsPerTask).toBe(11)
+    expect(backward).toEqual(forward)
+  })
+})

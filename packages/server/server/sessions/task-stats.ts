@@ -13,6 +13,7 @@
 
 import type { SessionMeta } from '@agentistics/core'
 import { sessionTokens, type TokenBreakdown } from '@agentistics/core'
+import { distinctConversations } from './task-conversations'
 import type { ManagedSession } from './types'
 
 export interface Bucket {
@@ -151,7 +152,9 @@ export function scopedTaskStats(o: {
 }): TaskStats | null {
   if (o.rows.length === 0) return null
 
-  const resolved = o.rows
+  // ONE CONVERSATION, COUNTED ONCE: rows of a reopened conversation resolve to the same meta, and
+  // summing them multiplied its files, lines, commits and tokens by the number of reopenings.
+  const resolved = distinctConversations(o.rows)
     .map(r => (r.conversationId ? o.metas.get(r.conversationId) : undefined))
     .filter((m): m is SessionMeta => m !== undefined)
 
@@ -198,9 +201,13 @@ export function subtaskStats(o: {
   createdAt: string
   deliveredAt?: string
 }): TaskStats | null {
+  // Deduped BEFORE the partition: a conversation's newest row names where it is filed NOW, and an
+  // older row of it still carrying this subtask's id must not put it back here (see
+  // `distinctConversations`).
+  const current = distinctConversations(o.rows)
   const mine = o.subtaskId === null
-    ? o.rows.filter(r => !r.subtaskId)
-    : o.rows.filter(r => r.subtaskId === o.subtaskId)
+    ? current.filter(r => !r.subtaskId)
+    : current.filter(r => r.subtaskId === o.subtaskId)
   return scopedTaskStats({
     rows: mine,
     metas: o.metas,
