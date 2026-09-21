@@ -1758,6 +1758,34 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         if (typeof body.detach === 'string') {
           return json({ ok: await mod.detachSession(body.detach) })
         }
+        // A HISTORICAL conversation — in the consolidate store, with no registry row — is filed by
+        // its `conversationId` instead of a `sessionId`; the two are different DOORS into one job
+        // (`attachConversation` vs `attachSession`), never both at once.
+        if (typeof body.conversationId === 'string' && body.conversationId.trim()) {
+          if (typeof body.sessionId === 'string' && body.sessionId) {
+            return json({ ok: false, reason: 'session_or_conversation' }, 400)
+          }
+          const filed = await mod.attachConversation(ref, body.conversationId, {
+            ...(typeof body.subtaskId === 'string' && body.subtaskId ? { subtaskId: body.subtaskId } : {}),
+            ...(typeof body.harness === 'string' && body.harness ? { harness: body.harness } : {}),
+            ...(typeof body.note === 'string' && body.note ? { note: body.note } : {}),
+          })
+          if (filed.ok) return json(filed)
+          // `no_such_conversation` and `conversation_in_fleet` are 422 like `blocked`: the request
+          // names real things and asks for something this door cannot do (there is nothing to price,
+          // or there is a session to file instead — the answer carries its id). The shared target
+          // refusals keep exactly the statuses `attachSession` gives them.
+          return json(
+            {
+              ok: false, reason: filed.reason,
+              ...(filed.blockedBy ? { blockedBy: filed.blockedBy } : {}),
+              ...(filed.sessionId ? { sessionId: filed.sessionId } : {}),
+            },
+            filed.reason === 'blocked' || filed.reason === 'subtask_in_group'
+              || filed.reason === 'no_such_conversation' || filed.reason === 'conversation_in_fleet'
+              ? 422 : 404,
+          )
+        }
         // `subtaskId` files it under a SUBTASK of this delivery instead of under the delivery
         // itself — a move, never an addition. `task-attach.ts` holds the exclusivity; a subtask
         // belonging to another task is refused there, not repaired.
@@ -1765,7 +1793,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           typeof body.subtaskId === 'string' && body.subtaskId
             ? { subtaskId: body.subtaskId }
             : {})
-        if (result.ok) return json({ ok: true })
+        if (result.ok) return json({ ok: true, ...(result.movedFrom ? { movedFrom: result.movedFrom } : {}) })
         // `blocked` and `subtask_in_group` are both 422, the same status `markTask`'s own
         // `blocked_needs_reason` answers with — each names a piece of work this request cannot do,
         // not a resource that is missing (the target subtask is a real, existing MEMBER of a group,

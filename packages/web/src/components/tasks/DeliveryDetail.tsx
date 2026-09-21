@@ -639,7 +639,9 @@ function SessionsTab({ detail }: { detail: TaskDetail }) {
                   {st
                     ? <span style={pill(st.color)}>{st.label}</span>
                     // The fleet does not carry it: that is "we cannot see it now", not "it finished".
-                    : <span style={pill()}>{row.endedAt ? 'finished' : 'not in fleet'}</span>}
+                    : <span style={pill()}>
+                      {row.historical ? 'historical' : row.endedAt ? 'finished' : 'not in fleet'}
+                    </span>}
                 </td>
                 <td style={{ padding: '8px 10px' }}><span style={pill(harnessColor(row.harness))}>{row.harness}</span></td>
                 <td style={{ padding: '8px 10px', fontSize: 12, color: 'var(--text-tertiary)' }}>
@@ -649,6 +651,14 @@ function SessionsTab({ detail }: { detail: TaskDetail }) {
                 <td style={{ padding: '8px 10px', ...numeric }}>{fmtTokens(row.tokens)}</td>
                 <td style={{ padding: '8px 10px', ...numeric }}>{money(row.costUSD)}</td>
                 <td style={{ padding: '8px 10px' }}>
+                  {/* A historical conversation has no session to open — its id names nothing the
+                      Sessions workspace holds, so it gets no link rather than one that 404s. */}
+                  {row.historical ? (
+                    <span
+                      title="Historical conversation: its numbers count here, but there is no session to open."
+                      style={{ fontSize: 11.5, color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}
+                    >no session</span>
+                  ) : (
                   <a
                     href={sessionPath(row.id)}
                     style={{
@@ -656,6 +666,7 @@ function SessionsTab({ detail }: { detail: TaskDetail }) {
                       color: 'var(--anthropic-orange)', textDecoration: 'none', whiteSpace: 'nowrap',
                     }}
                   >Open <ExternalLink size={12} /></a>
+                  )}
                 </td>
               </tr>
             )

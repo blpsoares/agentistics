@@ -492,12 +492,50 @@ export interface TaskFile {
   createdAt: string
 }
 
+/**
+ * A HISTORICAL conversation filed on a task or subtask — a conversation the consolidate store still
+ * holds (tokens, cost, first prompt) whose fleet-registry row is GONE.
+ *
+ * WHY IT LIVES ON THE BOARD AND NOT IN THE REGISTRY. A coordinator kills its subtask sessions before
+ * closing the subtasks and agentop then purges the rows; the filing (`taskId`/`subtaskId`) dies with
+ * the row, so a `done` subtask reads as having no session and its cost is missing from every rollup,
+ * while the conversation itself is perfectly measurable in `~/.agentistics/sessions/`. Putting a
+ * STUB row back into `managed-sessions.json` would make the fleet believe in a session that is not
+ * there: a finished, reopenable row with no cwd, probed and heartbeated, listed by `agentop session
+ * ls`, filed under `GONE_PROJECT_KEY`. The board is the one place that already answers "what belongs
+ * to this delivery", so the link is stored there and turned into a READ-ONLY synthetic row only when
+ * a rollup is built (`task-historical.ts`) — no fleet, registry or reconcile path ever sees it.
+ *
+ * ONE LINK PER CONVERSATION: `id` is derived from `conversationId`, so filing is a MOVE exactly like
+ * filing a registry row (`planAttach`), never an addition.
+ */
+export interface HistoricalSession {
+  /** `hist:<conversationId>` — derived (`historicalLinkId`), never chosen by a caller. */
+  id: string
+  conversationId: string
+  harness: HarnessId
+  taskId: string
+  /** The subtask it is filed under, when it is filed under one rather than the delivery itself. */
+  subtaskId?: string
+  /**
+   * When the filing was MADE, ISO. A historical link is a filing STATEMENT, and `conversationOwners`
+   * decides ownership by the newest statement, so this is the stamp that puts it in the contest.
+   */
+  linkedAt: string
+  note?: string
+}
+
 export interface TaskBook {
   tasks: Task[]
   attempts: Attempt[]
   comments: TaskComment[]
   subtasks: Subtask[]
   files: TaskFile[]
+  /**
+   * Conversations filed on a task with no registry row behind them — see `HistoricalSession`.
+   * Always an array on a read (a book written before this existed carries none).
+   */
+  historicalSessions: HistoricalSession[]
   /**
    * The status VOCABULARY — see `@agentistics/core`'s `taskStatus.ts`. Absent or empty means "never
    * seeded yet"; `task-source.ts`'s `ensureStatusesSeeded` fills it in, once, the first time the
@@ -525,6 +563,11 @@ export interface TaskBook {
    * It is a tombstone and not a permanent ban: creating a task with that title again clears it.
    */
   tombstones: string[]
+}
+
+/** The id of the ONE historical link a conversation can hold. */
+export function historicalLinkId(conversationId: string): string {
+  return `hist:${conversationId}`
 }
 
 function shortHex(input: string): string {

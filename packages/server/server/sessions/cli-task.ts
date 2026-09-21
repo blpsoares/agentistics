@@ -60,7 +60,7 @@ async function runLs(json: boolean): Promise<number> {
     return 0
   }
   const listed = buildTaskList({
-    tasks: w.book.tasks, attempts: w.book.attempts, rows: w.rows, metas: w.metas, costOf: w.costOf,
+    tasks: w.book.tasks, attempts: w.book.attempts, rows: w.rollupRows, metas: w.metas, costOf: w.costOf,
   })
   if (json) {
     console.log(JSON.stringify(listed, null, 2))
@@ -82,7 +82,7 @@ async function runShow(ref: string, json: boolean): Promise<number> {
     return 1
   }
   const detail = buildTaskDetail({
-    task, attempts: w.book.attempts, rows: w.rows, metas: w.metas, costOf: w.costOf,
+    task, attempts: w.book.attempts, rows: w.rollupRows, metas: w.metas, costOf: w.costOf,
   })
   if (json) {
     console.log(JSON.stringify(detail, null, 2))

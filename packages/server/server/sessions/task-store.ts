@@ -22,11 +22,11 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { isValidStatusColor, normalizeStagedSession, type TaskStatusDef } from '@agentistics/core'
 import { withFileLock } from './file-lock'
-import { migratePriority, migrateStatus, subtaskDone } from './task-model'
+import { historicalLinkId, migratePriority, migrateStatus, subtaskDone } from './task-model'
 import { heldByOther } from './task-next'
 import type {
-  Attempt, AttemptStatus, Subtask, Task, TaskBook, TaskClaim, TaskComment, TaskEvent, TaskFile,
-  TaskLink, TaskPriority, TaskStatus,
+  Attempt, AttemptStatus, HistoricalSession, Subtask, Task, TaskBook, TaskClaim, TaskComment,
+  TaskEvent, TaskFile, TaskLink, TaskPriority, TaskStatus,
 } from './task-model'
 
 export interface TaskPatch {
@@ -65,6 +65,7 @@ export interface AttemptPatch {
 
 const EMPTY_BOOK = (): TaskBook => ({
   tasks: [], attempts: [], comments: [], subtasks: [], files: [], tombstones: [], events: [],
+  historicalSessions: [],
   // Absent/empty is exactly what `planStatusMigration` reads as "never seeded yet" — see
   // `task-source.ts`'s `ensureStatusesSeeded`, which fills this in on the very next load.
   statuses: [],
@@ -148,6 +149,19 @@ export interface TaskStore {
   /** False when no status carries that id — never a silent success. The caller (`task-web.ts`) is
    *  the one that checks `canDeleteStatus` BEFORE calling this; this method trusts that call. */
   removeStatus(id: string): Promise<boolean>
+
+  /**
+   * File a HISTORICAL conversation (see `HistoricalSession`) — or MOVE it, when it already holds a
+   * link. One link per conversation, decided under the lock, so `replaced` is exactly what THIS write
+   * displaced and a caller can say where it came from.
+   */
+  fileHistorical(link: HistoricalSession): Promise<{ replaced?: HistoricalSession }>
+  /**
+   * Drop a historical link, by its own id or by the conversation it names. Null when there was none —
+   * never a silent success. Dropping the link simply removes the filing STATEMENT; nothing else is
+   * written, because a conversation with no statement belongs to no task (`conversationOwners`).
+   */
+  unfileHistorical(ref: string): Promise<HistoricalSession | null>
 }
 
 /**
@@ -362,6 +376,26 @@ function sanitizeStatusDef(raw: unknown): TaskStatusDef | null {
   }
 }
 
+/**
+ * A link is kept only when it names a CONVERSATION and a TASK — without either it prices nothing and
+ * belongs to nothing. The id is re-derived rather than trusted, so two records for one conversation
+ * (a hand edit, a lost race) can only ever be one link: `read` keeps the LAST in file order.
+ */
+function sanitizeHistorical(raw: unknown): HistoricalSession | null {
+  if (!raw || typeof raw !== 'object') return null
+  const h = raw as Record<string, unknown>
+  const conversationId = str(h.conversationId); const taskId = str(h.taskId)
+  if (!conversationId || !taskId) return null
+  return {
+    id: historicalLinkId(conversationId),
+    conversationId, taskId,
+    harness: (str(h.harness) ?? 'claude') as HistoricalSession['harness'],
+    ...(str(h.subtaskId) ? { subtaskId: str(h.subtaskId)! } : {}),
+    linkedAt: str(h.linkedAt) ?? new Date(0).toISOString(),
+    ...(str(h.note) ? { note: str(h.note)! } : {}),
+  }
+}
+
 function sanitizeFile(raw: unknown): TaskFile | null {
   if (!raw || typeof raw !== 'object') return null
   const f = raw as Record<string, unknown>
@@ -407,6 +441,17 @@ export function createTaskStore(file: string): TaskStore {
         comments: arr(raw.comments).map(sanitizeComment).filter((c): c is TaskComment => c !== null),
         subtasks: arr(raw.subtasks).map(sanitizeSubtask).filter((t): t is Subtask => t !== null),
         files: arr(raw.files).map(sanitizeFile).filter((f): f is TaskFile => f !== null),
+        // Absent on a book written before historical links existed. This whitelist is what a value
+        // survives the next `read()` through — `sanitizeSubtask` dropped `blockedBy` for exactly this
+        // reason — so the collection is carried here explicitly, and `task-store.test.ts` round-trips it.
+        historicalSessions: [
+          ...new Map(
+            arr(raw.historicalSessions)
+              .map(sanitizeHistorical)
+              .filter((h): h is HistoricalSession => h !== null)
+              .map(h => [h.id, h] as const),
+          ).values(),
+        ],
         tombstones: arr(raw.tombstones).filter((v): v is string => typeof v === 'string'),
         events: arr(raw.events).map(sanitizeEvent).filter((e): e is TaskEvent => e !== null),
         // Absent on a book written before this feature existed — same reason every field above goes
@@ -523,6 +568,14 @@ export function createTaskStore(file: string): TaskStore {
           subtasks: book.subtasks
             .filter(t => t.id !== id)
             .map(t => (t.parentGroupId === id ? { ...t, parentGroupId: undefined } : t)),
+          // A conversation filed on the removed subtask falls back to its DELIVERY — the repair
+          // `reconcileAttachment` applies to a registry row whose `subtaskId` names nothing. Left
+          // dangling it would still count on the task but sit in no bucket, in the same write.
+          historicalSessions: book.historicalSessions.map(h => {
+            if (h.subtaskId !== id) return h
+            const { subtaskId: _dropped, ...rest } = h
+            return rest
+          }),
         })
         return true
       })
@@ -551,6 +604,11 @@ export function createTaskStore(file: string): TaskStore {
           comments: book.comments.filter(c => c.taskId !== id),
           subtasks: book.subtasks.filter(t => t.taskId !== id),
           files: book.files.filter(f => f.taskId !== id),
+          // A historical link is board data hanging off the task, so it goes with it. The
+          // CONVERSATION does not — it is still in the consolidate store, and dropping the link is what
+          // frees it to be filed elsewhere (a link left behind would name a task nobody can open and
+          // keep the conversation from ever being owned by another one).
+          historicalSessions: book.historicalSessions.filter(h => h.taskId !== id),
           events: book.events.filter(e => e.taskId !== id),
           // The status VOCABULARY is board-wide, not per-task — deleting a task never touches it.
           statuses: book.statuses,
@@ -653,6 +711,29 @@ export function createTaskStore(file: string): TaskStore {
           ...book,
           statuses: [...book.statuses.filter(s => s.id !== def.id), def],
         })
+      })
+    },
+    fileHistorical(link) {
+      return enqueue(async () => {
+        const book = await read()
+        const replaced = book.historicalSessions.find(h => h.id === link.id)
+        await write({
+          ...book,
+          historicalSessions: [...book.historicalSessions.filter(h => h.id !== link.id), link],
+        })
+        return replaced ? { replaced } : {}
+      })
+    },
+    unfileHistorical(ref) {
+      return enqueue(async () => {
+        const book = await read()
+        const found = book.historicalSessions.find(h => h.id === ref || h.conversationId === ref)
+        if (!found) return null
+        await write({
+          ...book,
+          historicalSessions: book.historicalSessions.filter(h => h.id !== found.id),
+        })
+        return found
       })
     },
     removeStatus(id) {
