@@ -86,3 +86,126 @@ describe('StudioBand — the resize handle and content box are direct children o
     expect(after.startsWith(DIV_OPEN)).toBe(true)
   })
 })
+
+/**
+ * FULL SCREEN IS A PROPERTY OF THE PANEL, NOT OF THE SLOT — found while fixing the band's resize
+ * grip: drag the Studio to fill the column, then move Contents into the SAME bottom band, and
+ * Contents read as full too, on the first frame, before anyone had dragged it anywhere. The stored
+ * `BandPrefs.full` used to be one flat boolean shared by whichever panel next reads it — the fix
+ * (`shellBand.ts`'s `bandPanelFull`/`withBandPanelFull`, keyed by `PanelId`) means `StudioBand` and
+ * `SimpleDockedBand` must each read and write only THEIR OWN entry, never the bare `p.full`/
+ * `next.full` boolean the old shape allowed.
+ *
+ * Not reachable by rendering, for the same reason as the tests above — the SHAPE is what is
+ * asserted, with the old pattern planted back in to prove the scan still catches it.
+ */
+describe('StudioBand / SimpleDockedBand read and write only their OWN panel\'s full-screen entry', () => {
+  test('no component in this file reads the old flat `p.full === true` shape', () => {
+    expect(SRC).not.toMatch(/p\.full === true/)
+  })
+
+  test('StudioBand reads its own entry by name', () => {
+    expect(SRC).toContain("return { height: p.height, full: bandPanelFull(p, 'studio') }")
+  })
+
+  test('SimpleDockedBand reads its own entry through the `panel` prop, not a literal', () => {
+    expect(SRC).toContain('return { height: p.height, full: bandPanelFull(p, panel) }')
+  })
+
+  test('both bands write through `withBandPanelFull`, never a bare `full: true`/`full: next.full` merge', () => {
+    expect([...SRC.matchAll(/withBandPanelFull\(/g)]).toHaveLength(2)
+    // The OLD write shape this replaces — a literal `full: true` spliced into the record by hand.
+    expect(SRC).not.toMatch(/\.\.\.\(next\.full \? \{ full: true \} : \{\}\)/)
+  })
+
+  test('the scan still sees the old shared-boolean read reintroduced', () => {
+    const planted = SRC.replace(
+      "return { height: p.height, full: bandPanelFull(p, 'studio') }",
+      'return { height: p.height, full: p.full === true }',
+    )
+    expect(planted).toMatch(/p\.full === true/)
+  })
+
+  test('the scan still sees the old shared-boolean write reintroduced', () => {
+    const planted = `${SRC}\n  writeBandPrefs({ ...rest, height: next.height, ...(next.full ? { full: true } : {}) })\n`
+    expect(planted).toMatch(/\.\.\.\(next\.full \? \{ full: true \} : \{\}\)/)
+  })
+})
+
+/**
+ * FULL SCREEN STOPS SHORT OF THE ARTIFACTS ASIDE (change #2) — `StudioBand`'s and
+ * `SimpleDockedBand`'s own `position: fixed` overlays used to hard-code `inset: 0`, covering the
+ * aside whenever it was independently showing something else (owner: "o studio... some com o
+ * aside da direita"). Both must now compute `right` through `fullscreenInsetRight`, never `inset: 0`
+ * on the fullscreen branch.
+ */
+describe('the fullscreen overlay respects the artifacts aside (I2)', () => {
+  test('no `inset: 0` survives on the fullscreen branch of either band', () => {
+    expect(SRC).not.toMatch(/position: 'fixed', inset: 0/)
+  })
+
+  test('both bands compute their right inset through `fullscreenInsetRight`', () => {
+    expect([...SRC.matchAll(/right: fullscreenInsetRight\(rightAsideEdge, viewportWidth\)/g)]).toHaveLength(2)
+  })
+
+  test('both bands read the aside\'s live edge and the viewport width reactively', () => {
+    expect([...SRC.matchAll(/const rightAsideEdge = useRightAsideEdge\(\)/g)]).toHaveLength(2)
+    expect([...SRC.matchAll(/const viewportWidth = useViewportWidth\(\)/g)]).toHaveLength(2)
+  })
+
+  test('the scan still sees `inset: 0` reintroduced on a fullscreen branch', () => {
+    const planted = SRC.replace(
+      "position: 'fixed', top: 0, left: 0, bottom: 0,\n          right: fullscreenInsetRight(rightAsideEdge, viewportWidth),\n          zIndex: PANEL_FULLSCREEN_Z,",
+      "position: 'fixed', inset: 0, zIndex: PANEL_FULLSCREEN_Z,",
+    )
+    expect(planted).toMatch(/position: 'fixed', inset: 0/)
+  })
+})
+
+/**
+ * `<ShellBand>` IS WIRED TO THE SAME `slotLayout.bottomOpen` / `setBottomOpen` PAIR
+ * `<StudioBand>`/`<SimpleDockedBand>` ALREADY TAKE AS `open`/`onToggleOpen` — the fix for "picking
+ * a tab minimized the band instead of switching to it" (owner report). `ShellBand` cannot take
+ * `open` as a fully controlled prop the way the other two do (its shell-resolution reducer reads
+ * the SAME flag at its own mount-time init, not only at render), so it takes `open`/`onOpenChange`
+ * instead — a seed plus a change notifier — but the SOURCE on this end is identical: this page's
+ * own `slotLayout.bottomOpen` and `setBottomOpen`, never a value this component invents.
+ */
+describe('ShellBand is wired to the shared bottomOpen state (I3 — "picking Shell minimized the band")', () => {
+  test('the mount call passes `open={slotLayout.bottomOpen}`', () => {
+    expect(SRC).toContain('open={slotLayout.bottomOpen}')
+  })
+
+  test('the mount call passes `onOpenChange={setBottomOpen}`', () => {
+    expect(SRC).toContain('onOpenChange={setBottomOpen}')
+  })
+
+  test('both land inside the `bottomBand === \'shell\'` branch, on the `<ShellBand` call, not a different component', () => {
+    const start = SRC.indexOf("bottomBand === 'shell' ? (")
+    const shellBandAt = SRC.indexOf('<ShellBand', start)
+    const closeAt = SRC.indexOf('/>', shellBandAt)
+    expect(start).toBeGreaterThan(-1)
+    expect(shellBandAt).toBeGreaterThan(start)
+    expect(closeAt).toBeGreaterThan(shellBandAt)
+    const props = SRC.slice(shellBandAt, closeAt)
+    expect(props).toContain('open={slotLayout.bottomOpen}')
+    expect(props).toContain('onOpenChange={setBottomOpen}')
+  })
+
+  test('the scan still sees the wiring dropped from the call — the check itself would then fail', () => {
+    // Simulates the regression WITHIN THE SHELLBAND CALL SPECIFICALLY — `open={slotLayout.bottomOpen}`
+    // is not a unique string (`StudioBand`/`SimpleDockedBand` take the identical prop), so the plant
+    // is scoped to the exact slice the earlier test already isolates, or removing the FIRST
+    // occurrence anywhere in the file (most likely `StudioBand`'s own, textually first) would prove
+    // nothing about THIS call.
+    const start = SRC.indexOf("bottomBand === 'shell' ? (")
+    const shellBandAt = SRC.indexOf('<ShellBand', start)
+    const closeAt = SRC.indexOf('/>', shellBandAt)
+    const before = SRC.slice(shellBandAt, closeAt)
+    const after = before
+      .replace('open={slotLayout.bottomOpen}', '// removed')
+      .replace('onOpenChange={setBottomOpen}', '// removed')
+    expect(after.includes('open={slotLayout.bottomOpen}')).toBe(false)
+    expect(after.includes('onOpenChange={setBottomOpen}')).toBe(false)
+  })
+})

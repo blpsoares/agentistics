@@ -3,6 +3,7 @@ import {
   filtrosPanelInert, sessionsFiltersShouldReturnFocus,
   filtrosPanelBounds, FILTROS_PANEL_PREFERRED_WIDTH, FILTROS_PANEL_MIN_WIDTH,
   metricsTabBounds, METRICS_PANEL_PREFERRED_WIDTH, METRICS_PANEL_MIN_WIDTH,
+  filtrosPanelBoundsRight, metricsTabBoundsRight,
 } from './sessionsFiltersPanel'
 
 describe('filtrosPanelInert', () => {
@@ -113,5 +114,85 @@ describe('metricsTabBounds — the session-metrics tab beside Filtros (design it
     const filtros = filtrosPanelBounds({ left: 0, right: 320 }, null, 1440)
     const bounds = metricsTabBounds(filtros, 0, 0)
     expect(bounds.left).toBeGreaterThanOrEqual(filtros.left)
+  })
+})
+
+describe('filtrosPanelBoundsRight — the same clamp, anchored to the artifacts aside instead', () => {
+  test('1440×900, artifacts aside at its default width — full preferred width, no clamp', () => {
+    // Same figures `filtrosPanelBounds`' own first test uses — the room between the two asides is
+    // identical either way, only the returned offset changes shape (a `right` CSS value: 1440-820).
+    const bounds = filtrosPanelBoundsRight({ left: 0, right: 320 }, { left: 820, right: 1440 }, 1440)
+    expect(bounds).toEqual({ right: 620, width: FILTROS_PANEL_PREFERRED_WIDTH })
+  })
+
+  test('1024×768, artifacts aside at its ACTUAL default width — clamped to the room, no overlap', () => {
+    const bounds = filtrosPanelBoundsRight({ left: 0, right: 320 }, { left: 585, right: 1024 }, 1024)
+    expect(bounds).toEqual({ right: 439, width: 265 })
+    // The box's own LEFT edge, worked back out from the CSS `right` offset, never crosses the
+    // fleet aside's own right edge (320).
+    expect(1024 - bounds.right - bounds.width).toBeGreaterThanOrEqual(320)
+  })
+
+  test('artifacts aside CLOSED — flush against the viewport\'s own right edge', () => {
+    const bounds = filtrosPanelBoundsRight({ left: 0, right: 320 }, null, 1440)
+    expect(bounds).toEqual({ right: 0, width: FILTROS_PANEL_PREFERRED_WIDTH })
+  })
+
+  test('a closed aside and a present aside agree on WIDTH when the room is the same either way', () => {
+    const withAside = filtrosPanelBoundsRight({ left: 0, right: 200 }, { left: 500, right: 900 }, 900)
+    const closedAtSameEdge = filtrosPanelBoundsRight({ left: 0, right: 200 }, null, 500)
+    expect(withAside.width).toBe(closedAtSameEdge.width)
+  })
+
+  test('room narrower than the floor still returns the floor, not a negative or zero width', () => {
+    const bounds = filtrosPanelBoundsRight({ left: 0, right: 1000 }, { left: 1050, right: 1440 }, 1440)
+    expect(bounds).toEqual({ right: 390, width: FILTROS_PANEL_MIN_WIDTH })
+  })
+
+  test('the aside MINIMIZED (reported as null) — the same viewport now yields a zero right offset', () => {
+    // The reactive half of change #3: minimizing the artifacts aside is a NEW measurement
+    // (`rightAsideEdge` going back to `null`), never a second code path — this is the same function
+    // called again with a different `rightAside`, exactly as `fullscreenInsetRight` is.
+    const open = filtrosPanelBoundsRight({ left: 0, right: 320 }, { left: 820, right: 1440 }, 1440)
+    const minimized = filtrosPanelBoundsRight({ left: 0, right: 320 }, null, 1440)
+    expect(open.right).toBeGreaterThan(0)
+    expect(minimized.right).toBe(0)
+  })
+})
+
+describe('metricsTabBoundsRight — the session-metrics tab beside Filtros, anchored to the right', () => {
+  test('plenty of room: the tab sits right BEFORE Filtros, dropdown gets its preferred width', () => {
+    const filtros = filtrosPanelBoundsRight({ left: 0, right: 320 }, { left: 820, right: 1440 }, 1440)
+    const bounds = metricsTabBoundsRight(filtros, 100, 6)
+    expect(bounds.right).toBe(620 + 100 + 6)
+    expect(bounds.panelMaxWidth).toBe(METRICS_PANEL_PREFERRED_WIDTH)
+  })
+
+  test('a narrower gap between the asides clamps the dropdown, never past the fleet aside', () => {
+    const filtros = filtrosPanelBoundsRight({ left: 0, right: 320 }, { left: 680, right: 1440 }, 1440)
+    const bounds = metricsTabBoundsRight(filtros, 100, 6)
+    expect(bounds.panelMaxWidth).toBeLessThan(METRICS_PANEL_PREFERRED_WIDTH)
+    expect(bounds.panelMaxWidth).toBeGreaterThan(METRICS_PANEL_MIN_WIDTH)
+    // Worked back to the box's own left edge — never crosses the fleet aside's own right edge (320).
+    expect(1440 - bounds.right - bounds.panelMaxWidth).toBeGreaterThanOrEqual(320)
+  })
+
+  test('room narrower than the floor still returns the floor, not a negative width', () => {
+    const filtros = { right: 320, width: FILTROS_PANEL_MIN_WIDTH } // mirrors the left-anchored test
+    const bounds = metricsTabBoundsRight(filtros, 200, 6)
+    expect(bounds.panelMaxWidth).toBe(METRICS_PANEL_MIN_WIDTH)
+  })
+
+  test('when the room is narrower than even the floor, the floor may still cross the fleet aside', () => {
+    const filtros = filtrosPanelBoundsRight({ left: 0, right: 320 }, { left: 585, right: 1024 }, 1024)
+    const bounds = metricsTabBoundsRight(filtros, 90, 6)
+    expect(bounds.panelMaxWidth).toBe(METRICS_PANEL_MIN_WIDTH)
+    expect(1024 - bounds.right - bounds.panelMaxWidth).toBeLessThan(320)
+  })
+
+  test('the tab never lands to the RIGHT of the Filtros tab, whatever the gap', () => {
+    const filtros = filtrosPanelBoundsRight({ left: 0, right: 320 }, null, 1440)
+    const bounds = metricsTabBoundsRight(filtros, 0, 0)
+    expect(bounds.right).toBeGreaterThanOrEqual(filtros.right)
   })
 })

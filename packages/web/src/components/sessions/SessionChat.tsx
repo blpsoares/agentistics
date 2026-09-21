@@ -718,6 +718,31 @@ export function SessionChat({ session, row, lang, act, onArtifacts, onReopened }
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   /** Has this conversation been placed at its end yet? Opening mid-history is disorienting. */
   const landedRef = useRef(false)
+  /**
+   * THE MESSAGE SCROLLER'S OWN RESERVED GUTTER (owner: "simplesmente nao ta alinhado os cards de
+   * mensagens como deveriam estar" — bubbles and the composer must share the same left/right
+   * edges). `scrollbarGutter: 'stable'` on the scroller below keeps ITS OWN centred column from
+   * shifting as the conversation grows past the viewport (see that style's own header), but the
+   * composer sits in a SEPARATE, never-scrolling sibling box: reserving the gutter on only one of
+   * the two is a defect wearing the shape of a fix — the scroller's content box is now narrower by
+   * whatever the browser reserves, while the composer keeps centring in the FULL width, which is
+   * the exact mismatch reported (a later bubble, inside the narrowed scroller, sits flush with the
+   * composer; an earlier one measured before this fix — or on a wider render — does not).
+   *
+   * Measured ONCE, not tracked by a `ResizeObserver`: the reservation is a fact about the browser,
+   * OS and zoom level, not about the conversation's own content, so — unlike the scroller's height —
+   * it has no reason to change while this component is mounted. Spent as `paddingRight` on the
+   * composer's own column, below, rather than giving that column a matching `overflow: hidden` (the
+   * more obvious mirror of `scrollbarGutter`) — the skill picker floats ABOVE that exact box via
+   * `position: absolute; bottom: 100%`, and clipping it was the one property this fix could not
+   * reach for.
+   */
+  const [chatGutterPx, setChatGutterPx] = useState(0)
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    setChatGutterPx(el.offsetWidth - el.clientWidth)
+  }, [])
 
   /**
    * Insert the picked skill into the draft. IT DOES NOT SEND — that rule already exists in the
@@ -1497,6 +1522,25 @@ export function SessionChat({ session, row, lang, act, onArtifacts, onReopened }
           // with the header dragged out from under the status bar. The document lock in
           // App.tsx is the other half; this is the half that keeps the gesture where it began.
           overscrollBehavior: 'contain',
+          // THE CENTRED COLUMN NEVER SHIFTS WHEN THE SCROLLBAR COMES AND GOES (owner: "simplesmente
+          // nao ta alinhado os cards de mensagens como deveriam estar" — measured off their own
+          // screenshot: an earlier bubble at x≈124–944, the last bubble and the composer at
+          // x≈131–950, ~7px further right). This scroller and the composer below it are SIBLINGS —
+          // the composer never scrolls and so never carries a scrollbar — and each centres its own
+          // `maxWidth: 820` column independently via `margin: '0 auto'`. A NATIVE (non-overlay)
+          // scrollbar carves its own gutter out of THIS element's content box the moment the
+          // conversation grows past the viewport, shrinking the box the 820px column centres
+          // within and sliding it left by half the scrollbar's width — while the composer's own
+          // column, with no scrollbar of its own, keeps centring in the FULL width. A short
+          // conversation (no scrollbar yet) and a long one (scrollbar present) therefore centre
+          // their message column at two different x positions, and the composer never moves at
+          // all — which is exactly "the last bubble lines up with the composer, the earlier one
+          // does not" once enough turns have made the list scroll. `scrollbarGutter: 'stable'`
+          // reserves the gutter's width UNCONDITIONALLY, whether or not a scrollbar is currently
+          // drawn, so the content box — and the column centred inside it — is the same width, and
+          // the message column and the composer stay flush at the same left/right edges, from the
+          // very first turn.
+          scrollbarGutter: 'stable',
         }}
       >
         <div style={{ maxWidth: 820, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }}>
@@ -1624,7 +1668,16 @@ export function SessionChat({ session, row, lang, act, onArtifacts, onReopened }
         // under: transparent is not a ground, it is the absence of one, so a message simply ended
         // at this element's top edge. `.ag-composer-ground` draws the blur-and-fade behind it. The
         // FIELD keeps its own opaque surface and border — that is deliberate and recorded above.
-        padding: '10px 20px 16px',
+        //
+        // `paddingRight` carries the extra `chatGutterPx` (normally 0) — see that state's own
+        // header. It shrinks THIS element's own content box on the right by exactly what the
+        // message scroller above now reserves for its gutter, so the `maxWidth: 820, margin: '0
+        // auto'` column below — the composer's own version of the same column the bubbles centre
+        // in — re-centres at the SAME left/right edges, whether or not the conversation is
+        // currently tall enough to scroll. Longhand rather than the shorthand this used to be,
+        // because the shorthand cannot express "20px, but only the right side also carries a
+        // variable" without repeating the other three sides by hand anyway.
+        paddingTop: 10, paddingRight: 20 + chatGutterPx, paddingBottom: 16, paddingLeft: 20,
         background: 'transparent',
       }}>
         {/* Back to the end. Only while the reader has actually scrolled away — a control that is
