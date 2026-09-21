@@ -2181,8 +2181,11 @@ export function SessionChat({ session, row, lang, act, onArtifacts, onReopened }
                 flexDirection: 'column', alignItems: 'stretch', gap: 2,
                 // THE FIELD. A rounded, bordered, inset box — the shape a person recognises as
                 // somewhere to type. It was previously borderless and flush to the page edges,
-                // which is why it read as a footer.
-                background: 'var(--bg-elevated)',
+                // which is why it read as a footer. `--bg-input` (owner, 2026-09-21: "quero o
+                // input... na cor branca") rather than `--bg-elevated` directly — see that token's
+                // own header in `index.css` for why the light theme needed a different existing
+                // surface and the dark theme did not change at all.
+                background: 'var(--bg-input)',
                 border: '1px solid var(--border)',
                 borderRadius: 14,
                 padding: '5px 6px 5px 8px',

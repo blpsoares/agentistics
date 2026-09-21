@@ -6,7 +6,7 @@ import {
   resetPanelSlots, resolveForGates, resolveForViewport, restorePanelPlacement, rightSlotShowing,
   setBandOpen, setBottomOpen, setPlacement, setRightOpen, setSlotRightOpen, showPanel,
   subscribePanelLayout,
-  type OpenPlacement, type PanelGates, type PanelId, type Placement,
+  type OpenPlacement, type PanelGates, type PanelId, type Placement, type SlotLayout,
 } from './panelSlots'
 import { answerUnsaved, getUnsaved, reportUnsaved, resetUnsaved } from './unsavedBuffers'
 
@@ -207,18 +207,28 @@ describe('planPanelDrop — spec §3, drag', () => {
     expect(next).toBe(EMPTY_SLOT_LAYOUT)
   })
 
-  test('cross-bar drop onto a specific panel MOVES, OPENS, and lands beside that panel', () => {
-    // drag a rail panel onto 'shell' (bottom) — spec: it becomes a tab there AND opens there.
+  test('cross-bar drop of a CLOSED panel onto a specific panel MOVES and lands beside it, opening nothing (owner, 2026-09-21)', () => {
+    // drag a rail panel (never opened) onto 'shell' (bottom) — relocates and positions, but a
+    // closed panel dropped anywhere stays closed; see `movePanel`'s own header for the rule.
     const next = planPanelDrop(EMPTY_SLOT_LAYOUT, 'skills', { panel: 'shell' })
     expect(next.placement.skills).toBe('bottom')
-    expect(next.bottom).toBe('skills') // opened, displacing nothing since bottom starts empty
+    expect(next.bottom).toBeNull() // nothing was open at either end, so nothing opens now
+    expect(bottomPanels(next)).toEqual(['cli', 'skills', 'shell']) // still positioned correctly
+  })
+
+  test('cross-bar drop of an OPEN panel onto a specific panel MOVES, OPENS, and lands beside it', () => {
+    const shown = openPanel(EMPTY_SLOT_LAYOUT, 'skills') // right: skills
+    const next = planPanelDrop(shown, 'skills', { panel: 'shell' })
+    expect(next.placement.skills).toBe('bottom')
+    expect(next.bottom).toBe('skills') // it WAS open, so it opens at the destination
+    expect(next.right).toBeNull() // and the source (right) minimizes
     expect(bottomPanels(next)).toEqual(['cli', 'skills', 'shell'])
   })
 
-  test('cross-bar drop onto bare placement space MOVES, OPENS, and appends at the end', () => {
+  test('cross-bar drop onto bare placement space — CLOSED stays closed, still appended at the end', () => {
     const next = planPanelDrop(EMPTY_SLOT_LAYOUT, 'skills', { placement: 'bottom' })
     expect(next.placement.skills).toBe('bottom')
-    expect(next.bottom).toBe('skills')
+    expect(next.bottom).toBeNull()
     expect(bottomPanels(next)).toEqual(['cli', 'shell', 'skills'])
   })
 
@@ -227,14 +237,14 @@ describe('planPanelDrop — spec §3, drag', () => {
     expect(next).toBe(EMPTY_SLOT_LAYOUT)
   })
 
-  test('a panel currently hidden, dropped on a rail panel, is placed on the rail and opened there', () => {
+  test('a HIDDEN, CLOSED panel dropped on a rail panel is placed and positioned, but stays closed', () => {
     const hidden = hidePanelPlacement(EMPTY_SLOT_LAYOUT, 'skills')
     const next = planPanelDrop(hidden, 'skills', { panel: 'live' })
     expect(next.placement.skills).toBe('rail')
-    expect(next.right).toBe('skills')
+    expect(next.right).toBeNull() // a hidden panel was never "open" — stays closed after the move
     const rail = railPanels(next)
-    // lands immediately before the panel it was dropped on, same as any cross-bar drop onto a
-    // specific target.
+    // still lands immediately before the panel it was dropped on, same as any cross-bar drop onto
+    // a specific target — position is independent of whether it opens.
     expect(rail.indexOf('skills')).toBe(rail.indexOf('live') - 1)
   })
 
@@ -285,25 +295,80 @@ describe('railClickAction — the rail is a launcher, the bottom bar is a tab st
   })
 })
 
-describe('movePanel — the gear’s verb', () => {
-  test('sets placement AND opens the panel at the destination, displacing whatever was there', () => {
-    const withCli = openPanel(EMPTY_SLOT_LAYOUT, 'cli') // bottom
-    const moved = movePanel(withCli, 'skills', 'bottom')
-    expect(moved.placement.skills).toBe('bottom')
-    expect(moved.bottom).toBe('skills') // displaced cli
+describe('movePanel — a move carries the panel’s open state, it never creates one (owner, 2026-09-21)', () => {
+  test('CLOSED → moved: relocates the placement, opens nothing, touches no occupant', () => {
+    const withCli = openPanel(EMPTY_SLOT_LAYOUT, 'cli') // bottom is showing cli
+    const moved = movePanel(withCli, 'skills', 'bottom') // skills was never opened
+    expect(moved.placement.skills).toBe('bottom') // relocated
+    expect(moved.bottom).toBe('cli') // cli is UNTOUCHED — skills never displaces it
+    expect(isPanelShown(moved, 'skills')).toBe(false) // skills stays closed
   })
 
-  test('moving to the placement it is already in still (re)opens it there', () => {
+  test('OPEN → moved: reopens at the destination, displacing whatever was there', () => {
+    const shown = openPanel(EMPTY_SLOT_LAYOUT, 'skills') // skills is the right slot's occupant
+    const withCli = openPanel(shown, 'cli') // bottom now shows cli; skills is still open on the right
+    const moved = movePanel(withCli, 'skills', 'bottom')
+    expect(moved.placement.skills).toBe('bottom')
+    expect(moved.bottom).toBe('skills') // opened at the destination, displacing cli
+  })
+
+  test('the SOURCE side MINIMIZES when the moved panel was the one showing there', () => {
+    const shown = openPanel(EMPTY_SLOT_LAYOUT, 'skills') // right: skills, rightOpen: true
+    const moved = movePanel(shown, 'skills', 'bottom')
+    expect(moved.right).toBeNull()
+    expect(moved.bottom).toBe('skills')
+  })
+
+  test('the BOTTOM band specifically ends up bottomOpen:false when its own occupant moves away', () => {
+    const shown = openPanel(setPlacement(EMPTY_SLOT_LAYOUT, 'skills', 'bottom'), 'skills') // bottom: skills, bottomOpen: true
+    expect(shown.bottomOpen).toBe(true)
+    const moved = movePanel(shown, 'skills', 'rail')
+    expect(moved.bottom).toBeNull()
+    expect(moved.bottomOpen).toBe(false) // MINIMIZED, not left open-and-empty
+  })
+
+  test('the SOURCE side is UNTOUCHED when the moved panel was NOT the one showing there', () => {
+    const shown = openPanel(EMPTY_SLOT_LAYOUT, 'agents') // agents occupies the right slot
+    // skills is placed on the rail too, but is not the active occupant — moving it must not
+    // disturb agents, which stays open exactly as it was.
+    const moved = movePanel(shown, 'skills', 'bottom')
+    expect(moved.right).toBe('agents') // untouched
+    expect(moved.rightOpen).toBe(true)
+    expect(isPanelShown(moved, 'skills')).toBe(false) // skills itself stays closed too
+  })
+
+  test('moving to the placement it is already in — CLOSED stays closed even so', () => {
     const next = movePanel(EMPTY_SLOT_LAYOUT, 'live', 'rail')
+    expect(next.right).toBeNull()
+    expect(isPanelShown(next, 'live')).toBe(false)
+  })
+
+  test('moving to the placement it is already in — OPEN stays open, unaffected', () => {
+    const shown = openPanel(EMPTY_SLOT_LAYOUT, 'live')
+    const next = movePanel(shown, 'live', 'rail')
     expect(next.right).toBe('live')
   })
 
   for (const to of OPEN_PLACEMENTS) {
-    test(`move to ${to} refreshes restoreTo to match`, () => {
+    test(`move to ${to} refreshes restoreTo to match, whether or not the panel was open`, () => {
       const next = movePanel(EMPTY_SLOT_LAYOUT, 'skills', to)
       expect(next.restoreTo.skills).toBe(to)
     })
   }
+
+  // PLANTED-REVERT: a version that always opens (the old rule) would displace an occupant a CLOSED
+  // move must leave alone — the exact regression this whole describe block exists to catch.
+  test('[planted-revert coverage] always opening on move displaces an untouched occupant', () => {
+    function brokenMovePanel(layout: SlotLayout, panel: PanelId, to: OpenPlacement): SlotLayout {
+      return openPanel(setPlacement(layout, panel, to), panel) // old rule: always opens
+    }
+    const withCli = openPanel(EMPTY_SLOT_LAYOUT, 'cli')
+    const broken = brokenMovePanel(withCli, 'skills', 'bottom')
+    const correct = movePanel(withCli, 'skills', 'bottom')
+    expect(broken.bottom).not.toBe(correct.bottom)
+    expect(broken.bottom).toBe('skills') // wrongly seized the slot
+    expect(correct.bottom).toBe('cli') // correctly left alone
+  })
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -396,7 +461,7 @@ describe('resolveForViewport', () => {
   })
 
   test('mobile: a bottom-only panel reads as the right sheet instead', () => {
-    const layout = movePanel(EMPTY_SLOT_LAYOUT, 'skills', 'bottom')
+    const layout = openPanel(setPlacement(EMPTY_SLOT_LAYOUT, 'skills', 'bottom'), 'skills')
     const mobile = resolveForViewport(layout, true)
     expect(mobile.right).toBe('skills')
     expect(mobile.bottom).toBeNull()
@@ -418,7 +483,7 @@ describe('resolveForViewport', () => {
    * the switcher was reachable but inert.
    */
   test('mobile: once something real sits on the right, the fold stops overriding it', () => {
-    const layout = movePanel(EMPTY_SLOT_LAYOUT, 'studio', 'bottom')
+    const layout = openPanel(setPlacement(EMPTY_SLOT_LAYOUT, 'studio', 'bottom'), 'studio')
     const firstFold = resolveForViewport(layout, true)
     expect(firstFold.right).toBe('studio') // the fold's own first-time behaviour, unchanged
 
@@ -592,14 +657,17 @@ describe('readLayout — round-trips every PANEL_IDS member through write→read
   for (const id of PANEL_IDS) {
     test(`${id} on the rail`, () => {
       const s = memory()
-      const written = movePanel(EMPTY_SLOT_LAYOUT, id, 'rail')
+      // `openPanel` after `setPlacement`, not `movePanel` — this test is about STORAGE
+      // round-tripping an OPEN occupant, not about move semantics (`movePanel` no longer opens a
+      // panel that was not already shown — see its own header).
+      const written = openPanel(setPlacement(EMPTY_SLOT_LAYOUT, id, 'rail'), id)
       s.setItem('agentistics-panel-slots', JSON.stringify({ version: 2, ...written }))
       expect(readLayout(s).right).toBe(id)
     })
 
     test(`${id} at the bottom`, () => {
       const s = memory()
-      const written = movePanel(EMPTY_SLOT_LAYOUT, id, 'bottom')
+      const written = openPanel(setPlacement(EMPTY_SLOT_LAYOUT, id, 'bottom'), id)
       s.setItem('agentistics-panel-slots', JSON.stringify({ version: 2, ...written }))
       expect(readLayout(s).bottom).toBe(id)
     })

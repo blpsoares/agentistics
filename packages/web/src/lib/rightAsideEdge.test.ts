@@ -145,4 +145,21 @@ describe('closedRightEdge', () => {
     expect(brokenClosedRightEdge(false, 1440)).not.toBe(closedRightEdge(false, 1440))
     expect(closedRightEdge(false, 1440)).toBeNull()
   })
+
+  // The resizable rail (owner, 2026-09-21) — a THIRD argument now carries the LIVE width, so a rail
+  // dragged out to its ceiling pushes this fallback edge with it rather than leaving the chips
+  // painting back into the wider icons.
+  describe('a live railWidth argument (the resizable rail)', () => {
+    test('omitting it behaves exactly as before — the floor, 44px', () => {
+      expect(closedRightEdge(true, 1440)).toBe(closedRightEdge(true, 1440, 44))
+    })
+
+    test('at the rail’s ceiling, the fallback edge moves the extra pixels with it', () => {
+      expect(closedRightEdge(true, 1440, 66)).toBe(1440 - 66)
+    })
+
+    test('a wider rail never affects the no-rail case — still null', () => {
+      expect(closedRightEdge(false, 1440, 66)).toBeNull()
+    })
+  })
 })

@@ -27,6 +27,7 @@
  */
 
 import { useSyncExternalStore } from 'react'
+import { RAIL_WIDTH_FLOOR_PX } from './railFit'
 
 let edge: number | null = null
 const listeners = new Set<() => void>()
@@ -128,11 +129,15 @@ export function restingLeftEdge(visualLeft: number, computedTransform: string): 
  * fleet list beside it.
  */
 /**
- * The rail's own fixed width (`PanelRail.tsx`) — icons only, never resized. A constant rather than
- * a live measurement: unlike the aside, which the reader drags, the rail never changes size, so
- * there is nothing here for a `ResizeObserver` to earn its keep measuring.
+ * The rail's own width, AT REST — `railFit.ts`'s own floor, re-exported here under its old name so
+ * every caller written before the rail became resizable (owner, 2026-09-21) keeps compiling. It is
+ * no longer what the rail actually measures on screen: `PanelRail.tsx`, `SessionsPage.tsx` and the
+ * two bottom-band overlays in `SessionPanel.tsx` all read the LIVE width now (`useRailWidth()` /
+ * `SlotLayout.railWidth`) and pass it to `closedRightEdge` / `fullscreenInsetRight` explicitly. This
+ * constant survives only as their DEFAULT — a caller that has not measured the live width yet (a
+ * cold render, a test with nothing to say) gets the same answer this file always gave.
  */
-export const RAIL_WIDTH_PX = 44
+export const RAIL_WIDTH_PX = RAIL_WIDTH_FLOOR_PX
 
 /**
  * WHERE THE RIGHT-HAND FURNITURE STARTS while NOTHING is open on the right — the ONE function every
@@ -143,9 +148,17 @@ export const RAIL_WIDTH_PX = 44
  * `SessionsPage.tsx`) rather than duplicated here — this function does not know what a session is.
  * `null` when there is no rail either (mobile, or no session selected): genuinely nothing on the
  * right, the bare viewport edge.
+ *
+ * `railWidth` (default `RAIL_WIDTH_PX`, the floor) lets the caller pass the rail's LIVE, resized
+ * width (owner, 2026-09-21) rather than the constant this function used to hard-code — a rail
+ * dragged out to its ceiling must push the Filtros chips' own fallback edge with it, or they paint
+ * back into the rail's now-wider icons exactly the way the original regression this function fixed
+ * did.
  */
-export function closedRightEdge(railShowing: boolean, viewportWidth: number): number | null {
-  return railShowing ? viewportWidth - RAIL_WIDTH_PX : null
+export function closedRightEdge(
+  railShowing: boolean, viewportWidth: number, railWidth: number = RAIL_WIDTH_PX,
+): number | null {
+  return railShowing ? viewportWidth - railWidth : null
 }
 
 /**

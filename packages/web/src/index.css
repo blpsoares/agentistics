@@ -788,6 +788,26 @@ button:focus-within .ag-row-pin,
   --ag-text-on-scrim-dim: rgba(255, 255, 255, 0.55);
 }
 
+/* ---------------------------------------------------------------------------
+   The composer's own INPUT SURFACE — an opaque, raised box, not a translucent tint (owner,
+   2026-09-21: "hoje ele eh transparente pelo que to vendo, quero ele branco tbm").
+
+   `--bg-elevated` is right in the DARK theme (`#1e1e2e`, plainly distinct from the `#111118`
+   surface behind it) but its LIGHT value (`#f0f1f5`) sits so close to `--bg-base`/`--bg-surface`
+   that the field read as though it had no fill at all. `--bg-card`'s LIGHT value already IS
+   opaque white (`#ffffff`, the same surface every card in this theme uses) — but its DARK value
+   differs from `--bg-elevated`'s own (`#16161f` against `#1e1e2e`), so swapping the composer
+   straight onto `--bg-card` would also change the dark theme's rendering, which this fix must
+   leave alone. `--bg-input` is the alias that lets each theme keep the answer already right for
+   it: no new color, just a name that picks a different existing one per theme.
+   --------------------------------------------------------------------------- */
+:root {
+  --bg-input: var(--bg-elevated);
+}
+[data-theme="light"] {
+  --bg-input: var(--bg-card);
+}
+
 /*
  * "Go to message" landed here.
  *

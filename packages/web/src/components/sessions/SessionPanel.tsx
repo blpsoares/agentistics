@@ -28,10 +28,11 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { useElementWidth } from '../../hooks/useElementWidth'
 import { useViewportWidth } from '../../hooks/useViewportWidth'
 import {
-  bottomPanels, resolveForViewport, usePanelSlots, type PanelDropTarget, type PanelId,
+  bottomPanels, resolveForViewport, useRailWidth, usePanelSlots, type PanelDropTarget, type PanelId,
 } from '../../lib/panelSlots'
 import { panelTitle } from '../../lib/panelMeta'
-import { RAIL_WIDTH_PX, fullscreenInsetRight, useRightAsideEdge } from '../../lib/rightAsideEdge'
+import { useLeftAsideEdge } from '../../lib/leftAsideEdge'
+import { fullscreenInsetRight, useRightAsideEdge } from '../../lib/rightAsideEdge'
 import {
   bandBarCompact, bottomBandFor, gatedBottomOccupant, panelBarEntries, resolvePanelBarPick,
   type PanelBarEntry, type PanelBarGates, type PanelBarId,
@@ -43,14 +44,13 @@ import type { FleetActionId, FleetRow } from '../../lib/fleet'
 import { TerminalRegion } from '../RecentSessions'
 import { SessionChat, type SessionChatProps } from './SessionChat'
 import { SessionActions } from './SessionActions'
-import { SessionTitleFlag } from './SessionTitleFlag'
 import { ShellBand } from './ShellBand'
 import {
   BAND_MIN_PX, bandPanelFull, readBandPrefs, resolveBandDrag, resolveBandHeight, withBandPanelFull,
   writeBandPrefs,
 } from '../../lib/shellBand'
 import {
-  BAND_CONTROL_H, BandResizeHandle, PanelBar, PanelFixedControls, useBandDrag,
+  BAND_CONTROL_H, BandResizeHandle, PanelBar, PanelFixedControls, useBandDrag, useBandDropTarget,
   type BandOverflowEntry,
 } from './bandControls'
 
@@ -151,9 +151,6 @@ export interface SessionPanelProps {
   /** The Studio entry's first-open dot — `App.tsx`'s own `studioSeen`, so every surface that can
    *  open the Studio clears the same one flag. */
   studioSeen?: boolean
-  /** A task was just created and linked from the bottom bar's own task control — see
-   *  `SessionTitleFlag`'s own `onLinked`. */
-  onTaskLinked?: () => void
   /**
    * IS THE STUDIO'S BOTTOM BAND IN TRUE FULL SCREEN — the whole viewport, not merely "fills the
    * centre column". Owned by `SessionsPage` (the caller), because it has to hand the SAME flag to
@@ -182,7 +179,7 @@ export interface SessionPanelProps {
 export function SessionPanel({
   session, row, lang, theme, act, authorName, onGone, onOpened, view: viewProp, onViewChange,
   onArtifacts, shellEnabled, shellCapable, onShellEnabledChange, editorEnabled, onOpenTerminal,
-  onOpenShellFullscreen, onStudioBandRef, hardwareOffered, studioSeen = true, onTaskLinked,
+  onOpenShellFullscreen, onStudioBandRef, hardwareOffered, studioSeen = true,
   studioFullscreen, onStudioFullscreenChange,
   bottomTabPane, bottomTabFullscreen, onBottomTabFullscreenChange,
 }: SessionPanelProps) {
@@ -292,19 +289,6 @@ export function SessionPanel({
     // action.kind === 'open'
     openSlotPanel(id)
   }, [bottomOccupant, slotLayout.bottomOpen, openSlotPanel, setBottomOpen])
-
-  const taskControl = (
-    <SessionTitleFlag
-      session={{
-        id: session.id, title: session.title,
-        ...(session.harness ? { harness: session.harness } : {}),
-        ...(session.task ? { task: session.task } : {}),
-      }}
-      lang={lang}
-      size={BAND_CONTROL_H}
-      {...(onTaskLinked ? { onLinked: onTaskLinked } : {})}
-    />
-  )
 
   /**
    * THE CENTRE COLUMN'S OWN HEIGHT, MEASURED (design item 7) — what "full" means for the bottom
@@ -466,7 +450,6 @@ export function SessionPanel({
           onBarDrop={dropSlotPanel}
           onBarMove={id => moveSlotPanel(id, 'rail')}
           studioSeen={studioSeen}
-          taskControl={taskControl}
           fullscreen={studioFullscreen === true}
           onFullscreenChange={onStudioFullscreenChange ?? (() => {})}
           {...(session.harness ? { harness: session.harness } : {})}
@@ -508,7 +491,6 @@ export function SessionPanel({
           // or the very record that should draw the disabled-shell empty state would already read
           // as 'cli' by the time it got here.
           bottomOccupant={slotLayout.bottom === 'cli' || slotLayout.bottom === 'shell' ? slotLayout.bottom : null}
-          taskControl={taskControl}
           // SEEDS this band's own open/collapsed state at mount and stays in sync afterward — the
           // SAME `slotLayout.bottomOpen` / `setBottomOpen` pair `StudioBand`/`SimpleDockedBand`
           // already take as a fully controlled `open`/`onToggleOpen`. See `ShellBand`'s own `open`
@@ -537,7 +519,6 @@ export function SessionPanel({
           onBarDrop={dropSlotPanel}
           onBarMove={id => moveSlotPanel(id, 'rail')}
           studioSeen={studioSeen}
-          taskControl={taskControl}
           fullscreen={bottomTabFullscreen === true}
           onFullscreenChange={onBottomTabFullscreenChange ?? (() => {})}
           {...(session.harness ? { harness: session.harness } : {})}
@@ -560,7 +541,6 @@ export function SessionPanel({
           barEntries={barEntries}
           onBarPick={onPanelBarPick}
           studioSeen={studioSeen}
-          taskControl={taskControl}
           reason="relayed"
         />
       )}
@@ -586,7 +566,7 @@ export function SessionPanel({
  */
 function StudioBand({
   lang, open, columnHeight, onToggleOpen, barEntries, onBarPick, onBarDrop, onBarMove, studioSeen,
-  taskControl, contentRef, fullscreen, onFullscreenChange, harness,
+  contentRef, fullscreen, onFullscreenChange, harness,
 }: {
   lang: 'pt' | 'en'
   open: boolean
@@ -618,7 +598,6 @@ function StudioBand({
   /** The bar's own context-menu move verb (addendum, 2026-09-21) — see `PanelBar`'s own `onMove`. */
   onBarMove?: (id: PanelBarId) => void
   studioSeen: boolean
-  taskControl: ReactNode
   contentRef?: (el: HTMLDivElement | null) => void
   /**
    * THE SESSION'S OWN HARNESS (owner, 2026-09-19: "quando eu to com o studio selecionado fica
@@ -640,10 +619,14 @@ function StudioBand({
   // component reports it through (`rightAsideEdge.ts`) rather than assume it knows nothing about
   // one. `null` when there is no aside on screen — see `fullscreenInsetRight`'s own header.
   const rightAsideEdge = useRightAsideEdge()
+  const leftAsideEdge = useLeftAsideEdge()
   const viewportWidth = useViewportWidth()
   // THE RAIL (spec §2) — full screen must also stop short of IT, even when the aside itself shows
   // nothing (`rightAsideEdge === null`; see `fullscreenInsetRight`'s own header on why that case
-  // needs the width handed back explicitly). Desktop only — a phone has no rail at all.
+  // needs the width handed back explicitly). Desktop only — a phone has no rail at all. LIVE, not
+  // the old fixed `RAIL_WIDTH_PX` — the rail resizes now (owner, 2026-09-21), and this must stop at
+  // whatever width is actually on screen, or a rail dragged to its ceiling reads as covered.
+  const railWidth = useRailWidth()
   const isMobile = useIsMobile()
   // FULL SCREEN IS A PROPERTY OF THE PANEL, NOT OF THE SLOT — `bandPanelFull` reads only THIS
   // panel's ('studio') own entry, so a DIFFERENT panel moved into this same bottom band afterward
@@ -665,6 +648,9 @@ function StudioBand({
     renderedHeight, columnHeight, apply: applyHeight,
     onFullscreen: () => onFullscreenChange(true),
   })
+  // THE WHOLE BAND IS A DROP TARGET NOW, not just its own tab strip — see `useBandDropTarget`'s own
+  // header for the bug this fixes ("rail → bottom" silently doing nothing outside that narrow pill).
+  const bandDrop = useBandDropTarget(onBarDrop)
 
   // COLLAPSING EXITS FULL SCREEN TOO — a band collapsed while fullscreen would otherwise leave the
   // flag standing with nothing on screen it still describes, so the NEXT expand would silently
@@ -673,7 +659,9 @@ function StudioBand({
     if (!open && fullscreen) onFullscreenChange(false)
   }, [open, fullscreen, onFullscreenChange])
   return (
-    <div style={{
+    <div
+      {...bandDrop.handlers}
+      style={{
       // TRUE FULL SCREEN covers the WHOLE VIEWPORT — the sticky header, the fleet aside, everything
       // — not merely the centre column `heightPrefs.full` already fills; `PANEL_FULLSCREEN_Z` sits
       // comfortably below every modal (`ConfirmModal` is 2000) so a "close without saving" dialog
@@ -690,20 +678,31 @@ function StudioBand({
       //
       // FULL SCREEN STOPS SHORT OF THE ARTIFACTS ASIDE (`fullscreenInsetRight`) rather than
       // `inset: 0` — this band is docked at the BOTTOM, so a fixed `right: 0` would paint straight
-      // over whatever the RIGHT slot is independently showing. `top`/`left`/`bottom` stay 0; only
-      // `right` follows the aside's own live edge, reactively, so minimizing it (its existing
-      // control) frees the width without this band leaving and re-entering full screen.
+      // over whatever the RIGHT slot is independently showing. `top`/`bottom` stay 0; `right`
+      // follows the aside's own live edge, reactively, so minimizing it (its existing control)
+      // frees the width without this band leaving and re-entering full screen. `left` follows the
+      // LEFT sessions list's own live width the same way (owner, 2026-09-21: "a esquerda da
+      // listagem de sessoes deveria continuar visivel" — full screen used to reach straight through
+      // it via a bare `left: 0`) — `leftAsideEdge.ts` is the ONE bridge both this and `ShellBand`'s
+      // own docked full screen read, so the two can never disagree about how much room the list
+      // needs. NEVER collapsed on the reader's behalf: if they want the width, collapsing the list
+      // themselves is the same lever the right side already defers to for the artifacts aside.
       ...(fullscreen
         ? {
-          position: 'fixed', top: 0, left: 0, bottom: 0,
-          right: fullscreenInsetRight(rightAsideEdge, viewportWidth, isMobile ? 0 : RAIL_WIDTH_PX),
+          position: 'fixed', top: 0, left: leftAsideEdge, bottom: 0,
+          right: fullscreenInsetRight(rightAsideEdge, viewportWidth, isMobile ? 0 : railWidth),
           zIndex: PANEL_FULLSCREEN_Z,
         }
         : open && heightPrefs.full
           ? { height: renderedHeight, flexShrink: 0 }
           : { flexShrink: 0 }),
       display: 'flex', flexDirection: 'column',
-      borderTop: '1px solid var(--border)', background: 'var(--bg-surface)',
+      borderTop: '1px solid var(--border)',
+      // THE WHOLE BAND IS THE DROP TARGET (owner, 2026-09-21: "quero que eu so precise jogar ate a
+      // barra inferior") — an INSET box-shadow rings the entire band while a drag is over it, never
+      // only the thin top border, so what lights up is exactly what accepts the drop.
+      ...(bandDrop.dropHighlight ? { boxShadow: 'inset 0 0 0 2px var(--anthropic-orange)' } : {}),
+      background: 'var(--bg-surface)',
     }}>
       {/* THE GRIP — ALWAYS THE ROOT'S FIRST CHILD, ABOVE THE TAB ROW (owner report: "o item de
           reposicionamento muda de lugar, deveria estar SEMPRE no topo, na borda superior"). See
@@ -735,7 +734,6 @@ function StudioBand({
           display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', minHeight: 32,
         }}
       >
-        {taskControl}
         {/* THE ONE PANEL BAR (design item 1) — `PanelBar` is the SAME component `ShellBand`'s
             desktop bar renders, given the SAME `barEntries`/`onBarPick` `SessionPanel` computed for
             both, so the two can never draw a different answer for the same session again — Studio
@@ -828,7 +826,7 @@ function StudioBand({
  */
 function SimpleDockedBand({
   panel, panelName, lang, open, columnHeight, onToggleOpen, barEntries, onBarPick,
-  onBarDrop, onBarMove, studioSeen, taskControl, fullscreen, onFullscreenChange, harness, children,
+  onBarDrop, onBarMove, studioSeen, fullscreen, onFullscreenChange, harness, children,
 }: {
   panel: Exclude<PanelId, 'cli' | 'shell' | 'studio'>
   panelName: string
@@ -843,7 +841,6 @@ function SimpleDockedBand({
   /** The bar's own context-menu move verb (addendum, 2026-09-21) — see `PanelBar`'s own `onMove`. */
   onBarMove?: (id: PanelBarId) => void
   studioSeen: boolean
-  taskControl: ReactNode
   fullscreen: boolean
   onFullscreenChange: (next: boolean) => void
   harness?: string
@@ -854,7 +851,9 @@ function SimpleDockedBand({
   const compact = bandBarCompact(barWidth)
   // Same reason `StudioBand` reads these — see that component's own header on `fullscreenInsetRight`.
   const rightAsideEdge = useRightAsideEdge()
+  const leftAsideEdge = useLeftAsideEdge()
   const viewportWidth = useViewportWidth()
+  const railWidth = useRailWidth()
   const isMobile = useIsMobile()
   // THE SAME persisted height record `StudioBand`/`ShellBand` already share (`shellBand.ts`'s
   // `agentistics-shell-band` key) — one memory for "drag near the top to fill the column", however
@@ -884,21 +883,28 @@ function SimpleDockedBand({
   // its only-ever gear row was move — now the tab's OWN right-click menu (`onBarMove`, wired at the
   // call site). A panel this generic band hosts has nothing else to say in a gear.
   const gearEntries: readonly BandOverflowEntry[] = []
+  // THE WHOLE BAND IS A DROP TARGET NOW, not just its own tab strip — see `useBandDropTarget`'s own
+  // header for the bug this fixes.
+  const bandDrop = useBandDropTarget(onBarDrop)
   return (
-    <div style={{
-      // FULL SCREEN STOPS SHORT OF THE ARTIFACTS ASIDE — see `StudioBand`'s own comment on
-      // `fullscreenInsetRight`; the same reasoning applies here unchanged.
+    <div
+      {...bandDrop.handlers}
+      style={{
+      // FULL SCREEN STOPS SHORT OF THE ARTIFACTS ASIDE AND THE LEFT SESSIONS LIST — see `StudioBand`'s
+      // own comment on `fullscreenInsetRight`/`leftAsideEdge`; the same reasoning applies unchanged.
       ...(fullscreen
         ? {
-          position: 'fixed', top: 0, left: 0, bottom: 0,
-          right: fullscreenInsetRight(rightAsideEdge, viewportWidth, isMobile ? 0 : RAIL_WIDTH_PX),
+          position: 'fixed', top: 0, left: leftAsideEdge, bottom: 0,
+          right: fullscreenInsetRight(rightAsideEdge, viewportWidth, isMobile ? 0 : railWidth),
           zIndex: PANEL_FULLSCREEN_Z,
         }
         : open && heightPrefs.full
           ? { height: renderedHeight, flexShrink: 0 }
           : { flexShrink: 0 }),
       display: 'flex', flexDirection: 'column',
-      borderTop: '1px solid var(--border)', background: 'var(--bg-surface)',
+      borderTop: '1px solid var(--border)',
+      ...(bandDrop.dropHighlight ? { boxShadow: 'inset 0 0 0 2px var(--anthropic-orange)' } : {}),
+      background: 'var(--bg-surface)',
     }}>
       {/* THE GRIP — ALWAYS THE ROOT'S FIRST CHILD, ABOVE THE TAB ROW — see `StudioBand`'s own
           identical comment, and `BandResizeHandle`'s header in `bandControls.tsx`, for why this used
@@ -913,7 +919,6 @@ function SimpleDockedBand({
           display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', minHeight: 32,
         }}
       >
-        {taskControl}
         <PanelBar
           entries={barEntries} lang={lang} studioSeen={studioSeen} onPick={onBarPick} compact={compact}
           {...(harness ? { harness } : {})}
@@ -968,7 +973,7 @@ function SimpleDockedBand({
  * explanation.
  */
 function PanelBarBand({
-  lang, open, onToggleOpen, barEntries, onBarPick, studioSeen, taskControl, reason,
+  lang, open, onToggleOpen, barEntries, onBarPick, studioSeen, reason,
 }: {
   lang: 'pt' | 'en'
   open: boolean
@@ -976,7 +981,6 @@ function PanelBarBand({
   barEntries: readonly PanelBarEntry[]
   onBarPick: (id: PanelBarId) => void
   studioSeen: boolean
-  taskControl: ReactNode
   reason: 'relayed'
 }) {
   const pt = lang === 'pt'
@@ -988,6 +992,16 @@ function PanelBarBand({
   }
   const [barWidthRef, barWidth] = useElementWidth()
   const compact = bandBarCompact(barWidth)
+  // AN EMPTY BAND RENDERS NOTHING (owner, 2026-09-21: "quando removo todos os itens ele
+  // simplesmente deixa essa porra desse iconezinho feio ai") — with the fixed task control gone
+  // (see below) and every dockable panel moved to the rail, this band's own row held nothing but a
+  // lone collapse/expand chevron: a control whose only destination is a sentence explaining that
+  // there is nothing here. `ShellBand` never reaches this — a LOCAL session's own CLI/Shell toggle
+  // is the documented FLOOR this band deliberately is not (`bottomBandFor`'s own header), so this
+  // is the one case in the whole panel system where "nothing placed here" really does mean nothing
+  // to show. Getting a panel back is still one right-click away on the rail — see that context
+  // menu's own "Mover para baixo"/"Move to the bottom" verb.
+  if (barEntries.length === 0) return null
   return (
     <div style={{
       flexShrink: 0, display: 'flex', flexDirection: 'column',
@@ -1006,7 +1020,6 @@ function PanelBarBand({
           cursor: 'pointer', userSelect: 'none',
         }}
       >
-        {taskControl}
         <PanelBar entries={barEntries} lang={lang} studioSeen={studioSeen} onPick={onBarPick} compact={compact} />
         <span style={{ flex: 1 }} />
         {/* NO OVERFLOW MENU HERE — this band belongs to no panel of its own (a relayed session has

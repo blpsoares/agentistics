@@ -161,6 +161,15 @@ export const NOTIFICATION_TEXT: Record<string, { pt: Localized; en: Localized }>
     pt: { title: 'Atualização disponível', message: 'Uma nova versão do agentistics ({version}) está disponível.' },
     en: { title: 'Update available', message: 'A new version of agentistics ({version}) is available.' },
   },
+  // The rail's own Hardware icon turning red (right-icon-rail spec, addendum item 6) — client-
+  // originated, from `useHardwarePressureWatch`, on the crossing into critical only (never once per
+  // poll). `{detail}` is `hardwarePressure.ts`'s own `pressureRecommendation`, already localized and
+  // already naming the specific resource and figure ("RAM at 92%") — never a generic "machine is
+  // under pressure" a reader cannot act on.
+  'hardware.pressure': {
+    pt: { title: 'Hardware sob pressão', message: '{detail}.' },
+    en: { title: 'Hardware under pressure', message: '{detail}.' },
+  },
 }
 
 /** Resolve a notification to display strings in the CURRENT language. Localizes by

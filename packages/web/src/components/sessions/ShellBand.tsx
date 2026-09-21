@@ -76,7 +76,7 @@ import { bandBarCompact, type PanelBarEntry, type PanelBarId } from '../../lib/p
 import { panelMenuEntries } from '../../lib/panelMenu'
 import {
   BAND_CONTROL_H, BandResizeHandle, BandSegment, BandSegmentTab, PanelBar, PanelFixedControls,
-  panelMenuIconFor, useBandDrag, type BandOverflowEntry,
+  panelMenuIconFor, useBandDrag, useBandDropTarget, type BandOverflowEntry,
 } from './bandControls'
 
 const SessionTerminal = lazy(() => import('../SessionTerminal'))
@@ -309,15 +309,6 @@ export interface ShellBandProps {
    */
   onShellEnabledChange?: () => void | Promise<void>
   /**
-   * THE TASK CONTROL (design item 3) — `SessionTitleFlag`, rendered at the bar's LEFT end, the same
-   * element `StudioBand` and the no-terminal fallback band render. Built once by `SessionPanel` (it
-   * owns the session's id/title/harness/task) and handed down as a node rather than reimplemented
-   * three times — the exact reason `SessionTitleFlag` itself exists. `docked`/desktop only: mobile
-   * keeps it in the page's own header (design item 4), and `aside`/`dedicated` show one stream with
-   * no room for a second control.
-   */
-  taskControl?: ReactNode
-  /**
    * THE CENTRE COLUMN'S OWN MEASURED HEIGHT (design item 7) — what "full" resolves against, and
    * the ceiling `resolveBandHeight` reads. `docked` only: `dedicated`/`aside` already fill the
    * whole box they are given and have no drag handle to snap. Absent or `0` reads as "not measured
@@ -352,7 +343,7 @@ export interface ShellBandProps {
 export function ShellBand({
   sessionId, cwd, lang, theme, harness, placement = 'docked', onOpenFullscreen,
   barEntries, onBarPick, onBarDrop, onBarMove, studioSeen = true, bottomOccupant = null, shellEnabled = true,
-  shellCapable = true, onShellEnabledChange, taskControl,
+  shellCapable = true, onShellEnabledChange,
   columnHeight = 0, open: openSeed, onOpenChange,
 }: ShellBandProps) {
   const t = TXT[lang]
@@ -750,6 +741,9 @@ export function ShellBand({
     apply: next => setBand({ height: next.height, full: next.full }),
     ...(onOpenFullscreen ? { onFullscreen: () => onOpenFullscreen(target) } : {}),
   })
+  // THE WHOLE BAND IS A DROP TARGET NOW, not just its own tab strip — see `useBandDropTarget`'s own
+  // header for the bug this fixes.
+  const bandDrop = useBandDropTarget(onBarDrop)
 
   /**
    * THE ONE CONTROL THAT PICKS A TERMINAL. It replaced the header's `Conversa | Terminal` toggle —
@@ -1205,7 +1199,9 @@ export function ShellBand({
 
   // ---- desktop: the last band of the panel, under the composer ---------------------------------
   return (
-    <div style={{
+    <div
+      {...bandDrop.handlers}
+      style={{
       // FULL (design item 7) is an EXPLICIT PIXEL HEIGHT, never `flex: '1 1 auto'` — see
       // `resolveBandDrag`'s own header in `shellBand.ts` for the bug that shape was: two
       // `flex-grow: 1` siblings (this root and the conversation's own `flex: 1` above it) split the
@@ -1217,7 +1213,9 @@ export function ShellBand({
       // row alone.
       ...(prefs.open && bandPanelFull(prefs, target) ? { height: renderedHeight, flexShrink: 0 } : { flexShrink: 0 }),
       display: 'flex', flexDirection: 'column',
-      borderTop: '1px solid var(--border)', background: 'var(--bg-surface)',
+      borderTop: '1px solid var(--border)',
+      ...(bandDrop.dropHighlight ? { boxShadow: 'inset 0 0 0 2px var(--anthropic-orange)' } : {}),
+      background: 'var(--bg-surface)',
     }}>
       {/* THE GRIP — ALWAYS THE ROOT'S FIRST CHILD, ABOVE THE TAB ROW — the VS Code geometry, where
           the panel is always the bottom-most strip, and the ONE POSITION `StudioBand`/
@@ -1226,19 +1224,23 @@ export function ShellBand({
           `role="separator"` and takes the arrow keys, so the band is resizable without a pointer;
           `ResizeGrip` (design item 6) marks it. */}
       {prefs.open && <BandResizeHandle label={t.resize} {...grip} />}
-      {/* THE COMPACT BAR (design item 7): task control · panel segment (icon+label, collapsing to
-          icons below ~1100px) · spacer · the FIXED trio (full screen, minimize, gear). Everything
-          that used to widen this row on its own — the leading terminal icon, the uppercase target
-          name, the `where` path, and Move/Full screen/End shell as their own labelled buttons — is
-          gone or moved into the fixed controls: the target name and the `where` path are redundant
-          with the segment's own lit tab (which already names Claude Code/Shell), and the actions
-          the gear still carries keep their labels inside it instead of spending width on the row.
+      {/* THE COMPACT BAR (design item 7): panel segment (icon+label, collapsing to icons below
+          ~1100px) · spacer · the FIXED trio (full screen, minimize, gear). Everything that used to
+          widen this row on its own — the leading terminal icon, the uppercase target name, the
+          `where` path, and Move/Full screen/End shell as their own labelled buttons — is gone or
+          moved into the fixed controls: the target name and the `where` path are redundant with the
+          segment's own lit tab (which already names Claude Code/Shell), and the actions the gear
+          still carries keep their labels inside it instead of spending width on the row. THE FIXED
+          TASK CONTROL THAT USED TO LEAD THIS ROW IS GONE (owner, 2026-09-21: "pode remover o icone
+          fixo de tarefas tbm... pq agora temos na barra da direita") — `tasks` is a rail-capable
+          panel now, so a second, always-on shortcut to it was the one control left standing once a
+          reader emptied this band by moving everything to the rail.
 
           THE BAR NO LONGER TOGGLES ON ITS OWN CLICK (owner, 2026-09-19: "remove o clique na barra
           pra minimizar e reabrir... vamos manter no botão"). It used to be `role="button"` over the
           whole strip — a wide, easy target, but also a click a reader could land on by accident
-          while reaching for the segment or the task control beside it. The dedicated chevron inside
-          `PanelFixedControls` is now the ONLY way to collapse or reopen this band. */}
+          while reaching for the segment. The dedicated chevron inside `PanelFixedControls` is now
+          the ONLY way to collapse or reopen this band. */}
       <div
         ref={barWidthRef}
         {...(where ? { title: where } : {})}
@@ -1246,7 +1248,6 @@ export function ShellBand({
           display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', minHeight: 32,
         }}
       >
-        {taskControl}
         {panelBar}
         {busy && <Loader2 size={13} className="ag-spin" style={{ color: 'var(--text-tertiary)' }} />}
         <span style={{ flex: 1 }} />

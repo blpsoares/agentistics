@@ -1,13 +1,15 @@
 /**
  * SessionTitleFlag — the OPEN session's own delivery control.
  *
- * It used to sit beside the title in the fixed header; the owner's drawing (design item 3) moves it
- * DOWN into the bottom bar's left end instead, alongside the panel switcher — the top bar is left
- * with only the title and its state. Three places still draw it: the bottom bar (`SessionPanel.tsx`,
- * desktop), and the mobile panel header and mobile dedicated-terminal header (both in
- * `SessionsPage.tsx`) — carried over unchanged, since a phone has no bottom band to move it into
- * (design item 4). One gesture implemented three times is the bug `task-reopen.ts` exists to have
- * fixed once, so it lives here instead and every caller imports it.
+ * It used to sit beside the title in the fixed header, then moved DOWN into the bottom bar's own
+ * left end (design item 3). The desktop bottom-bar instance is GONE now (owner, 2026-09-21: "pode
+ * remover o icone fixo de tarefas tbm... pq agora temos na barra da direita") — `tasks` is a rail-
+ * capable panel like any other, so this always-on shortcut became the one control left standing
+ * once a reader emptied the bottom band by moving everything to the rail. TWO places still draw it:
+ * the mobile panel header and the mobile dedicated-terminal header (both in `SessionsPage.tsx`) —
+ * carried over unchanged, since a phone has no bottom band and no rail either (design item 4). One
+ * gesture implemented twice is still the bug `task-reopen.ts` exists to have fixed once, so it lives
+ * here instead and every caller imports it.
  *
  * The icon is a clipboard (lucide `ClipboardList`), not a flag — the owner's own word for what this
  * is ("a entrega") reads more naturally as a clipboard than a flag once it is not standing beside a

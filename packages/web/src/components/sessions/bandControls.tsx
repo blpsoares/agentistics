@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  ArrowDown, ArrowRight, Maximize2, Minimize2, Minus, MoreHorizontal, Settings, X,
+  ArrowDown, ArrowRight, EyeOff, Maximize2, Minimize2, Minus, MoreHorizontal, Settings, X,
 } from 'lucide-react'
 import type { PanelBarEntry, PanelBarId } from '../../lib/panelBar'
 import { readDragPayload, setDragPayload } from '../../lib/dragReorder'
@@ -290,8 +290,57 @@ export function BandSegment({ label, isMobile, children, onDragOver, onDrop, dro
  * rail panels. Every id/label/icon comes from the shared `panelMeta.ts`/`panelIcons.tsx` tables now,
  * rather than a fifth copy of the same five (now fourteen) entries.
  */
+/**
+ * useBandDropTarget — THE WHOLE BOTTOM BAND, made a drop target (fixing "nao ta dando pra arrastar
+ * da barra da direita ate a barra inferior, so da barra inferior pra barra da direita").
+ *
+ * THE ACTUAL BUG, found by reproducing the owner's own gesture (press the rail icon, drag across
+ * the screen, release over the band) rather than by a precise element-to-element test: only
+ * `PanelBar`'s own `<BandSegment>` — the small pill-shaped tab strip inside each band's header row
+ * — was ever wired as a drop target (`onDrop`, gated on `dropHere`, in `PanelBar` above). Everything
+ * ELSE the band visibly covers — the terminal stream, the Studio's file tree, the resize grip, the
+ * empty space around the pill — had no drag handling AT ALL, so a drop landing anywhere but that
+ * one small strip was silently ignored. `bottom → rail` never had this problem because the RAIL's
+ * own drop target is its ENTIRE column (`PanelRail.tsx`'s outer `role="tablist"` div plus every
+ * icon inside it) — there is no narrow pill to miss there. Verified live: dropping precisely onto
+ * the bottom band's own tab strip already worked before this fix; dropping onto the Studio's file
+ * tree three rows below it, which is what "the bottom band" looks like to someone not aiming at a
+ * specific pixel, did nothing at all.
+ *
+ * `StudioBand`, `SimpleDockedBand` and `ShellBand`'s docked branch each spread this onto their own
+ * OUTERMOST element — the same root box whose height they are already measuring for the resize
+ * handle — so a drop anywhere within the band's visible bounds resolves as "dropped on this bar"
+ * (`{ placement: 'bottom' }`), the same target a drop on the tab strip's own empty space already
+ * produced. `onDrop` is OPTIONAL, same convention as `PanelBar`'s: a caller that never wires it
+ * renders a band with no drop handling, exactly as before.
+ */
+export function useBandDropTarget(onDrop?: (dragPanel: PanelBarId, target: PanelDropTarget) => void): {
+  dropHighlight: boolean
+  handlers: {
+    onDragOver?: (e: React.DragEvent) => void
+    onDragLeave?: (e: React.DragEvent) => void
+    onDrop?: (e: React.DragEvent) => void
+  }
+} {
+  const [over, setOver] = useState(false)
+  if (!onDrop) return { dropHighlight: false, handlers: {} }
+  return {
+    dropHighlight: over,
+    handlers: {
+      onDragOver: e => { e.preventDefault(); setOver(true) },
+      onDragLeave: e => { if (e.currentTarget === e.target) setOver(false) },
+      onDrop: e => {
+        e.preventDefault()
+        setOver(false)
+        const key = readDragPayload(e)
+        if (key) onDrop(key as PanelBarId, { placement: 'bottom' })
+      },
+    },
+  }
+}
+
 export function PanelBar({
-  entries, lang, studioSeen, harness, onPick, compact = false, onDrop, onMove,
+  entries, lang, studioSeen, harness, onPick, compact = false, onDrop, onMove, onHide,
 }: {
   entries: readonly PanelBarEntry[]
   lang: 'pt' | 'en'
@@ -317,6 +366,9 @@ export function PanelBar({
    * that never wires it renders tabs with no context menu at all.
    */
   onMove?: (id: PanelBarId) => void
+  /** The right-click menu's own "Ocultar" verb (spec §5). OPTIONAL, same reasoning as `onMove` —
+   *  a caller that never wires it simply never offers it. */
+  onHide?: (id: PanelBarId) => void
 }) {
   const pt = lang === 'pt'
   const [dragOver, setDragOver] = useState<PanelBarId | 'bar' | null>(null)
@@ -373,7 +425,7 @@ export function PanelBar({
             icon={iconFor(id)}
             label={hideLabel ? <span style={VISUALLY_HIDDEN}>{label}</span> : <span>{label}</span>}
             title={label}
-            {...(onMove ? {
+            {...(onMove || onHide ? {
               onContextMenu: (e: React.MouseEvent<HTMLButtonElement>) => {
                 e.preventDefault()
                 setMenu({ id, at: { x: e.currentTarget.getBoundingClientRect().left, y: e.currentTarget.getBoundingClientRect().bottom + 4 } })
@@ -392,12 +444,17 @@ export function PanelBar({
           />
         )
       })}
-      {menu && onMove && (
+      {menu && (onMove || onHide) && (
         <PanelContextMenu
           at={menu.at}
           entries={(() => {
-            const move = panelMoveEntry({ panel: menu.id, placement: 'bottom', lang, panelName: labelFor(menu.id) })
-            return move ? [{ id: move.id, label: move.label, icon: <ArrowRight size={14} />, onSelect: () => onMove(menu.id) }] : []
+            const move = onMove
+              ? panelMoveEntry({ panel: menu.id, placement: 'bottom', lang, panelName: labelFor(menu.id) })
+              : null
+            return [
+              ...(move ? [{ id: move.id, label: move.label, icon: <ArrowRight size={14} />, onSelect: () => onMove!(menu.id) }] : []),
+              ...(onHide ? [{ id: 'hide', label: pt ? 'Ocultar' : 'Hide', icon: <EyeOff size={14} />, onSelect: () => onHide(menu.id) }] : []),
+            ]
           })()}
           onClose={() => setMenu(null)}
         />
@@ -779,6 +836,111 @@ export function PanelContextMenu({ at, entries, onClose }: {
             fontFamily: 'inherit', fontSize: 12, color: 'var(--text-primary)', textAlign: 'left',
           }}
         >{entry.icon}{entry.label}</button>
+      ))}
+    </div>,
+    document.body,
+  )
+}
+
+// ---------------------------------------------------------------------------------------------
+// PanelTileDropdown — the rail's overflow "more" list (§4) and the config area's eye list (§5)
+// ---------------------------------------------------------------------------------------------
+
+export interface PanelTile {
+  id: string
+  icon: ReactNode
+  title: string
+  /** The panel's own one-line description (`panelDescription`) — same copy the rail's tooltip
+   *  shows, so a reader who has hovered an icon before recognizes the sentence here too. */
+  description: string
+  /** The verb button's own label, e.g. "Restaurar" for the eye's list — omitted for the overflow
+   *  list, where the whole tile IS the pick (spec §4: "An item picked there opens as usual"). */
+  verbLabel?: string
+}
+
+/**
+ * PanelTileDropdown — ONE shared component behind two different questions (design §4's "more"
+ * button and §5's eye), because both ask "here is a short list of panels the rail currently has no
+ * room/reason to show as an icon — pick one." Tiles read exactly like the mobile "More" sheet's own
+ * (`App.tsx`'s `allTiles.map`): a square, an icon, a title, ONE extra line — here the panel's own
+ * description instead of that sheet's badge, since these tiles answer "what is this panel" rather
+ * than "how many of something does it hold."
+ *
+ * Closes on pick, on `Esc`, and on a click outside — spec §4's own three rules, shared by §5's list
+ * since nothing about "why" the list is showing changes how it should close.
+ *
+ * Anchored to the TRIGGER's own rect (`at`), never the click point — same reasoning as
+ * `PanelContextMenu`'s own header: a keyboard-opened dropdown has no meaningful click point, and the
+ * rail's `overflow: hidden` would clip this in place exactly as it clipped the tooltip before that
+ * bug was fixed, so this is portaled the same way.
+ */
+export function PanelTileDropdown({ at, tiles, onPick, onClose, label }: {
+  at: { x: number; y: number } | null
+  tiles: readonly PanelTile[]
+  onPick: (id: string) => void
+  onClose: () => void
+  /** The dropdown's own accessible name — "N ocultos" / "N mais" — read by a screen reader on open. */
+  label: string
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!at) return
+    const away = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onClose() }
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('mousedown', away)
+    document.addEventListener('keydown', key)
+    return () => {
+      document.removeEventListener('mousedown', away)
+      document.removeEventListener('keydown', key)
+    }
+  }, [at, onClose])
+  useEffect(() => {
+    if (at) ref.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus()
+  }, [at])
+  if (!at || tiles.length === 0) return null
+  const cols = Math.min(2, tiles.length)
+  const tileW = 132
+  const width = cols * tileW + (cols - 1) * 6 + 16
+  const rows = Math.ceil(tiles.length / cols)
+  const rowH = 92
+  const height = Math.min(rows, 3) * rowH + (Math.min(rows, 3) - 1) * 6 + 16
+  const left = Math.min(at.x, window.innerWidth - width - 8)
+  const top = Math.min(at.y, window.innerHeight - height - 8)
+  return createPortal(
+    <div
+      ref={ref} role="menu" aria-label={label}
+      style={{
+        position: 'fixed', left, top, width, maxHeight: height, zIndex: 1300,
+        borderRadius: 12, border: '1px solid var(--border-subtle)',
+        background: 'var(--bg-elevated)', boxShadow: 'var(--ag-shadow-menu)',
+        padding: 8, display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 6,
+        overflowY: 'auto',
+      }}
+    >
+      {tiles.map(tile => (
+        <button
+          key={tile.id} type="button" role="menuitem"
+          onClick={e => { e.stopPropagation(); onPick(tile.id); onClose() }}
+          title={`${tile.title} — ${tile.description}`}
+          style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center',
+            gap: 4, padding: '10px 8px', borderRadius: 8, minHeight: rowH,
+            border: '1px solid var(--border-subtle)', background: 'var(--bg-surface)',
+            color: 'var(--text-primary)', cursor: 'pointer', fontFamily: 'inherit',
+          }}
+        >
+          {tile.icon}
+          <span style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.2 }}>{tile.title}</span>
+          <span style={{
+            fontSize: 9.5, color: 'var(--text-tertiary)', lineHeight: 1.3,
+            display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+          }}>{tile.description}</span>
+          {tile.verbLabel && (
+            <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--anthropic-orange)', marginTop: 2 }}>
+              {tile.verbLabel}
+            </span>
+          )}
+        </button>
       ))}
     </div>,
     document.body,

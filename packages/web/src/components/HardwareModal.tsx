@@ -44,6 +44,9 @@ import {
   type ServiceHosting,
   type ServiceRunState,
 } from '../lib/hardwareNotice'
+import {
+  DISK_CRITICAL_PCT, DISK_WARN_PCT, RAM_CRITICAL_PCT, RAM_WARN_PCT,
+} from '../lib/hardwarePressure'
 
 interface DiskUsage {
   mountPath: string
@@ -350,7 +353,8 @@ export function HardwareBody(p: {
                     style={{
                       height: '100%',
                       width: `${Math.min(100, Math.max(0, ramUsedPct ?? 0))}%`,
-                      background: (ramUsedPct ?? 0) > 85 ? '#ef4444' : (ramUsedPct ?? 0) > 70 ? '#f59e0b' : 'var(--anthropic-orange)',
+                      background: (ramUsedPct ?? 0) > RAM_CRITICAL_PCT ? '#ef4444'
+                        : (ramUsedPct ?? 0) > RAM_WARN_PCT ? '#f59e0b' : 'var(--anthropic-orange)',
                       transition: 'width 0.3s ease',
                     }}
                   />
@@ -381,7 +385,8 @@ export function HardwareBody(p: {
                     style={{
                       height: '100%',
                       width: `${Math.min(100, Math.max(0, diskUsedPct ?? 0))}%`,
-                      background: (diskUsedPct ?? 0) > 90 ? '#ef4444' : (diskUsedPct ?? 0) > 75 ? '#f59e0b' : '#3b82f6',
+                      background: (diskUsedPct ?? 0) > DISK_CRITICAL_PCT ? '#ef4444'
+                        : (diskUsedPct ?? 0) > DISK_WARN_PCT ? '#f59e0b' : '#3b82f6',
                       transition: 'width 0.3s ease',
                     }}
                   />
