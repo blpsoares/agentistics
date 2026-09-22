@@ -59,6 +59,19 @@
  * CLOSING (or DISPLACING) THE STUDIO ASKS FIRST when it holds unsaved buffers — the same question
  * `artifactsStore.closeArtifacts` already asks, through the same `unsavedBuffers.ts`. A MOVE never
  * asks: nothing is dropped by changing which slot shows a panel that stays mounted throughout.
+ *
+ * PIN (narrow-overlay pass, 2026-09-22, `sdd/scratch/right-rail-spec.md` §11). Below `SPLIT_MIN_
+ * WIDTH` a right-slot panel opens OVERLAID rather than split, and an unpinned one minimizes the
+ * moment the reader clicks outside it or switches to another panel — a temporary surface by
+ * design. `pinned: Record<PanelId, boolean>` is the per-panel escape from that: while pinned, a
+ * click outside (or Esc) leaves the panel exactly where it is. It is a RAIL-ONLY fact — the bottom
+ * band's own minimize/collapse behaviour is untouched by this field, and nothing here is ever read
+ * for a bottom-placed panel. PIN BELONGS TO THE PANEL WHILE IT LIVES ON THE RAIL, NOT A PROPERTY
+ * THAT TRAVELS: `setPlacement` clears it the moment a panel LEAVES the rail (moved to the bottom,
+ * or hidden), and moving it back does not restore the flag — the owner's own words, "uma barra
+ * pinada que foi movida pra baixo reseta o estado dela, inclusive se o usuario voltar ela pra
+ * direita ela n esta mais pinned." Absent (an older stored value) reads as NOT pinned, same
+ * convention as every other field this store persists.
  */
 
 import { reorderByDrag } from './dragReorder'
@@ -120,6 +133,13 @@ function defaultOrder(): Record<PanelId, number> {
   return out
 }
 
+/** Nothing is pinned on a fresh layout — see this module's own header on PIN. */
+function defaultPinned(): Record<PanelId, boolean> {
+  const out = {} as Record<PanelId, boolean>
+  for (const id of PANEL_IDS) out[id] = false
+  return out
+}
+
 /** Where a HIDDEN panel restores to — meaningless for a panel that is not hidden (its own
  *  `placement` already answers "rail" or "bottom" for it), so this always mirrors `DEFAULT_PLACEMENT`
  *  for a fresh layout and is updated only by `setPlacement`'s own hide branch. */
@@ -136,6 +156,9 @@ export interface SlotLayout {
   order: Record<PanelId, number>
   /** See this module's own header — where a hidden panel goes back to. */
   restoreTo: Record<PanelId, OpenPlacement>
+  /** See this module's own header on PIN (narrow-overlay pass, 2026-09-22) — RAIL-only, cleared the
+   *  moment a panel leaves the rail. */
+  pinned: Record<PanelId, boolean>
   /** Which panel the content area (left of the rail) is currently showing. `null` = nothing open. */
   right: PanelId | null
   /** Which panel the bottom band is currently showing as its active tab. `null` = nothing open. */
@@ -158,6 +181,7 @@ export const EMPTY_SLOT_LAYOUT: SlotLayout = {
   placement: { ...DEFAULT_PLACEMENT },
   order: defaultOrder(),
   restoreTo: defaultRestoreTo(),
+  pinned: defaultPinned(),
   right: null, bottom: null, bottomOpen: false, rightOpen: true,
   railWidth: RAIL_WIDTH_FLOOR_PX,
 }
@@ -280,6 +304,10 @@ export function setRightOpen(layout: SlotLayout, open: boolean): SlotLayout {
  * `restoreTo` is refreshed to the new placement regardless (inside `setPlacement`), so a LATER
  * hide-then-restore puts it back where this move actually left it, not where it was before —
  * unaffected by whether the move itself opened anything.
+ *
+ * `pinned` is CLEARED, also inside `setPlacement`, whenever this move takes the panel OFF the rail
+ * — never restored by a later move back onto it (spec §11 item 5). See this module's own header on
+ * PIN.
  */
 export function movePanel(layout: SlotLayout, panel: PanelId, to: OpenPlacement): SlotLayout {
   const placed = setPlacement(layout, panel, to)
@@ -313,11 +341,19 @@ export function setPlacement(layout: SlotLayout, panel: PanelId, to: Placement):
     : layout.placement[panel] !== 'hidden'
       ? { ...layout.restoreTo, [panel]: layout.placement[panel] as OpenPlacement }
       : layout.restoreTo
+  // PIN IS CLEARED THE MOMENT A PANEL LEAVES THE RAIL — see this module's own header on PIN. Only a
+  // panel that WAS on the rail can have anything to clear; `layout.pinned[panel]` is spread through
+  // untouched otherwise, so a panel that was never on the rail (or is moving BETWEEN rail and rail,
+  // impossible here since `to === layout.placement[panel]` already returned above) is unaffected.
+  const pinned = layout.placement[panel] === 'rail' && to !== 'rail'
+    ? { ...layout.pinned, [panel]: false }
+    : layout.pinned
   const withPlacement: SlotLayout = {
     ...layout,
     placement: { ...layout.placement, [panel]: to },
     order: { ...layout.order, [panel]: nextOrder },
     restoreTo,
+    pinned,
   }
   // A panel hidden while it was the active occupant of a slot has nothing left to occupy — there is
   // no icon or tab a reader could use to bring its content back into view.
@@ -337,6 +373,48 @@ export function hidePanelPlacement(layout: SlotLayout, panel: PanelId): SlotLayo
 export function restorePanelPlacement(layout: SlotLayout, panel: PanelId): SlotLayout {
   if (layout.placement[panel] !== 'hidden') return layout
   return setPlacement(layout, panel, layout.restoreTo[panel])
+}
+
+/** Is this panel pinned right now? See this module's own header on PIN. */
+export function isPanelPinned(layout: SlotLayout, panel: PanelId): boolean {
+  return layout.pinned[panel] === true
+}
+
+/**
+ * Set a panel's pinned flag directly — a no-op (same reference) when it already reads that way.
+ * Never gated on placement here: the CONTROL that offers this is only ever drawn for a right-slot
+ * (rail) panel (spec §11 item 4, "the rail only"), so a bottom-placed panel simply never has this
+ * called for it in practice, and `setPlacement` is what clears the flag the instant a pinned panel
+ * DOES leave the rail — see that function's own PIN paragraph.
+ */
+export function setPanelPinned(layout: SlotLayout, panel: PanelId, pinned: boolean): SlotLayout {
+  if (layout.pinned[panel] === pinned) return layout
+  return { ...layout, pinned: { ...layout.pinned, [panel]: pinned } }
+}
+
+/** The pin toggle's own verb — flips whatever the panel's current pinned state is. */
+export function togglePanelPinned(layout: SlotLayout, panel: PanelId): SlotLayout {
+  return setPanelPinned(layout, panel, !isPanelPinned(layout, panel))
+}
+
+/**
+ * WHAT A CLICK OUTSIDE THE NARROW-WIDTH OVERLAY (OR AN `Esc` PRESS) DOES (spec §11 items 2-3) — the
+ * one decision behind both gestures, since the spec states them as the same rule ("Esc deveria fazer
+ * o mesmo"). `pinned` wins outright: a pinned panel is never minimized by either gesture. Otherwise
+ * a click that lands INSIDE the overlay's own box, or anywhere on the RAIL (including its config
+ * area and its own context/overflow menus — switching panels, or working the rail's other verbs, is
+ * not "clicking away"), does nothing either; everything else minimizes.
+ *
+ * PURE: the DOM question ("was this click inside the overlay, inside the rail") is answered by the
+ * caller (`SessionsPage.tsx`, via `contains`/`closest`) and handed in as two booleans, which is what
+ * lets this decision be unit-tested without a DOM.
+ */
+export function overlayOutsideAction(
+  { pinned, insideOverlay, insideRail }: { pinned: boolean; insideOverlay: boolean; insideRail: boolean },
+): 'minimize' | 'none' {
+  if (pinned) return 'none'
+  if (insideOverlay || insideRail) return 'none'
+  return 'minimize'
 }
 
 /**
@@ -537,6 +615,26 @@ function readRestoreTo(v: unknown, placement: Record<PanelId, Placement>): Recor
   return out
 }
 
+/** PIN reads FALSE for anything not an explicit `true`, and — same defensive correction
+ *  `readRestoreTo` applies to its own field — is forced false for a panel that is not CURRENTLY on
+ *  the rail: a stored `pinned: true` beside `placement: 'bottom'` is a value no writer in this
+ *  module ever produces (`setPlacement` clears it in the same write that moves a panel off the
+ *  rail), so a hand-edited or corrupt file must not resurrect a pin the panel's own placement
+ *  disagrees with. */
+function readPinned(v: unknown, placement: Record<PanelId, Placement>): Record<PanelId, boolean> {
+  const out = defaultPinned()
+  if (typeof v === 'object' && v !== null) {
+    const r = v as Record<string, unknown>
+    for (const id of PANEL_IDS) {
+      if (r[id] === true) out[id] = true
+    }
+  }
+  for (const id of PANEL_IDS) {
+    if (placement[id] !== 'rail') out[id] = false
+  }
+  return out
+}
+
 function readOccupant(v: unknown, placement: Record<PanelId, Placement>, want: OpenPlacement): PanelId | null {
   if (!isPanelId(v)) return null
   return placement[v] === want ? v : null
@@ -571,7 +669,11 @@ function migrateLegacy(r: Record<string, unknown>): SlotLayout {
   for (const id of PANEL_IDS) restoreTo[id] = placement[id] === 'bottom' ? 'bottom' : 'rail'
   const bottomOpen = bottom !== null && r.bottomOpen === true
   const rightOpen = r.rightOpen !== false
-  return { placement, order, restoreTo, right, bottom, bottomOpen, rightOpen, railWidth: RAIL_WIDTH_FLOOR_PX }
+  // A legacy value predates PIN entirely — nothing was ever pinned under the old model.
+  return {
+    placement, order, restoreTo, pinned: defaultPinned(), right, bottom, bottomOpen, rightOpen,
+    railWidth: RAIL_WIDTH_FLOOR_PX,
+  }
 }
 
 /** Read the persisted layout. Exported so the storage guard is directly testable with an injected
@@ -592,8 +694,9 @@ export function readLayout(storage?: Storage): SlotLayout {
     const placement = readPlacement(r.placement)
     const order = readOrder(r.order, placement)
     const restoreTo = readRestoreTo(r.restoreTo, placement)
+    const pinned = readPinned(r.pinned, placement)
     return {
-      placement, order, restoreTo,
+      placement, order, restoreTo, pinned,
       right: readOccupant(r.right, placement, 'rail'),
       bottom: readOccupant(r.bottom, placement, 'bottom'),
       bottomOpen: readOccupant(r.bottom, placement, 'bottom') !== null && r.bottomOpen === true,
@@ -714,6 +817,12 @@ export function setSlotRightOpen(open: boolean): void {
   commit(setRightOpen(state, open))
 }
 
+/** The header row's PIN toggle (spec §11 item 3), imperatively. Never asks: pinning/unpinning
+ *  discards no buffer and displaces no occupant. */
+export function togglePinned(panel: PanelId): void {
+  commit(togglePanelPinned(state, panel))
+}
+
 /** The rail's own resize grip, imperatively — clamps and persists (owner, 2026-09-21). Never asks:
  *  resizing the rail displaces no occupant and discards no buffer. */
 export function setRailWidth(width: number): void {
@@ -743,6 +852,8 @@ export interface PanelSlotsApi {
   restorePanel: (panel: PanelId) => void
   /** The rail's own resize grip (owner, 2026-09-21) — see `setRailWidth`. */
   setRailWidth: (width: number) => void
+  /** The header row's PIN toggle (spec §11 item 3) — see `togglePinned`. */
+  togglePinned: (panel: PanelId) => void
 }
 
 /** The one hook every panel-aware component reads. Bound actions carry the same names as the pure
@@ -760,6 +871,7 @@ export function usePanelSlots(): PanelSlotsApi {
     hidePanelToConfig: concealPanel,
     restorePanel: revealPanel,
     setRailWidth,
+    togglePinned,
   }
 }
 

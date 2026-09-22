@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import {
   DEFAULT_PLACEMENT, EMPTY_SLOT_LAYOUT, PANEL_IDS, allowed, bottomPanels, closePanel,
-  getPanelLayout, hidePanel, hiddenPanels, hidePanelPlacement, isPanelId, isPanelShown, movePanel,
-  openPanel, planPanelDrop, railClickAction, railPanels, readLayout, relocatePanel, reorderPlacement,
-  resetPanelSlots, resolveForGates, resolveForViewport, restorePanelPlacement, rightSlotShowing,
-  setBandOpen, setBottomOpen, setPlacement, setRightOpen, setSlotRightOpen, showPanel,
-  subscribePanelLayout,
+  getPanelLayout, hidePanel, hiddenPanels, hidePanelPlacement, isPanelId, isPanelPinned,
+  isPanelShown, movePanel, openPanel, overlayOutsideAction, planPanelDrop, railClickAction,
+  railPanels, readLayout, relocatePanel, reorderPlacement, resetPanelSlots, resolveForGates,
+  resolveForViewport, restorePanelPlacement, rightSlotShowing, setBandOpen, setBottomOpen,
+  setPanelPinned, setPlacement, setRightOpen, setSlotRightOpen, showPanel, subscribePanelLayout,
+  togglePanelPinned, togglePinned,
   type OpenPlacement, type PanelGates, type PanelId, type Placement, type SlotLayout,
 } from './panelSlots'
 import { answerUnsaved, getUnsaved, reportUnsaved, resetUnsaved } from './unsavedBuffers'
@@ -170,6 +171,221 @@ describe('hidePanelPlacement', () => {
     const a = hidePanelPlacement(EMPTY_SLOT_LAYOUT, 'skills')
     const b = setPlacement(EMPTY_SLOT_LAYOUT, 'skills', 'hidden')
     expect(a).toEqual(b)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// PIN (narrow-overlay pass, spec §11) — isPanelPinned / setPanelPinned / togglePanelPinned,
+// setPlacement clearing it on the way off the rail, and the pure click-outside/Esc decision.
+// ---------------------------------------------------------------------------------------------
+
+describe('PIN — nothing is pinned on a fresh layout', () => {
+  test('every panel reads unpinned by default', () => {
+    for (const id of PANEL_IDS) expect(isPanelPinned(EMPTY_SLOT_LAYOUT, id)).toBe(false)
+  })
+})
+
+describe('setPanelPinned / togglePanelPinned', () => {
+  test('sets exactly the named panel, leaving every other one untouched', () => {
+    const next = setPanelPinned(EMPTY_SLOT_LAYOUT, 'live', true)
+    expect(isPanelPinned(next, 'live')).toBe(true)
+    for (const id of PANEL_IDS) {
+      if (id !== 'live') expect(isPanelPinned(next, id)).toBe(false)
+    }
+  })
+
+  test('is a no-op (same reference) when the value is already what was asked for', () => {
+    const next = setPanelPinned(EMPTY_SLOT_LAYOUT, 'live', false)
+    expect(next).toBe(EMPTY_SLOT_LAYOUT)
+  })
+
+  test('togglePanelPinned flips whatever the current value is, twice returns to the start', () => {
+    const once = togglePanelPinned(EMPTY_SLOT_LAYOUT, 'skills')
+    expect(isPanelPinned(once, 'skills')).toBe(true)
+    const twice = togglePanelPinned(once, 'skills')
+    expect(isPanelPinned(twice, 'skills')).toBe(false)
+  })
+})
+
+describe('setPlacement clears pin on the way OFF the rail (spec §11 item 5)', () => {
+  test('moving a pinned rail panel to the bottom clears its pin', () => {
+    const pinned = setPanelPinned(EMPTY_SLOT_LAYOUT, 'live', true)
+    expect(pinned.placement.live).toBe('rail')
+    const moved = setPlacement(pinned, 'live', 'bottom')
+    expect(isPanelPinned(moved, 'live')).toBe(false)
+  })
+
+  test('hiding a pinned rail panel clears its pin too — it also leaves the rail', () => {
+    const pinned = setPanelPinned(EMPTY_SLOT_LAYOUT, 'live', true)
+    const hidden = setPlacement(pinned, 'live', 'hidden')
+    expect(isPanelPinned(hidden, 'live')).toBe(false)
+  })
+
+  test('moving it BACK to the rail does NOT restore the pin (spec: "reseta o estado dela, inclusive se o usuario voltar ela pra direita ela n esta mais pinned")', () => {
+    const pinned = setPanelPinned(EMPTY_SLOT_LAYOUT, 'live', true)
+    const toBottom = setPlacement(pinned, 'live', 'bottom')
+    const backToRail = setPlacement(toBottom, 'live', 'rail')
+    expect(isPanelPinned(backToRail, 'live')).toBe(false)
+  })
+
+  test('moving an UNPINNED panel off the rail is a no-op on pin (nothing to clear)', () => {
+    const moved = setPlacement(EMPTY_SLOT_LAYOUT, 'live', 'bottom')
+    expect(isPanelPinned(moved, 'live')).toBe(false)
+  })
+
+  test('a panel that starts at the bottom (cli/shell) moving to the rail is never pinned by the move itself', () => {
+    const moved = setPlacement(EMPTY_SLOT_LAYOUT, 'cli', 'rail')
+    expect(isPanelPinned(moved, 'cli')).toBe(false)
+  })
+
+  test('pinning one panel never disturbs another panel’s placement, order or restoreTo', () => {
+    const base = setPlacement(EMPTY_SLOT_LAYOUT, 'agents', 'bottom')
+    const pinned = setPanelPinned(base, 'live', true)
+    const moved = setPlacement(pinned, 'live', 'bottom')
+    expect(moved.placement.agents).toBe('bottom') // untouched by an unrelated panel's move
+  })
+
+  // PLANTED-REVERT: a version of setPlacement that never clears pin at all would leave a panel
+  // moved off the rail still reading pinned — exactly the "moving it back restores the pin" bug
+  // item 5 forbids, one step earlier (it would not even need to come back to see it).
+  test('[planted-revert coverage] a setPlacement that never clears pin leaves a moved-away panel still pinned', () => {
+    function brokenSetPlacement(layout: SlotLayout, panel: PanelId, to: Placement): SlotLayout {
+      // The OLD shape, before this pass — everything setPlacement does today, minus the pin clear.
+      if (layout.placement[panel] === to) return layout
+      return { ...layout, placement: { ...layout.placement, [panel]: to } }
+    }
+    const pinned = setPanelPinned(EMPTY_SLOT_LAYOUT, 'live', true)
+    const broken = brokenSetPlacement(pinned, 'live', 'bottom')
+    const correct = setPlacement(pinned, 'live', 'bottom')
+    expect(isPanelPinned(broken, 'live')).not.toBe(isPanelPinned(correct, 'live'))
+    expect(isPanelPinned(broken, 'live')).toBe(true) // wrongly kept
+    expect(isPanelPinned(correct, 'live')).toBe(false) // correctly cleared
+  })
+})
+
+describe('movePanel also clears pin — it routes through setPlacement', () => {
+  test('movePanel(..., "bottom") on a pinned, currently-open rail panel clears the pin', () => {
+    const shown = openPanel(EMPTY_SLOT_LAYOUT, 'skills')
+    const pinned = setPanelPinned(shown, 'skills', true)
+    const moved = movePanel(pinned, 'skills', 'bottom')
+    expect(moved.bottom).toBe('skills') // the existing open-state-carries rule, untouched
+    expect(isPanelPinned(moved, 'skills')).toBe(false)
+  })
+})
+
+describe('overlayOutsideAction — the narrow-width overlay’s click-outside/Esc decision (spec §11 items 2-3)', () => {
+  test('pinned wins outright, regardless of where the click landed', () => {
+    expect(overlayOutsideAction({ pinned: true, insideOverlay: false, insideRail: false })).toBe('none')
+    expect(overlayOutsideAction({ pinned: true, insideOverlay: true, insideRail: false })).toBe('none')
+    expect(overlayOutsideAction({ pinned: true, insideOverlay: false, insideRail: true })).toBe('none')
+  })
+
+  test('unpinned: a click inside the overlay itself does nothing', () => {
+    expect(overlayOutsideAction({ pinned: false, insideOverlay: true, insideRail: false })).toBe('none')
+  })
+
+  test('unpinned: a click on the rail does nothing — switching panels is not "clicking away"', () => {
+    expect(overlayOutsideAction({ pinned: false, insideOverlay: false, insideRail: true })).toBe('none')
+  })
+
+  test('unpinned: a click that lands neither inside the overlay nor on the rail minimizes', () => {
+    expect(overlayOutsideAction({ pinned: false, insideOverlay: false, insideRail: false })).toBe('minimize')
+  })
+
+  // PLANTED-REVERT: a version that checks `insideOverlay` alone (dropping the rail exemption) would
+  // wrongly minimize on a rail click — exactly the "switching panels still works normally" rule
+  // item 3 requires, and the regression a merged single-boolean shortcut would reintroduce.
+  test('[planted-revert coverage] dropping the rail exemption wrongly minimizes on a rail click', () => {
+    function brokenOverlayOutsideAction(
+      { pinned, insideOverlay }: { pinned: boolean; insideOverlay: boolean; insideRail: boolean },
+    ): 'minimize' | 'none' {
+      if (pinned) return 'none'
+      return insideOverlay ? 'none' : 'minimize' // rail exemption dropped
+    }
+    const onRail = { pinned: false, insideOverlay: false, insideRail: true }
+    expect(brokenOverlayOutsideAction(onRail)).not.toBe(overlayOutsideAction(onRail))
+    expect(brokenOverlayOutsideAction(onRail)).toBe('minimize') // wrongly minimizes
+    expect(overlayOutsideAction(onRail)).toBe('none') // correctly leaves it alone
+  })
+})
+
+describe('the imperative togglePinned', () => {
+  beforeEach(() => resetPanelSlots())
+
+  test('flips the stored layout’s pin and persists (a fresh getPanelLayout sees it)', () => {
+    let notified = 0
+    const unsub = subscribePanelLayout(() => { notified += 1 })
+    togglePinned('live')
+    expect(getPanelLayout().pinned.live).toBe(true)
+    expect(notified).toBe(1)
+    togglePinned('live')
+    expect(getPanelLayout().pinned.live).toBe(false)
+    unsub()
+  })
+
+  test('never asks — pinning discards no buffer, unlike closing/hiding the Studio', () => {
+    // No `holdIfUnsaved` question is ever raised by this verb, even for the Studio.
+    togglePinned('studio')
+    expect(getPanelLayout().pinned.studio).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// readLayout persistence — the `pinned` field round-trips, migrates and degrades safely
+// ---------------------------------------------------------------------------------------------
+
+describe('readLayout — pinned', () => {
+  test('a legacy (pre-rail) value has no pinned field at all and reads every panel as unpinned', () => {
+    const s = memory()
+    s.setItem('agentistics-panel-slots', JSON.stringify({
+      right: null, bottom: null, bottomOpen: false, rightOpen: true,
+      lastSlot: { contents: 'right', studio: 'right', cli: 'bottom', shell: 'bottom', hardware: 'right' },
+    }))
+    const layout = readLayout(s)
+    for (const id of PANEL_IDS) expect(isPanelPinned(layout, id)).toBe(false)
+  })
+
+  test('a current-shape value with no pinned field (an older build of THIS shape) reads as unpinned — absent is NOT pinned', () => {
+    const s = memory()
+    const written = openPanel(EMPTY_SLOT_LAYOUT, 'live')
+    const { pinned: _drop, ...withoutPinned } = written
+    void _drop
+    s.setItem('agentistics-panel-slots', JSON.stringify({ version: 2, ...withoutPinned }))
+    const layout = readLayout(s)
+    expect(isPanelPinned(layout, 'live')).toBe(false)
+  })
+
+  test('round-trips a pinned rail panel through write→read', () => {
+    const s = memory()
+    const written = setPanelPinned(openPanel(EMPTY_SLOT_LAYOUT, 'live'), 'live', true)
+    s.setItem('agentistics-panel-slots', JSON.stringify({ version: 2, ...written }))
+    expect(isPanelPinned(readLayout(s), 'live')).toBe(true)
+  })
+
+  test('a corrupt stored value pairing pinned:true with a NON-rail placement reads as unpinned — the placement is trusted, not the pin', () => {
+    const s = memory()
+    s.setItem('agentistics-panel-slots', JSON.stringify({
+      version: 2,
+      placement: { ...DEFAULT_PLACEMENT, live: 'bottom' },
+      order: {}, restoreTo: {},
+      pinned: { live: true },
+      right: null, bottom: 'live', bottomOpen: true, rightOpen: true,
+    }))
+    const layout = readLayout(s)
+    expect(layout.placement.live).toBe('bottom')
+    expect(isPanelPinned(layout, 'live')).toBe(false)
+  })
+
+  test('a non-boolean pinned value for a panel is ignored, never throws', () => {
+    const s = memory()
+    s.setItem('agentistics-panel-slots', JSON.stringify({
+      version: 2,
+      placement: DEFAULT_PLACEMENT, order: {}, restoreTo: {},
+      pinned: { live: 'yes', skills: 1, agents: null },
+      right: null, bottom: null, bottomOpen: false, rightOpen: true,
+    }))
+    const layout = readLayout(s)
+    for (const id of PANEL_IDS) expect(isPanelPinned(layout, id)).toBe(false)
   })
 })
 

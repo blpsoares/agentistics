@@ -29,8 +29,8 @@ import {
 import { StudioHost, type StudioHostProps } from '../components/sessions/StudioHost'
 import { ResizeGrip } from '../components/ResizeGrip'
 import {
-  bottomPanels, hiddenPanels, isPanelShown, isTabPanelId, mountPanel, railPanels, resolveForGates,
-  resolveForViewport, usePanelSlots,
+  bottomPanels, hiddenPanels, isPanelShown, isTabPanelId, mountPanel, overlayOutsideAction,
+  railPanels, resolveForGates, resolveForViewport, usePanelSlots,
   type OpenPlacement, type PanelGates, type PanelId, type TabPanelId,
 } from '../lib/panelSlots'
 import { panelIconFor } from '../lib/panelIcons'
@@ -124,6 +124,8 @@ export interface StudioHostMountParams {
   onMove: () => void
   /** The always-visible minimize icon, right-slot only — see `Studio.tsx`'s own `onMinimizeRight`. */
   onMinimizeRight?: () => void
+  /** PIN (spec §11 item 3), right-slot only — see `Studio.tsx`'s own `pinned` prop. */
+  pinned?: { active: boolean; onToggle: () => void }
   /**
    * NEVER A REAL FIELD (I4, fix wave 3) — declared `never` so a stray `key` on this params object is
    * a TYPE ERROR at every route a value can reach `mountStudioHostPanel` through, not only a literal
@@ -186,6 +188,7 @@ export function mountStudioHostPanel(params: StudioHostMountParams): ReactElemen
     placement: params.placement,
     onMove: params.onMove,
     onMinimizeRight: params.onMinimizeRight,
+    pinned: params.pinned,
   })
 }
 
@@ -635,7 +638,7 @@ export default function SessionsPage() {
   const {
     layout: rawSlotLayout, openPanel: openSlotPanel, closePanel: closeSlotPanel,
     movePanel: moveSlotPanel, dropPanel: dropSlotPanel, setRightOpen,
-    hidePanelToConfig: hideSlotPanel, restorePanel: revealSlotPanel, setRailWidth,
+    hidePanelToConfig: hideSlotPanel, restorePanel: revealSlotPanel, setRailWidth, togglePinned,
   } = usePanelSlots()
   const panelFocus = usePanelFocusRequest()
   const panelGates: PanelGates = { editorEnabled, shellEnabled, relayed }
@@ -996,6 +999,9 @@ export default function SessionsPage() {
         fullscreen={fullscreen}
         onMinimize={onMinimize}
         minimizeLabel={pt ? `Minimizar ${panelName}` : `Minimize ${panelName}`}
+        // PIN (spec §11 item 3) — every caller of this function builds a RIGHT-SLOT header, so this
+        // is unconditional here, unlike the bottom band's own bars which never pass it at all.
+        pinned={{ active: rawSlotLayout.pinned[panel], onToggle: () => togglePinned(panel) }}
         gearLabel={pt ? `Opções — ${panelName}` : `${panelName} options`}
         gearEntries={gearEntries}
       />
@@ -1787,6 +1793,60 @@ export default function SessionsPage() {
   useEffect(() => () => setRightAsideEdge(null), [])
 
   /**
+   * THE NARROW-WIDTH OVERLAY'S CLICK-OUTSIDE-MINIMIZES (spec §11 items 2-3) — `artShell ===
+   * 'overlay'` ONLY, THE RAIL ONLY (item 4: "the bottom band keeps today's behaviour exactly;
+   * nothing there changes"). Neither branch of this effect ever touches `bottomOpen`, `ShellBand` or
+   * `SessionPanel.tsx`'s own bands — the bottom band's own minimize/collapse machinery is a
+   * completely separate code path this effect never reaches, which is the rule
+   * `panelSlots.overlayOutsideAction.test.ts`'s own "the bottom band is untouched" test pins from
+   * the OUTSIDE (this effect simply never runs unless the overlay shell is showing).
+   *
+   * WHAT "OUTSIDE" MEANS, stated once and handed to the pure `overlayOutsideAction` (`panelSlots.ts`)
+   * as three facts: is the panel PINNED (wins outright, spec item 3); did the click land INSIDE the
+   * overlay's own box (`rightAsideRef`, the exact element `artOuter` renders — its own header row,
+   * including the PIN button itself, is inside this and so never counts as "away"); did it land on
+   * THE RAIL (`closest('[data-panel-rail]')`) or on ANY portaled menu this workspace draws
+   * (`closest('[role="menu"]')` — the rail's own right-click move/hide menu and its overflow/eye
+   * tile dropdowns are portaled to `document.body`, outside the rail's own DOM subtree, so without
+   * this a right-click on the rail's icon and then a pick from its OWN menu would minimize the very
+   * panel the picked verb was about). Clicking the rail is SWITCHING panels, never "clicking away".
+   *
+   * ESC IS THE SAME DECISION (item 2, "Esc deveria fazer o mesmo") — it did not exist at all before
+   * this pass (there was no `'Escape'` handler anywhere in this file). It shares `overlayOutsideAction`
+   * rather than a bare unconditional minimize, so a PINNED panel is left alone by Esc too — the same
+   * "this stays until I say so" promise the pin makes against an accidental click.
+   */
+  useEffect(() => {
+    if (artShell !== 'overlay') return
+    const panel = slotLayout.right
+    if (panel === null) return
+    const minimize = () => {
+      if (panelMinimizeAction(panel, 'rail') === 'collapse-right-park') setRightOpen(false)
+      else closeSlotPanel(panel)
+    }
+    const onPointerDown = (e: MouseEvent) => {
+      const target = e.target
+      const overlayEl = rightAsideRef.current
+      const insideOverlay = !!(overlayEl && target instanceof Node && overlayEl.contains(target))
+      const insideRail = target instanceof Element
+        && (target.closest('[data-panel-rail]') !== null || target.closest('[role="menu"]') !== null)
+      const action = overlayOutsideAction({ pinned: rawSlotLayout.pinned[panel] === true, insideOverlay, insideRail })
+      if (action === 'minimize') minimize()
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      const action = overlayOutsideAction({ pinned: rawSlotLayout.pinned[panel] === true, insideOverlay: false, insideRail: false })
+      if (action === 'minimize') minimize()
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [artShell, slotLayout.right, rawSlotLayout.pinned, closeSlotPanel, setRightOpen])
+
+  /**
    * What the pane sits beside or under. A VALUE, never a `return`: the moment one of these is
    * returned on its own, the pane it was meant to share a parent with is at a different index.
    */
@@ -2322,12 +2382,27 @@ export default function SessionsPage() {
   return (
     <div
       ref={splitRef}
-      style={split || railDesktop
-        ? { display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }
-        // `relative` for the overlay to resolve against, and it is the one position value that does
-        // NOT become a containing block for a `position: fixed` descendant — so the phone's
-        // full-screen pane still resolves against the viewport.
-        : { position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
+      // `position: relative` ON EVERY BRANCH (fix, narrow-overlay pass, 2026-09-22) — it is the one
+      // position value that does NOT become a containing block for a `position: fixed` descendant
+      // (so the phone's full-screen pane still resolves against the viewport) and it is what the
+      // narrow-desktop `overlay` shell's `position: absolute` (`artOuter`, below) is supposed to
+      // resolve against. It used to sit ONLY in the second branch, which is taken exclusively on
+      // MOBILE (`split || railDesktop` is false only when `isMobile` — see `railDesktop`'s own
+      // comment) — so on DESKTOP, where `railDesktop` is true the instant a session is selected, the
+      // overlay's `position: absolute` had no positioned ancestor to resolve against at all and
+      // escaped all the way to `<body>`, landing its `top: 0` at the very top of the DOCUMENT rather
+      // than at the top of THIS row (which sits below the fixed session header). Verified live at
+      // 1000px: `PanelFixedControls`' full-screen/minimize buttons rendered at `top: 10`, correctly
+      // positioned relative to body, but painted OVER by the app's own `position: fixed; z-index:
+      // 300` header — present in the DOM, entirely invisible and unclickable. The fix costs nothing
+      // on the branches that do not need it: `split`'s own box never uses `position: absolute`, and
+      // `relative` on a flex container changes no layout of its children.
+      style={{
+        position: 'relative',
+        ...(split || railDesktop
+          ? { display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }
+          : { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }),
+      }}
     >
       {/* `display: flex` is the load-bearing part, not `flex: 1`. This file has recorded the same
           bug three times: `flex: 1` on a child means nothing until its PARENT is a flex container,
@@ -2453,6 +2528,11 @@ export default function SessionsPage() {
         // THE ALWAYS-VISIBLE MINIMIZE ICON — right-slot only; at the bottom `StudioBand`'s own
         // collapse chevron already is this control (`panelMenu.ts`'s own `panelMinimizeAction`).
         onMinimizeRight: rightIsStudio ? () => setRightOpen(false) : undefined,
+        // PIN (spec §11 item 3) — right-slot only, same gating as `onMinimizeRight` immediately
+        // above and for the same reason: "the rail only".
+        pinned: rightIsStudio
+          ? { active: rawSlotLayout.pinned.studio, onToggle: () => togglePinned('studio') }
+          : undefined,
       })}
       {/* Mobile-only chrome, and a slot that is always here so it can never shift the pane. */}
       {isMobile ? filtersSheet : null}

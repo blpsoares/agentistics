@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  ArrowDown, ArrowRight, EyeOff, Maximize2, Minimize2, Minus, MoreHorizontal, Settings, X,
+  ArrowDown, ArrowRight, EyeOff, Maximize2, Minimize2, Minus, MoreHorizontal, Pin, Settings, X,
 } from 'lucide-react'
 import type { PanelBarEntry, PanelBarId } from '../../lib/panelBar'
 import { hasDragPayload, readDragPayload, setDragPayload } from '../../lib/dragReorder'
@@ -758,7 +758,18 @@ export function BandOverflowMenu({ label, entries, isMobile = false, icon }: {
  * the Studio's own toolbar in the right slot (`Studio.tsx`) — renders THIS, in THIS fixed order,
  * so a reader never has to relearn where a control lives from one panel to the next:
  *
- *   [full screen, only where offered] → [minimize, ALWAYS] → [gear, only with something to say]
+ *   [full screen, only where offered] → [minimize, ALWAYS] → [pin, right-slot panels only]
+ *   → [gear, only with something to say]
+ *
+ * PIN (narrow-overlay pass, 2026-09-22, spec §11) — "quero em todos um botao de pin que fica ativo
+ * e salvo como preferencia". `pinned` is `undefined` wherever this cluster is NOT drawing a
+ * right-slot header — the bottom band's own bar (`ShellBand`, `SimpleDockedBand`) and the Studio's
+ * bottom-docked toolbar never pass it, because §11 item 4 is explicit: "The rail only. The bottom
+ * band keeps today's behaviour exactly." Present, it is a toggle whose PRESSED state is the pin's
+ * own glyph swap (`Pin`, filled when active via `fill: currentColor` — never colour alone, which a
+ * colour-blind reader could miss) so pinned-ness is visible at a glance on the row itself, not only
+ * in the tooltip. `panelSlots.ts`'s own `pinned` record is what this reads/writes; see that
+ * module's header for what CLEARS it (moving the panel off the rail).
  *
  * FULL SCREEN IS NEVER A MENU ROW ANY MORE. It used to be a row inside the same "⋯"/gear menu that
  * also offered move and close, which is what let a reader miss it entirely under two clicks for a
@@ -784,8 +795,8 @@ export function BandOverflowMenu({ label, entries, isMobile = false, icon }: {
  * disabled trigger, when `gearEntries` is empty (`BandOverflowMenu`'s own rule).
  */
 export function PanelFixedControls({
-  lang, panelName, fullscreen, collapsed = false, onMinimize, minimizeLabel, gearLabel, gearEntries,
-  isMobile = false,
+  lang, panelName, fullscreen, collapsed = false, onMinimize, minimizeLabel, pinned, gearLabel,
+  gearEntries, isMobile = false,
 }: {
   lang: 'pt' | 'en'
   /** The panel's own display name — folded into every button's accessible name/tooltip so two
@@ -800,6 +811,9 @@ export function PanelFixedControls({
   /** Absent for exactly one caller — see this component's own header. */
   onMinimize?: () => void
   minimizeLabel?: string
+  /** Absent wherever this cluster is not a RIGHT-SLOT header — see this component's own PIN
+   *  paragraph. */
+  pinned?: { active: boolean; onToggle: () => void }
   gearLabel: string
   gearEntries: readonly BandOverflowEntry[]
   isMobile?: boolean
@@ -839,6 +853,21 @@ export function PanelFixedControls({
           aria-label={minimizeLabel}
           style={{ ...iconBtn, color: 'var(--anthropic-orange)' }}
         ><Minus size={14} /></button>
+      )}
+      {pinned && (
+        <button
+          className="ag-tap-icon"
+          type="button"
+          aria-pressed={pinned.active}
+          onClick={e => { e.stopPropagation(); pinned.onToggle() }}
+          title={pinned.active
+            ? (pt ? `Desafixar ${panelName}` : `Unpin ${panelName}`)
+            : (pt ? `Fixar ${panelName}` : `Pin ${panelName}`)}
+          aria-label={pinned.active
+            ? (pt ? `Desafixar ${panelName}` : `Unpin ${panelName}`)
+            : (pt ? `Fixar ${panelName}` : `Pin ${panelName}`)}
+          style={{ ...iconBtn, color: pinned.active ? 'var(--anthropic-orange)' : 'var(--text-secondary)' }}
+        ><Pin size={14} {...(pinned.active ? { fill: 'currentColor' } : {})} /></button>
       )}
       <BandOverflowMenu label={gearLabel} icon={<Settings size={14} />} entries={gearEntries} isMobile={isMobile} />
     </>
