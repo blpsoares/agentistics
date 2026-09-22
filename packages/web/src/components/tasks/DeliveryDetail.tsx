@@ -26,8 +26,8 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import {
-  Bot, ChevronDown, ExternalLink, FileText, FileVideo, Link2, MessageSquare, Paperclip, Pencil,
-  Plus, Trash2, X, XCircle,
+  Bot, ChevronDown, ChevronRight, ExternalLink, FileText, FileVideo, Link2, MessageSquare, Paperclip,
+  Pencil, Plus, Trash2, X, XCircle,
 } from 'lucide-react'
 import { PRIORITY_ORDER, composePromptWithPaths, type TaskPriorityId } from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -1068,6 +1068,20 @@ export function CommentsTab({ id, detail, onChanged }: {
   const [editing, setEditing] = useState<{ id: string; body: string } | null>(null)
   const [removing, setRemoving] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  /**
+   * Which EXISTING comments are showing their body — collapsed by default (product feedback,
+   * 2026-09-21: "comentários também devem ser accordions e vêm minimizados por padrão apenas com
+   * o início do comentário quem fez e quando"), so a long thread reads as a list of who-and-when
+   * until the reader picks one to open. Never persisted, same reasoning as the subtask-group
+   * accordion above it in this pass: a fresh mount of this tab starts every comment closed again.
+   * The DRAFT composer at the foot of the list is unaffected — this only folds what was already said.
+   */
+  const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set())
+  const toggleComment = (cid: string) => setExpandedComments(prev => {
+    const next = new Set(prev)
+    next.has(cid) ? next.delete(cid) : next.add(cid)
+    return next
+  })
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true); await fn(); await onChanged(); setBusy(false)
@@ -1102,30 +1116,57 @@ export function CommentsTab({ id, detail, onChanged }: {
       )}
       {detail.comments.map(c => {
         const mine = editing?.id === c.id
+        // Editing a comment always shows it — collapsing what you are actively rewriting would
+        // hide your own draft the moment you started it.
+        const open = mine || expandedComments.has(c.id)
         return (
           <div key={c.id} style={{ ...surface, padding: 13 }}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+            {/* The collapsed row IS the toggle: who commented and when, nothing else, until it is
+                opened. A `<div>` rather than a `<button>` — the Edit/Delete controls sit inside it
+                and a button may not nest inside another button. */}
+            <div
+              role="button"
+              tabIndex={0}
+              aria-expanded={open}
+              onClick={() => toggleComment(c.id)}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleComment(c.id) } }}
+              style={{
+                display: 'flex', gap: 8, alignItems: 'center', marginBottom: open ? 6 : 0,
+                cursor: 'pointer', minHeight: isMobile ? 44 : undefined,
+              }}
+            >
+              {open
+                ? <ChevronDown size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                : <ChevronRight size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />}
               <span style={pill('var(--accent-blue)')}>{c.author}</span>
               <span style={{ ...microLabel, textTransform: 'none', letterSpacing: 0 }}>
                 {new Date(c.createdAt).toLocaleString()}
               </span>
               <span style={{ flex: 1 }} />
-              {!mine && (
+              {open && !mine && (
                 <>
+                  {/* Icon-only — `.ag-tap-icon` projects the mobile 44px hit area without
+                      painting a 44x44 square onto this thin header row. */}
                   <button
-                    onClick={() => setEditing({ id: c.id, body: c.body })} disabled={busy}
-                    title="Edit"
-                    style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', display: 'flex' }}
+                    onClick={e => { e.stopPropagation(); setEditing({ id: c.id, body: c.body }) }} disabled={busy}
+                    title="Edit" className="ag-tap-icon"
+                    style={{
+                      background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}
                   ><Pencil size={13} /></button>
                   <button
-                    onClick={() => setRemoving(c.id)}
-                    disabled={busy} title="Delete"
-                    style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', display: 'flex' }}
+                    onClick={e => { e.stopPropagation(); setRemoving(c.id) }}
+                    disabled={busy} title="Delete" className="ag-tap-icon"
+                    style={{
+                      background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}
                   ><Trash2 size={13} /></button>
                 </>
               )}
             </div>
-            {mine
+            {open && (mine
               ? (
                 <div style={{ display: 'grid', gap: 8 }}>
                   <textarea
@@ -1148,7 +1189,7 @@ export function CommentsTab({ id, detail, onChanged }: {
               )
               : (
                 <CommentBody body={c.body} files={detail.files} />
-              )}
+              ))}
           </div>
         )
       })}
