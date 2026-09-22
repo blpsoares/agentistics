@@ -23,19 +23,19 @@ import {
 } from 'react'
 import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import {
-  ChevronLeft, FileText, FolderTree, MessagesSquare, Plus, TerminalSquare,
+  ChevronLeft, Eye, FileText, FolderTree, MessagesSquare, Plus, TerminalSquare,
   X as XIcon,
 } from 'lucide-react'
 import { StudioHost, type StudioHostProps } from '../components/sessions/StudioHost'
 import { ResizeGrip } from '../components/ResizeGrip'
 import {
-  hiddenPanels, isPanelShown, isTabPanelId, mountPanel, railPanels, resolveForGates,
+  bottomPanels, hiddenPanels, isPanelShown, isTabPanelId, mountPanel, railPanels, resolveForGates,
   resolveForViewport, usePanelSlots,
   type OpenPlacement, type PanelGates, type PanelId, type TabPanelId,
 } from '../lib/panelSlots'
 import { panelIconFor } from '../lib/panelIcons'
 import { panelTitle } from '../lib/panelMeta'
-import { PanelRail } from '../components/sessions/PanelRail'
+import { PanelRail, panelTile } from '../components/sessions/PanelRail'
 import { MENTION_ADDED_TOAST } from '../lib/mentionInsert'
 import type { HarnessId, SessionPreset } from '@agentistics/core'
 import { getCentralMachine } from '../lib/centralMachinePick'
@@ -58,7 +58,7 @@ import { HideLensesButton } from '../components/a11y/HideLensesButton'
 import { ArtifactsAside } from '../components/sessions/ArtifactsAside'
 import { HardwarePanel } from '../components/sessions/HardwarePanel'
 import { UnsavedChangesGuard } from '../components/sessions/UnsavedChangesGuard'
-import { PanelFixedControls } from '../components/sessions/bandControls'
+import { PanelFixedControls, PanelTileDropdown } from '../components/sessions/bandControls'
 import { fullscreenModeFor, panelMinimizeAction } from '../lib/panelMenu'
 import {
   artifactsPanelMax, ASIDE_ANIM_MS, ASIDE_EASE, currentAction, edgeHint, PANEL_MIN_WIDTH, panelWidth,
@@ -1152,28 +1152,67 @@ export default function SessionsPage() {
     color: 'var(--text-secondary)', cursor: 'pointer',
   }
   /**
-   * THE MOBILE PANEL MENU (spec §8: "No rail at 390px. The fourteen panels stay reachable through
-   * the existing mobile panel menu"). Before the rail this offered three entries — Conteúdo/Studio/
-   * Hardware — because `contents` covered the other ten under one button with its own internal
-   * strip. That strip is gone everywhere now, so this switcher is what replaces it on a viewport
-   * with no rail to replace it WITH: every panel but `cli`/`shell` (which keep the session panel's
-   * own self-contained toggle, untouched by this pass) gets its own entry here, built from the same
-   * shared `panelMeta.ts`/`panelIcons.tsx` tables the rail itself reads.
+   * THE MOBILE PANEL MENU (the mobile pass's own item 2: "the rail has no place at 390px — the
+   * panels are reached through the existing mobile panel menu, make sure ALL fourteen are reachable
+   * there, each with its own title and icon").
+   * Before the rail this offered three entries — Conteúdo/Studio/Hardware — because `contents`
+   * covered the other ten under one button with its own internal strip. That strip is gone
+   * everywhere now, so this switcher is what replaces it on a viewport with no rail to replace it
+   * WITH — built from the same shared `panelMeta.ts`/`panelIcons.tsx` tables the rail itself reads,
+   * so a title or icon can never read differently on the two surfaces.
+   *
+   * ALL FOURTEEN, `cli`/`shell` INCLUDED — they used to be left out on the (correct, at the time)
+   * reasoning that the session panel's own `ShellBand` already offers them at the foot of the
+   * screen. But that is a SEPARATE control answering a separate question ("what is docked below the
+   * conversation right now"), and `panelIcons.tsx`'s own header already names this exact switcher
+   * as one of the three readers `cli`/`shell` carry a `PANEL_META` entry FOR — the omission was the
+   * bug, not the design. Opening either one here goes through the very same `openSlotPanel(id)`
+   * every other tab uses: `cli`/`shell` default to `bottom` placement, so picking one just makes
+   * `ShellBand` show THAT pane and ensures the band is open (exactly what tapping its own embedded
+   * tab does); if either was ever moved to the rail on a wider viewport first, picking it here opens
+   * it as a full-screen overlay instead — the very same `rightIsCli`/`rightIsShell` branch already
+   * used when a desktop reader moves one to the rail. One click handler, both destinations, decided
+   * entirely by the panel's own placement — never a fact this switcher has to know.
+   *
+   * WHICH FOURTEEN ARE OFFERED follows PLACEMENT, not a hardcoded list: `railPanels`/`bottomPanels`
+   * already exclude anything `hidden` (spec's own rule — "a hidden panel must not appear in the
+   * mobile menu either"), so a panel hidden on a wider viewport of this same browser stays hidden
+   * here too, and one moved between rail and bottom on desktop is reachable here exactly the same
+   * either way — "moving" has no separate meaning on a phone with no rail to move BETWEEN, so this
+   * switcher simply shows every panel that is placed anywhere reachable, which is what "moved" comes
+   * down to once the rail itself is gone.
+   *
+   * `on` reads `isPanelShown`, not `slotLayout.right === id` — the old test, correct only for a
+   * rail-placed panel opened into the right slot, went permanently false for a bottom-placed one
+   * (the ordinary case for `cli`/`shell`) even while `ShellBand` was genuinely showing it.
+   *
+   * NO OVERFLOW CONTROL: `flexWrap: 'wrap'` lets the row grow to as many lines as fourteen tiles
+   * need rather than clipping — the rail's own "more" button (spec §4) exists because the RAIL
+   * cannot grow (a fixed-height column, `overflow: hidden`, spec's own rule), while this row sits in
+   * NORMAL FLOW above a column that already scrolls; a control whose only reason to exist is "some
+   * icons do not fit" has nothing to answer here, and porting it would be a button that always says
+   * zero.
    */
+  const gatedMobilePanels = [...railPanels(slotLayout), ...bottomPanels(slotLayout)]
+    .filter(railGateOpen)
+    .filter(id => id !== 'metrics' || sessionMetrics !== undefined)
+  const [mobileHiddenAt, setMobileHiddenAt] = useState<{ x: number; y: number } | null>(null)
   const rightSwitcherMobile = (isMobile && selected) ? (
-    <div role="tablist" aria-label={pt ? 'O que mostrar' : 'What to show'} style={{
-      display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, flexWrap: 'wrap',
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 4, flexShrink: 0,
       padding: '4px 6px', borderBottom: '1px solid var(--border)',
     }}>
-      {([
-        'live', 'gallery', 'skills', 'agents', 'forks', 'workflows', 'mcps', 'prs', 'tasks',
-        'metrics', 'studio', 'hardware',
-      ] as PanelId[])
-        .filter(id => id !== 'studio' || editorEnabled === true)
-        .filter(id => id !== 'hardware' || hardwareOffered)
-        .filter(id => id !== 'metrics' || sessionMetrics !== undefined)
-        .map(id => {
-          const on = slotLayout.right === id
+      <div role="tablist" aria-label={pt ? 'O que mostrar' : 'What to show'} style={{
+        display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', flex: 1, minWidth: 0,
+      }}>
+        {gatedMobilePanels.map(id => {
+          const on = isPanelShown(slotLayout, id)
+          // THE HARDWARE TAB'S OWN RED (addendum item 6, carried to the phone) — the rail's icon
+          // recolors and its tooltip states "sob pressão"/"under pressure" in words; a phone has
+          // neither a rail nor a hover tooltip, so the WORDS move onto the tab's own visible label
+          // instead of being dropped. Never a color-only signal — the same rule the rail's own
+          // tooltip states for itself.
+          const hot = id === 'hardware' && hardwareCritical === true
           return (
             <button
               key={id}
@@ -1184,24 +1223,56 @@ export default function SessionsPage() {
                 display: 'flex', alignItems: 'center', gap: 5,
                 minHeight: 44, padding: '0 14px',
                 borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-                fontSize: 11.5, fontWeight: on ? 700 : 500,
+                fontSize: 11.5, fontWeight: (on || hot) ? 700 : 500,
                 background: on ? 'var(--bg-elevated)' : 'transparent',
-                color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                color: hot ? 'var(--accent-red)' : (on ? 'var(--text-primary)' : 'var(--text-tertiary)'),
               }}
-            >{panelIconFor(id, 12, selected.harness)}{panelTitle(id, pt)}</button>
+            >{panelIconFor(id, 12, selected.harness)}{panelTitle(id, pt)}{hot ? ` — ${pt ? 'sob pressão' : 'under pressure'}` : ''}</button>
           )
         })}
-      <span style={{ flex: 1 }} />
-      {/* CLOSE — a phone has no fixed header to close this from any other way, so this stays the
-          one door out here. Closing the Studio asks first when dirty, through the very `hidePanel`
-          `closeSlotPanel` already calls. */}
-      {rightActivePanel && (
-        <button className="ag-tap-icon"
-          onClick={() => closeSlotPanel(rightActivePanel)}
-          title={pt ? 'Fechar' : 'Close'}
-          aria-label={pt ? 'Fechar' : 'Close'}
-          style={rightSlotIconBtn}
-        ><XIcon size={13} /></button>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+        {/* THE EYE (the mobile pass's own item 2: "a way to see and restore hidden panels on a
+            phone — the same tile list the desktop's eye opens"). Absent while nothing is hidden —
+            same rule as the rail's own config area, a control with one permanently-disabled state
+            trains readers to ignore it. There is no HIDE verb here (drag/right-click/the rail's
+            config area stay desktop-only, the gear covers those verbs there) — this is
+            restore-only, and a panel a reader wants gone on a phone is reachable through the same
+            gear other panels already carry once it is genuinely a bottom/rail occupant. */}
+        {gatedHiddenPanels.length > 0 && (
+          <button
+            type="button"
+            className="ag-tap-icon"
+            aria-haspopup="menu"
+            aria-label={pt ? `${gatedHiddenPanels.length} painéis ocultos` : `${gatedHiddenPanels.length} hidden panels`}
+            title={pt ? `${gatedHiddenPanels.length} ocultos — toque para restaurar` : `${gatedHiddenPanels.length} hidden — tap to restore`}
+            onClick={e => {
+              const r = e.currentTarget.getBoundingClientRect()
+              setMobileHiddenAt(s => (s ? null : { x: r.left, y: r.bottom + 4 }))
+            }}
+            style={{ ...rightSlotIconBtn, color: 'var(--anthropic-orange)' }}
+          ><Eye size={13} /></button>
+        )}
+        {/* CLOSE — a phone has no fixed header to close this from any other way, so this stays the
+            one door out here. Closing the Studio asks first when dirty, through the very `hidePanel`
+            `closeSlotPanel` already calls. */}
+        {rightActivePanel && (
+          <button className="ag-tap-icon"
+            onClick={() => closeSlotPanel(rightActivePanel)}
+            title={pt ? 'Fechar' : 'Close'}
+            aria-label={pt ? 'Fechar' : 'Close'}
+            style={rightSlotIconBtn}
+          ><XIcon size={13} /></button>
+        )}
+      </div>
+      {mobileHiddenAt && (
+        <PanelTileDropdown
+          at={mobileHiddenAt}
+          label={pt ? `${gatedHiddenPanels.length} ocultos` : `${gatedHiddenPanels.length} hidden`}
+          tiles={gatedHiddenPanels.map(id => panelTile(id, pt, selected.harness, pt ? 'Restaurar' : 'Restore'))}
+          onPick={id => revealSlotPanel(id as PanelId)}
+          onClose={() => setMobileHiddenAt(null)}
+        />
       )}
     </div>
   ) : null
@@ -1838,8 +1909,18 @@ export default function SessionsPage() {
     // A session that is on its way owns the whole surface — before the panel case, because
     // `finishing` is the one moment BOTH are true, and before the list, which is the metrics screen
     // this replaced. One rule, both layouts: the loader is the same on a phone.
+    //
+    // THIS SCREEN OWNS THE STATUS-BAR BAND TOO, the same rule every other mobile top-of-screen
+    // in this workspace already follows (the list header, the open-session header, the dedicated
+    // terminal header — all pad `--safe-top`). This one was missed: with nothing but a centered
+    // loader on a dark ground it read as harmless, but a session that takes a moment to start
+    // (a cold harness, a slow host) leaves a reader looking at this screen under the real
+    // status-bar band with no reservation for it at all.
     centre = (
-      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+      <div style={{
+        display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
+        paddingTop: 'var(--safe-top)',
+      }}>
         <SessionCreating
           lang={pt ? 'pt' : 'en'}
           ready={finishing}
