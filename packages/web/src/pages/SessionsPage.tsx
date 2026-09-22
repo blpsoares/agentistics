@@ -23,19 +23,19 @@ import {
 } from 'react'
 import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import {
-  ChevronLeft, FileText, FolderTree, MessagesSquare, Plus, TerminalSquare,
+  ChevronLeft, Eye, FileText, FolderTree, MessagesSquare, Plus, TerminalSquare,
   X as XIcon,
 } from 'lucide-react'
 import { StudioHost, type StudioHostProps } from '../components/sessions/StudioHost'
 import { ResizeGrip } from '../components/ResizeGrip'
 import {
-  hiddenPanels, isPanelShown, isTabPanelId, mountPanel, railPanels, resolveForGates,
+  bottomPanels, hiddenPanels, isPanelShown, isTabPanelId, mountPanel, railPanels, resolveForGates,
   resolveForViewport, usePanelSlots,
   type OpenPlacement, type PanelGates, type PanelId, type TabPanelId,
 } from '../lib/panelSlots'
 import { panelIconFor } from '../lib/panelIcons'
 import { panelTitle } from '../lib/panelMeta'
-import { PanelRail } from '../components/sessions/PanelRail'
+import { PanelRail, panelTile } from '../components/sessions/PanelRail'
 import { MENTION_ADDED_TOAST } from '../lib/mentionInsert'
 import type { HarnessId, SessionPreset } from '@agentistics/core'
 import { getCentralMachine } from '../lib/centralMachinePick'
@@ -58,7 +58,7 @@ import { HideLensesButton } from '../components/a11y/HideLensesButton'
 import { ArtifactsAside } from '../components/sessions/ArtifactsAside'
 import { HardwarePanel } from '../components/sessions/HardwarePanel'
 import { UnsavedChangesGuard } from '../components/sessions/UnsavedChangesGuard'
-import { PanelFixedControls } from '../components/sessions/bandControls'
+import { PanelFixedControls, PanelTileDropdown } from '../components/sessions/bandControls'
 import { fullscreenModeFor, panelMinimizeAction } from '../lib/panelMenu'
 import {
   artifactsPanelMax, ASIDE_ANIM_MS, ASIDE_EASE, currentAction, edgeHint, PANEL_MIN_WIDTH, panelWidth,
@@ -935,6 +935,74 @@ export default function SessionsPage() {
   )
 
   /**
+   * THE PANEL'S OWN FULL-SCREEN/MINIMIZE/GEAR TRIO — the SAME `PanelFixedControls` cluster every
+   * panel in this workspace draws, in the SAME order, through the SAME shared builder
+   * (`lib/panelMenu.ts`), so this can never disagree with what `ShellBand`'s own bar or a bottom
+   * band says about an identical gesture.
+   *
+   * MOVED AHEAD OF `tabPane` (fix-wave review, item 5: "every panel drawn in the right slot has ONE
+   * header row — the panel's own title and its counts on the left, the controls right-aligned in
+   * that same row. No separate strip above it. Do it once, in the shared chrome that wraps a
+   * right-slot panel"). This trio used to be built INSIDE `rightSlotBar`, a separate strip drawn
+   * ABOVE whatever the panel itself rendered — for `cli`/`shell` (which draw no header of their
+   * own) that cost nothing, but Hardware and the ten former Contents tabs each ALSO draw their own
+   * title row, so the two together were a mostly-empty controls-only strip sitting on top of a
+   * second, real header — exactly the "empty header" the owner's Hardware/Skills screenshots show.
+   * Pulled out here as its own function, this trio is now handed to those two as a PROP
+   * (`HardwarePanelProps.controls`, `ArtifactsAsideProps.headerControls`) and merged into the ONE
+   * header row they already draw, and `rightSlotBar` (further down, where `cli`/`shell` still need
+   * a wrapper row of their own) is left as a thin caller of this same function — one builder, never
+   * two answers about what the trio looks like.
+   *
+   * The STUDIO is deliberately absent from every caller of this: it already carries this exact trio
+   * — its own gear (tree options + close), its own minimize icon, and its own fixed full-screen
+   * button — inside its OWN toolbar (`Studio.tsx`), because that toolbar is what stays visible
+   * across the tree/search/editor views a generic header row would otherwise sit above. Calling this
+   * for Studio too would be two bars for one panel.
+   *
+   * FULL SCREEN (2026-09-19) is `fullscreenModeFor(panel)`-dependent: `cli`/`shell` NAVIGATE to
+   * their existing dedicated screen (never a toggle — there is nothing to read back as "active"
+   * from here), `contents`/`hardware` toggle the local in-place overlay this page now owns for them.
+   *
+   * Minimizing here is a genuine CLOSE (`panelMenu.ts`'s own `panelMinimizeAction` — `close-right`),
+   * which is SAFE for exactly these four: none holds client-only state a remount could lose. The
+   * outcome a reader sees is identical to a soft minimize either way — released from view, restored
+   * with one click on the panel bar's own tab.
+   */
+  const panelFixedControlsFor = (
+    panel: Exclude<PanelId, 'studio'>, panelName: string, onMinimize: () => void,
+  ): ReactNode => {
+    if (isMobile || !selected) return null
+    // NO GEAR (addendum, 2026-09-21): every panel this trio is ever built for (`Exclude<...,
+    // 'studio'>`) had exactly ONE gear row — move to the bottom — and that row now lives on the
+    // rail ICON'S OWN right-click menu instead (`PanelRail`'s `onMove`, reachable for the exact
+    // same panel since it is this slot's active occupant). A gear with nothing left to hold is
+    // absent, never empty and present (`BandOverflowMenu`'s own rule) — this simply never builds
+    // one.
+    const gearEntries: never[] = []
+    const fullscreen = fullscreenModeFor(panel) === 'navigate'
+      ? {
+        active: false,
+        onToggle: () => navigate(dedicatedTerminalPath(selected.id, panel === 'cli' ? 'assistant' : 'shell')),
+      }
+      : {
+        active: tabFullscreen,
+        onToggle: () => setTabFullscreen(f => !f),
+      }
+    return (
+      <PanelFixedControls
+        lang={pt ? 'pt' : 'en'}
+        panelName={panelName}
+        fullscreen={fullscreen}
+        onMinimize={onMinimize}
+        minimizeLabel={pt ? `Minimizar ${panelName}` : `Minimize ${panelName}`}
+        gearLabel={pt ? `Opções — ${panelName}` : `${panelName} options`}
+        gearEntries={gearEntries}
+      />
+    )
+  }
+
+  /**
    * ONE OF THE TEN FORMER CONTENTS TABS, AS ITS OWN PANEL — the function every mount site (the
    * right slot, and the bottom band when a different one of the ten is docked there) calls, bound
    * to the one tab id it is showing (`ArtifactsAsideProps.activeTab`). Two mounts can exist at
@@ -945,10 +1013,13 @@ export default function SessionsPage() {
    * was its own panel, where switching the internal `tab` state never remounted anything); switching
    * SESSION does reset it, since every per-session cache/effect in `ArtifactsAside` is keyed there.
    */
-  const tabPane = (id: TabPanelId, opts?: { hideCloseButton?: boolean }): ReactNode => selected === undefined ? null : (
+  const tabPane = (
+    id: TabPanelId, opts?: { hideCloseButton?: boolean; headerControls?: ReactNode },
+  ): ReactNode => selected === undefined ? null : (
     <ArtifactsAside
       key={selected.id}
       {...(opts?.hideCloseButton ? { hideCloseButton: true } : {})}
+      {...(opts?.headerControls ? { headerControls: opts.headerControls } : {})}
       sessionId={selected.id}
       activeTab={id}
       // The MCP tab's per-directory scopes are resolved against this; with no directory they are
@@ -993,7 +1064,15 @@ export default function SessionsPage() {
   // minimize there, never merely collapses). On MOBILE there is no `rightSlotBar` at all
   // (`rightSlotBar` itself returns `null` there), so the header's own button stays the only way out.
   const rightTabPane = slotLayout.right !== null && isTabPanelId(slotLayout.right)
-    ? tabPane(slotLayout.right, { hideCloseButton: !isMobile }) : null
+    ? tabPane(slotLayout.right, {
+      hideCloseButton: !isMobile,
+      // THE TRIO, folded into `ArtifactsAside`'s own header row now — see `panelFixedControlsFor`'s
+      // own header for why this used to be `rightSlotBar`'s separate, mostly-empty strip instead.
+      headerControls: panelFixedControlsFor(
+        slotLayout.right, panelTitle(slotLayout.right, pt), () => closeSlotPanel(slotLayout.right!),
+      ),
+    })
+    : null
   const bottomTabPane = slotLayout.bottom !== null && isTabPanelId(slotLayout.bottom)
     ? tabPane(slotLayout.bottom) : null
 
@@ -1002,8 +1081,22 @@ export default function SessionsPage() {
    * nao ta com a opcao de abrir no componente inferior"). One figure, one poll, one close action —
    * never a second implementation forked for the band, exactly as `artifactsPane` above is shared
    * between the right slot and (below) the bottom one.
+   *
+   * THE RIGHT SLOT GETS ITS OWN SEPARATE ELEMENT NOW (`hardwarePaneRightEl`, below this one) rather
+   * than reusing this one — the two placements need different props (`hideCloseButton`/`controls`
+   * for the merged single-header-row right slot; neither for the bottom band, whose own
+   * `SimpleDockedBand` bar already draws the trio in its OWN row, and whose minimize COLLAPSES
+   * rather than closes, so this element's own close button keeps its job there unchanged).
    */
   const hardwarePaneEl = <HardwarePanel lang={pt ? 'pt' : 'en'} onClose={() => closeSlotPanel('hardware')} />
+  const hardwarePaneRightEl = (
+    <HardwarePanel
+      lang={pt ? 'pt' : 'en'}
+      onClose={() => closeSlotPanel('hardware')}
+      hideCloseButton={!isMobile}
+      controls={panelFixedControlsFor('hardware', pt ? 'Hardware' : 'Hardware', () => closeSlotPanel('hardware'))}
+    />
+  )
 
   /**
    * THE RIGHT SLOT'S OWN SWITCHER (design §1.3) used to draw the picker tabs — `Conteúdo · Studio ·
@@ -1059,28 +1152,67 @@ export default function SessionsPage() {
     color: 'var(--text-secondary)', cursor: 'pointer',
   }
   /**
-   * THE MOBILE PANEL MENU (spec §8: "No rail at 390px. The fourteen panels stay reachable through
-   * the existing mobile panel menu"). Before the rail this offered three entries — Conteúdo/Studio/
-   * Hardware — because `contents` covered the other ten under one button with its own internal
-   * strip. That strip is gone everywhere now, so this switcher is what replaces it on a viewport
-   * with no rail to replace it WITH: every panel but `cli`/`shell` (which keep the session panel's
-   * own self-contained toggle, untouched by this pass) gets its own entry here, built from the same
-   * shared `panelMeta.ts`/`panelIcons.tsx` tables the rail itself reads.
+   * THE MOBILE PANEL MENU (the mobile pass's own item 2: "the rail has no place at 390px — the
+   * panels are reached through the existing mobile panel menu, make sure ALL fourteen are reachable
+   * there, each with its own title and icon").
+   * Before the rail this offered three entries — Conteúdo/Studio/Hardware — because `contents`
+   * covered the other ten under one button with its own internal strip. That strip is gone
+   * everywhere now, so this switcher is what replaces it on a viewport with no rail to replace it
+   * WITH — built from the same shared `panelMeta.ts`/`panelIcons.tsx` tables the rail itself reads,
+   * so a title or icon can never read differently on the two surfaces.
+   *
+   * ALL FOURTEEN, `cli`/`shell` INCLUDED — they used to be left out on the (correct, at the time)
+   * reasoning that the session panel's own `ShellBand` already offers them at the foot of the
+   * screen. But that is a SEPARATE control answering a separate question ("what is docked below the
+   * conversation right now"), and `panelIcons.tsx`'s own header already names this exact switcher
+   * as one of the three readers `cli`/`shell` carry a `PANEL_META` entry FOR — the omission was the
+   * bug, not the design. Opening either one here goes through the very same `openSlotPanel(id)`
+   * every other tab uses: `cli`/`shell` default to `bottom` placement, so picking one just makes
+   * `ShellBand` show THAT pane and ensures the band is open (exactly what tapping its own embedded
+   * tab does); if either was ever moved to the rail on a wider viewport first, picking it here opens
+   * it as a full-screen overlay instead — the very same `rightIsCli`/`rightIsShell` branch already
+   * used when a desktop reader moves one to the rail. One click handler, both destinations, decided
+   * entirely by the panel's own placement — never a fact this switcher has to know.
+   *
+   * WHICH FOURTEEN ARE OFFERED follows PLACEMENT, not a hardcoded list: `railPanels`/`bottomPanels`
+   * already exclude anything `hidden` (spec's own rule — "a hidden panel must not appear in the
+   * mobile menu either"), so a panel hidden on a wider viewport of this same browser stays hidden
+   * here too, and one moved between rail and bottom on desktop is reachable here exactly the same
+   * either way — "moving" has no separate meaning on a phone with no rail to move BETWEEN, so this
+   * switcher simply shows every panel that is placed anywhere reachable, which is what "moved" comes
+   * down to once the rail itself is gone.
+   *
+   * `on` reads `isPanelShown`, not `slotLayout.right === id` — the old test, correct only for a
+   * rail-placed panel opened into the right slot, went permanently false for a bottom-placed one
+   * (the ordinary case for `cli`/`shell`) even while `ShellBand` was genuinely showing it.
+   *
+   * NO OVERFLOW CONTROL: `flexWrap: 'wrap'` lets the row grow to as many lines as fourteen tiles
+   * need rather than clipping — the rail's own "more" button (spec §4) exists because the RAIL
+   * cannot grow (a fixed-height column, `overflow: hidden`, spec's own rule), while this row sits in
+   * NORMAL FLOW above a column that already scrolls; a control whose only reason to exist is "some
+   * icons do not fit" has nothing to answer here, and porting it would be a button that always says
+   * zero.
    */
+  const gatedMobilePanels = [...railPanels(slotLayout), ...bottomPanels(slotLayout)]
+    .filter(railGateOpen)
+    .filter(id => id !== 'metrics' || sessionMetrics !== undefined)
+  const [mobileHiddenAt, setMobileHiddenAt] = useState<{ x: number; y: number } | null>(null)
   const rightSwitcherMobile = (isMobile && selected) ? (
-    <div role="tablist" aria-label={pt ? 'O que mostrar' : 'What to show'} style={{
-      display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, flexWrap: 'wrap',
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 4, flexShrink: 0,
       padding: '4px 6px', borderBottom: '1px solid var(--border)',
     }}>
-      {([
-        'live', 'gallery', 'skills', 'agents', 'forks', 'workflows', 'mcps', 'prs', 'tasks',
-        'metrics', 'studio', 'hardware',
-      ] as PanelId[])
-        .filter(id => id !== 'studio' || editorEnabled === true)
-        .filter(id => id !== 'hardware' || hardwareOffered)
-        .filter(id => id !== 'metrics' || sessionMetrics !== undefined)
-        .map(id => {
-          const on = slotLayout.right === id
+      <div role="tablist" aria-label={pt ? 'O que mostrar' : 'What to show'} style={{
+        display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', flex: 1, minWidth: 0,
+      }}>
+        {gatedMobilePanels.map(id => {
+          const on = isPanelShown(slotLayout, id)
+          // THE HARDWARE TAB'S OWN RED (addendum item 6, carried to the phone) — the rail's icon
+          // recolors and its tooltip states "sob pressão"/"under pressure" in words; a phone has
+          // neither a rail nor a hover tooltip, so the WORDS move onto the tab's own visible label
+          // instead of being dropped. Never a color-only signal — the same rule the rail's own
+          // tooltip states for itself.
+          const hot = id === 'hardware' && hardwareCritical === true
           return (
             <button
               key={id}
@@ -1091,24 +1223,56 @@ export default function SessionsPage() {
                 display: 'flex', alignItems: 'center', gap: 5,
                 minHeight: 44, padding: '0 14px',
                 borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-                fontSize: 11.5, fontWeight: on ? 700 : 500,
+                fontSize: 11.5, fontWeight: (on || hot) ? 700 : 500,
                 background: on ? 'var(--bg-elevated)' : 'transparent',
-                color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                color: hot ? 'var(--accent-red)' : (on ? 'var(--text-primary)' : 'var(--text-tertiary)'),
               }}
-            >{panelIconFor(id, 12, selected.harness)}{panelTitle(id, pt)}</button>
+            >{panelIconFor(id, 12, selected.harness)}{panelTitle(id, pt)}{hot ? ` — ${pt ? 'sob pressão' : 'under pressure'}` : ''}</button>
           )
         })}
-      <span style={{ flex: 1 }} />
-      {/* CLOSE — a phone has no fixed header to close this from any other way, so this stays the
-          one door out here. Closing the Studio asks first when dirty, through the very `hidePanel`
-          `closeSlotPanel` already calls. */}
-      {rightActivePanel && (
-        <button className="ag-tap-icon"
-          onClick={() => closeSlotPanel(rightActivePanel)}
-          title={pt ? 'Fechar' : 'Close'}
-          aria-label={pt ? 'Fechar' : 'Close'}
-          style={rightSlotIconBtn}
-        ><XIcon size={13} /></button>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+        {/* THE EYE (the mobile pass's own item 2: "a way to see and restore hidden panels on a
+            phone — the same tile list the desktop's eye opens"). Absent while nothing is hidden —
+            same rule as the rail's own config area, a control with one permanently-disabled state
+            trains readers to ignore it. There is no HIDE verb here (drag/right-click/the rail's
+            config area stay desktop-only, the gear covers those verbs there) — this is
+            restore-only, and a panel a reader wants gone on a phone is reachable through the same
+            gear other panels already carry once it is genuinely a bottom/rail occupant. */}
+        {gatedHiddenPanels.length > 0 && (
+          <button
+            type="button"
+            className="ag-tap-icon"
+            aria-haspopup="menu"
+            aria-label={pt ? `${gatedHiddenPanels.length} painéis ocultos` : `${gatedHiddenPanels.length} hidden panels`}
+            title={pt ? `${gatedHiddenPanels.length} ocultos — toque para restaurar` : `${gatedHiddenPanels.length} hidden — tap to restore`}
+            onClick={e => {
+              const r = e.currentTarget.getBoundingClientRect()
+              setMobileHiddenAt(s => (s ? null : { x: r.left, y: r.bottom + 4 }))
+            }}
+            style={{ ...rightSlotIconBtn, color: 'var(--anthropic-orange)' }}
+          ><Eye size={13} /></button>
+        )}
+        {/* CLOSE — a phone has no fixed header to close this from any other way, so this stays the
+            one door out here. Closing the Studio asks first when dirty, through the very `hidePanel`
+            `closeSlotPanel` already calls. */}
+        {rightActivePanel && (
+          <button className="ag-tap-icon"
+            onClick={() => closeSlotPanel(rightActivePanel)}
+            title={pt ? 'Fechar' : 'Close'}
+            aria-label={pt ? 'Fechar' : 'Close'}
+            style={rightSlotIconBtn}
+          ><XIcon size={13} /></button>
+        )}
+      </div>
+      {mobileHiddenAt && (
+        <PanelTileDropdown
+          at={mobileHiddenAt}
+          label={pt ? `${gatedHiddenPanels.length} ocultos` : `${gatedHiddenPanels.length} hidden`}
+          tiles={gatedHiddenPanels.map(id => panelTile(id, pt, selected.harness, pt ? 'Restaurar' : 'Restore'))}
+          onPick={id => revealSlotPanel(id as PanelId)}
+          onClose={() => setMobileHiddenAt(null)}
+        />
       )}
     </div>
   ) : null
@@ -1119,56 +1283,37 @@ export default function SessionsPage() {
    * the four right-slot panels that carry no toolbar of their own, is `PanelFixedControls` — the SAME
    * fixed trio (full screen, minimize, gear) every panel now carries, in the SAME order, through the
    * SAME shared builder (`lib/panelMenu.ts`) `ShellBand`'s own bar and the new bottom bands use, so
-   * this can never disagree with what those say about an identical gesture.
+   * this can never disagree with what those say about an identical gesture. `panelFixedControlsFor`
+   * (this trio, computed above — moved ahead of `tabPane` since that function now needs it to build
+   * `rightTabPane`'s own `headerControls`) is the shared answer; see its own header there for the
+   * "one header row" split this page went through.
    *
-   * The STUDIO is deliberately absent from this list: it already carries this exact trio — its own
-   * gear (move + tree options + close), its own minimize icon, and now its own fixed full-screen
-   * button — inside its OWN toolbar, because that toolbar is what stays visible across the
-   * tree/search/editor views this generic bar would otherwise sit above. Adding a second one here
-   * would be two bars for one panel.
-   *
-   * FULL SCREEN (2026-09-19) is `fullscreenModeFor(panel)`-dependent: `cli`/`shell` NAVIGATE to
-   * their existing dedicated screen (never a toggle — there is nothing to read back as "active"
-   * from here), `contents`/`hardware` toggle the local in-place overlay this page now owns for them.
-   *
-   * Minimizing here is a genuine CLOSE (`panelMenu.ts`'s own `panelMinimizeAction` — `close-right`),
-   * which is SAFE for exactly these four: none holds client-only state a remount could lose (see
-   * that function's own header). The outcome a reader sees is identical to a soft minimize either
-   * way — released from view, restored with one click on the panel bar's own tab.
+   * `cli`/`shell` ALONE — the two right-slot panels with no header of their own for the trio to
+   * fold into. This is now THEIR one header row: the panel's own name on the left (so it is no
+   * longer a controls-only strip — the same "title, then controls, right-aligned" shape every
+   * other panel's own header now carries), `minWidth: 0` plus `textOverflow: ellipsis` on that
+   * span so a long name truncates instead of pushing the trio off the row, and the trio on the
+   * right. `null` (never an empty div) wherever `panelFixedControlsFor` has nothing to draw —
+   * mobile, or no session selected.
    */
   const rightSlotBar = (
     panel: Exclude<PanelId, 'studio'>, panelName: string, onMinimize: () => void,
   ) => {
-    if (isMobile || !selected) return null
-    // NO GEAR (addendum, 2026-09-21): every panel this bar ever draws (`Exclude<..., 'studio'>`) had
-    // exactly ONE gear row — move to the bottom — and that row now lives on the rail ICON'S OWN
-    // right-click menu instead (`PanelRail`'s `onMove`, reachable for the exact same panel since it
-    // is this slot's active occupant). A gear with nothing left to hold is absent, never empty and
-    // present (`BandOverflowMenu`'s own rule) — this simply never builds one.
-    const gearEntries: never[] = []
-    const fullscreen = fullscreenModeFor(panel) === 'navigate'
-      ? {
-        active: false,
-        onToggle: () => navigate(dedicatedTerminalPath(selected.id, panel === 'cli' ? 'assistant' : 'shell')),
-      }
-      : {
-        active: tabFullscreen,
-        onToggle: () => setTabFullscreen(f => !f),
-      }
+    const controls = panelFixedControlsFor(panel, panelName, onMinimize)
+    if (controls === null) return null
     return (
       <div style={{
-        display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 4,
+        display: 'flex', alignItems: 'center', gap: 8, minWidth: 0,
         padding: '6px 8px 0', flexShrink: 0,
       }}>
-        <PanelFixedControls
-          lang={pt ? 'pt' : 'en'}
-          panelName={panelName}
-          fullscreen={fullscreen}
-          onMinimize={onMinimize}
-          minimizeLabel={pt ? `Minimizar ${panelName}` : `Minimize ${panelName}`}
-          gearLabel={pt ? `Opções — ${panelName}` : `${panelName} options`}
-          gearEntries={gearEntries}
-        />
+        <span style={{
+          fontSize: 12, fontWeight: 700, letterSpacing: 0.3, color: 'var(--text-primary)',
+          minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {panelName}
+        </span>
+        <span style={{ flex: 1 }} />
+        {controls}
       </div>
     )
   }
@@ -1230,13 +1375,11 @@ export default function SessionsPage() {
   ) : rightIsHardware ? (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
       {rightSlotHeader}
-      {rightSlotBar('hardware', pt ? 'Hardware' : 'Hardware', () => closeSlotPanel('hardware'))}
-      {hardwarePaneEl}
+      {hardwarePaneRightEl}
     </div>
   ) : slotLayout.right !== null && isTabPanelId(slotLayout.right) ? (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
       {rightSlotHeader}
-      {rightSlotBar(slotLayout.right, panelTitle(slotLayout.right, pt), () => closeSlotPanel(slotLayout.right!))}
       {rightTabPane}
     </div>
   ) : null
@@ -1766,8 +1909,18 @@ export default function SessionsPage() {
     // A session that is on its way owns the whole surface — before the panel case, because
     // `finishing` is the one moment BOTH are true, and before the list, which is the metrics screen
     // this replaced. One rule, both layouts: the loader is the same on a phone.
+    //
+    // THIS SCREEN OWNS THE STATUS-BAR BAND TOO, the same rule every other mobile top-of-screen
+    // in this workspace already follows (the list header, the open-session header, the dedicated
+    // terminal header — all pad `--safe-top`). This one was missed: with nothing but a centered
+    // loader on a dark ground it read as harmless, but a session that takes a moment to start
+    // (a cold harness, a slow host) leaves a reader looking at this screen under the real
+    // status-bar band with no reservation for it at all.
     centre = (
-      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+      <div style={{
+        display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
+        paddingTop: 'var(--safe-top)',
+      }}>
         <SessionCreating
           lang={pt ? 'pt' : 'en'}
           ready={finishing}

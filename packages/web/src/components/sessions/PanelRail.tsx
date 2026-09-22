@@ -145,8 +145,12 @@ export interface PanelRailProps {
 }
 
 /** One tile, shared by the "more" list and the eye's list — the icon, the title, the one-line
- *  description every hover tooltip already shows, so the two surfaces never disagree about either. */
-function panelTile(id: PanelId, pt: boolean, harness: string | undefined, verbLabel?: string): PanelTile {
+ *  description every hover tooltip already shows, so the two surfaces never disagree about either.
+ *  EXPORTED for the MOBILE eye too (`SessionsPage.tsx`'s `rightSwitcherMobile`, the mobile pass's
+ *  own "the same tile list the desktop's eye opens is the obvious form") — a phone has no rail to
+ *  hold this function privately, and a second copy would be the tile reading a hidden panel's
+ *  title/description/icon differently on the two surfaces. */
+export function panelTile(id: PanelId, pt: boolean, harness: string | undefined, verbLabel?: string): PanelTile {
   return {
     id, icon: panelIconFor(id, 18, harness), title: panelTitle(id, pt),
     description: panelDescription(id, pt), ...(verbLabel ? { verbLabel } : {}),

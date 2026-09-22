@@ -175,10 +175,15 @@ test('every Studio entry on this page is gated on that one value', () => {
   // entry and layer (`editorEnabled={editorEnabled}`) is gone with it; these three are what
   // replaced it.
   expect(/\.\.\.\(editorEnabled\s*\n?\s*\?\s*\[studioMenuRow\(/.test(SRC)).toBe(true)
-  // The mobile in-panel switcher (`rightSwitcherMobile`, post-rail: every panel but cli/shell gets
-  // an entry there now) filters `studio` out of its list when the gate is closed, rather than
-  // carrying a `shown:` flag per entry the way the old three-entry array did.
-  expect(has("filter(id => id !== 'studio' || editorEnabled === true)")).toBe(true)
+  // The mobile in-panel switcher (`rightSwitcherMobile`, post-mobile-pass: ALL FOURTEEN panels get
+  // an entry there now, `cli`/`shell` included — see the Mobile pass's own note on why the earlier
+  // exclusion was the bug, not the design) reads `studio`'s gate through `railGateOpen`, the SAME
+  // per-id gate function `gatedRailPanels`/`gatedHiddenPanels` already apply — one gate shared by
+  // the rail, the eye's hidden list AND the mobile switcher now, rather than a fourth ad-hoc filter
+  // chain that could drift from the other three the way the mobile entry once did.
+  expect(has("if (id === 'studio') return editorEnabled === true")).toBe(true)
+  expect(has('const gatedMobilePanels = [...railPanels(slotLayout), ...bottomPanels(slotLayout)]')).toBe(true)
+  expect(has('    .filter(railGateOpen)')).toBe(true)
   expect(has("editorEnabled === true && isPanelShown(slotLayout, 'studio'),")).toBe(true)
 })
 

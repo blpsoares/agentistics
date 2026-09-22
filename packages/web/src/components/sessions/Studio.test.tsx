@@ -19,7 +19,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import {
   agentActivity, applyRootRefresh, clampTreeWidth, closeOutcome, DIVIDER_W,
   dividerKeyDelta, dividerWantedWidth, EDITOR_MIN, EditorStack,
-  Layer, mountedEditors, nextGoTo, NewFileRow, paneHits, resolveTreeCollapsed, resolveTreeShown,
+  Layer, mountedEditors, nextGoTo, NewFileRow, paneHits, resolveEditorShown, resolveTreeCollapsed,
+  resolveTreeShown,
   resolveTreeSide, resolveTreeWidth, searchRequestNeedsExpand, sessionMovedOn, SPLIT_MIN,
   Studio, StudioBody, sameFile,
   studioGearEntries, studioLayout, studioToolbarFit, TabStrip, Toolbar, treeCollapsible, TREE_DEFAULT,
@@ -1093,6 +1094,47 @@ describe('resolveTreeShown — the tree pane, with the fix-wave fix applied', ()
   })
 })
 
+/**
+ * resolveEditorShown — the companion reading, and the exact fix for the fix-wave report this task
+ * shipped: "cliquei pra ocultar a arvore e agora simplesmente se tornou inutil o studio... nao
+ * aparece nada". Before this function existed, `editorShown` was `split ? true : fileOpen` — with
+ * the tree hidden AND no file open (`resolveTreeShown(false, false, true, true) === false`, asserted
+ * above), `fileOpen` is ALSO `false`, so BOTH panes read "not shown": a Studio with nothing on
+ * screen and, because the toolbar used to live inside the tree pane's own `Layer`, no control to
+ * undo it either.
+ */
+describe('resolveEditorShown — exactly one of the two panes is shown, never neither', () => {
+  test('split: the editor is unconditionally on screen, whatever the tree is doing', () => {
+    expect(resolveEditorShown(true, true)).toBe(true)
+    expect(resolveEditorShown(true, false)).toBe(true)
+  })
+
+  test('stacked, tree shown: the editor stays off — the tree is the one pane there is', () => {
+    expect(resolveEditorShown(false, true)).toBe(false)
+  })
+
+  /** THE BUG ITSELF: stacked, tree hidden (minimized with nothing open, or a file open — either
+   *  way `resolveTreeShown` already answers `false`). The editor pane must pick up the slack, or
+   *  this is the "nothing appears" report reproduced by two pure functions instead of a browser.
+   *  Plant: `return split` (drop the `|| !treeShown` half) — this assertion alone catches it. */
+  test('stacked, tree hidden: the editor takes over — the dead-panel fix', () => {
+    expect(resolveEditorShown(false, false)).toBe(true)
+  })
+
+  /** The full chain, exactly as `Studio`'s own render computes it: tree collapsed, nothing open. */
+  test('end to end with resolveTreeShown: hiding the tree with no file open never leaves neither pane shown', () => {
+    const split = false
+    const fileOpen = false
+    const treeCollapsed = true
+    const collapsible = true
+    const treeShown = resolveTreeShown(split, fileOpen, treeCollapsed, collapsible)
+    const editorShown = resolveEditorShown(split, treeShown)
+    expect(treeShown).toBe(false)
+    expect(editorShown).toBe(true)
+    expect(treeShown || editorShown).toBe(true)
+  })
+})
+
 describe('searchRequestNeedsExpand — item 8 must never search inside a pane nobody can see', () => {
   /** Plant: invert the return (`!treeCollapsed`). Both assertions below then read backwards. */
   test('a minimized tree needs expanding; an already-visible one needs nothing', () => {
@@ -1456,5 +1498,85 @@ describe('the split obeys the hiding rule rather than inventing a second one', (
     // ...while the real line survives the stripper untouched.
     expect(stripComments('  <Layer shown={treeShown}>{tree}</Layer>\n'))
       .toContain('<Layer shown={treeShown}>{tree}</Layer>')
+  })
+})
+
+/**
+ * THE DESKTOP TOOLBAR IS A SIBLING OF `StudioBody`, NEVER A CHILD OF THE TREE PANE — fix-wave
+ * review, Critical #1 and its layout sibling ("tudo empilhado em cima da tree, deveriam ficar a
+ * direita"). Before this fix `<Toolbar` (carrying `fixedControls` — full screen/minimize/gear,
+ * including the "Mostrar árvore" row) was rendered INSIDE the `tree` prop passed to `StudioBody`,
+ * gated on `view === 'tree'`: mounted inside `<Layer shown={treeShown}>`, so minimizing the tree
+ * made the ONE control that could undo it `inert` along with the pane it was meant to reopen — the
+ * dead panel — and, in the split, confined to the narrow tree COLUMN rather than the row spanning
+ * the whole Studio, so its trailing controls sat pinned to a 150–500px sliver's own right edge
+ * instead of the panel's.
+ *
+ * Not reachable by rendering `<Studio>` itself (it fetches over the network from its first effect,
+ * which is exactly why no test in this file mounts it — see this file's own header), so the shape
+ * is what is asserted, over comment-free source, the same approach the hiding-rule scan just above
+ * already takes for this identical file.
+ */
+describe('the desktop toolbar is hoisted above StudioBody, not inside the tree pane', () => {
+  const RAW = readFileSync(join(import.meta.dir, 'Studio.tsx'), 'utf8')
+  const CODE = stripComments(RAW)
+
+  test('`Studio` computes `editorShown` through `resolveEditorShown`, never the old `fileOpen`-only formula', () => {
+    expect(CODE).toContain('const editorShown = resolveEditorShown(split, treeShown)')
+    expect(CODE).not.toMatch(/const editorShown = split \? true : fileOpen/)
+  })
+
+  test('a desktop `<Toolbar` call precedes `<StudioBody`, gated on `!isMobile` alone — not on `view`', () => {
+    const desktopGateAt = CODE.indexOf('{!isMobile && (\n        <Toolbar')
+    const studioBodyAt = CODE.indexOf('<StudioBody')
+    expect(desktopGateAt).toBeGreaterThan(-1)
+    expect(studioBodyAt).toBeGreaterThan(-1)
+    expect(desktopGateAt).toBeLessThan(studioBodyAt)
+  })
+
+  test('that hoisted call carries `fixedControls` — the gear, and "Mostrar árvore" inside it', () => {
+    const desktopGateAt = CODE.indexOf('{!isMobile && (\n        <Toolbar')
+    const studioBodyAt = CODE.indexOf('<StudioBody')
+    const hoisted = CODE.slice(desktopGateAt, studioBodyAt)
+    expect(hoisted).toContain('{fixedControls}')
+  })
+
+  test('the ONLY `<Toolbar` left inside the `tree` prop is mobile-only', () => {
+    const treePropAt = CODE.indexOf('tree={<>')
+    const editorPropAt = CODE.indexOf('editor={')
+    expect(treePropAt).toBeGreaterThan(-1)
+    expect(editorPropAt).toBeGreaterThan(treePropAt)
+    const treeProp = CODE.slice(treePropAt, editorPropAt)
+    expect(treeProp.match(/<Toolbar/g)?.length).toBe(1)
+    expect(treeProp).toContain('{isMobile && view === \'tree\' && (')
+  })
+
+  test('mounted.length === 0 draws the empty state INSIDE the editor pane, not a blank region', () => {
+    const editorPropAt = CODE.indexOf('editor={')
+    expect(editorPropAt).toBeGreaterThan(-1)
+    expect(CODE.slice(editorPropAt)).toContain('mounted.length === 0')
+    expect(CODE.slice(editorPropAt)).toContain('<StudioEditorEmptyState')
+  })
+
+  /** Plant: the ORIGINAL shape — `<Toolbar` back inside `tree={<>`, gated on `view === 'tree'` with
+   *  no `isMobile` split at all. The first assertion above (desktop call precedes `StudioBody`)
+   *  would then find NO desktop-gated call at all (`indexOf` returns `-1`), which is exactly the
+   *  dead-panel bug: nothing to hoist means nothing reachable once the tree pane goes `inert`. */
+  test('the scan still catches the original bug if it comes back', () => {
+    const reverted = stripComments([
+      'function Studio() {',
+      '  return (',
+      '    <StudioBody',
+      '      tree={<>',
+      '        {view === \'tree\' && (',
+      '          <Toolbar trailing={<>{fixedControls}</>} />',
+      '        )}',
+      '      </>}',
+      '      editor={<EditorStack />}',
+      '    />',
+      '  )',
+      '}',
+    ].join('\n'))
+    expect(reverted.indexOf('{!isMobile && (\n        <Toolbar')).toBe(-1)
   })
 })
