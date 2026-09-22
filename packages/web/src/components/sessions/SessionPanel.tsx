@@ -886,6 +886,26 @@ function SimpleDockedBand({
   // THE WHOLE BAND IS A DROP TARGET NOW, not just its own tab strip — see `useBandDropTarget`'s own
   // header for the bug this fixes.
   const bandDrop = useBandDropTarget(onBarDrop)
+  /**
+   * AN EMPTY BAND RENDERS NOTHING — the same rule `PanelBarBand` already carries for the relayed
+   * case (that component's own comment: "quando removo todos os itens ele simplesmente deixa essa
+   * porra desse iconezinho feio ai"), missing here. `bottomBandFor` selects THIS band for `panel`
+   * whatever its own gate says — its own doc comment: "whatever panel it is, gated or not" — because
+   * `resolveForGates` only clears a stored `bottom` occupant for the three machine-level `PanelGates`
+   * (`editorEnabled`/`shellEnabled`/`relayed`); `hardware`'s own gate is per-SESSION
+   * (`hardwareOffered`, read at the render layer, never by `resolveForGates` — see that function's
+   * own header) and is therefore never cleared from a stored preference. A browser that once docked
+   * Hardware at the bottom on an ordinary machine and is now looking at a CENTRAL (`hardwareOffered`
+   * always false there) keeps `bottomOccupant === 'hardware'`, `bottomBandFor` still returns this
+   * band, and `panelBarEntries` filters the one entry this band would have shown — leaving the grip,
+   * an empty `PanelBar` and `PanelFixedControls`' own literal `−` (that component's own header:
+   * "ALWAYS THE SAME LITERAL `−`") on screen with nothing docked behind any of them: the exact "lone
+   * orange −" report this closes. Contents' own ten tabs carry no such per-session gate
+   * (`panelBarGateOpen` returns `true` for anything but `studio`/`cli`/`shell`/`hardware`), so this
+   * is reachable only through `hardware` today — kept general, like `PanelBarBand`'s own guard,
+   * because the next per-session-gated panel this band ever hosts would leak the identical way.
+   */
+  if (barEntries.length === 0) return null
   return (
     <div
       ref={bandDrop.ref}

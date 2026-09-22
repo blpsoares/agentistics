@@ -548,6 +548,27 @@ export function resolveTreeShown(split: boolean, fileOpen: boolean, treeCollapse
 }
 
 /**
+ * WHICH PANE THE EDITOR SIDE SHOWS — the companion reading to `resolveTreeShown`, pure for the same
+ * reason (fix-wave review, Critical #1: "cliquei pra ocultar a arvore e agora simplesmente se tornou
+ * inutil o studio... nao aparece nada").
+ *
+ * STACKED, EXACTLY ONE OF THE TWO PANES IS SHOWN — never neither. The previous reading was `fileOpen`
+ * alone, which left a THIRD state unaccounted for: no file open AND the tree minimized (item 9 made
+ * that combination reachable — the collapse now survives past the last closed tab). There,
+ * `resolveTreeShown` already answers `false`, and `fileOpen` is ALSO `false`, so both panes read
+ * "not shown" and `StudioBody` rendered nothing at all — no tree, no editor, and, because the
+ * toolbar used to live INSIDE the tree pane's own `Layer`, no way back either (see `Studio`'s own
+ * render for the toolbar's hoist, the other half of this fix). `!treeShown` covers exactly that
+ * third state: whenever the tree pane has nothing to show, the editor pane is what is left, and its
+ * own `mounted.length === 0` empty state (`StudioEditorEmptyState`) is what actually draws something
+ * into it. In the SPLIT the editor is unconditionally on screen already (`split` short-circuits),
+ * unaffected by any of this — a file is what put the layout into `split` to begin with.
+ */
+export function resolveEditorShown(split: boolean, treeShown: boolean): boolean {
+  return split || !treeShown
+}
+
+/**
  * WHICH SIDE THE TREE SITS ON (UX pass item 10 — "move side bar right", VS Code's own phrase for
  * this). `resolveTreeSide` treats anything but the literal `'right'` as `'left'` — the tree's
  * position since before this option existed, and the safer floor for a value a hand edit or an
@@ -1255,12 +1276,29 @@ export function Studio({
   const collapsible = treeCollapsible(isMobile, split, fileOpen)
   const shownTreeWidth = clampTreeWidth(treeWidth, available)
   const treeShown = resolveTreeShown(split, fileOpen, treeCollapsed, collapsible)
-  const editorShown = split ? true : fileOpen
+  // See `resolveEditorShown`'s own header for the third state this closes.
+  const editorShown = resolveEditorShown(split, treeShown)
   const resize = (want: number) => setTreeWidth(clampTreeWidth(want, available))
   const commit = (want: number) => {
     const w = clampTreeWidth(want, available)
     setTreeWidth(w)
     storeTreeWidth(w)
+  }
+  /**
+   * OPEN SEARCH / OPEN CREATE — shared by both the mobile and the desktop toolbar (see the render
+   * below for why there are two call sites). Both views they open live INSIDE the tree pane's own
+   * content, so either one must also un-collapse the tree exactly as the global search shortcut
+   * already does (`searchRequestNeedsExpand`, above) — a "New file" pressed from the ALWAYS-VISIBLE
+   * desktop toolbar while the tree is minimized must not open a row nobody can see.
+   */
+  const openSearch = () => {
+    setView('search')
+    if (searchRequestNeedsExpand(treeCollapsed)) setTreeCollapsedState(false)
+  }
+  const openCreate = (kind: 'file' | 'dir') => {
+    setView('tree')
+    setCreating({ parentPath: '', kind, name: '', busy: false, error: null })
+    if (searchRequestNeedsExpand(treeCollapsed)) setTreeCollapsedState(false)
   }
 
   /**
@@ -1383,6 +1421,57 @@ export function Studio({
         visit to a file, and a search keeps its query and its results — so a collapse, or a back
         control where there is one, returns you to what you were actually looking at.
       */}
+      {/*
+        THE TOOLBAR IS HOISTED OUT OF THE TREE PANE ON DESKTOP (fix-wave review, Critical #1 and its
+        sibling layout report — "tudo empilhado em cima da tree, deveriam ficar a direita"). It used
+        to be rendered as part of the tree pane's own content (`view === 'tree'`, inside the `tree`
+        prop below), which is exactly what its own header comment already called it — "Studio's own
+        header ROW" — while its ACTUAL position made it neither: mounted inside a `Layer` that goes
+        `inert` the moment the tree is minimized (so the gear carrying "Mostrar árvore" vanished with
+        the very pane it is supposed to bring back — the dead panel), and in the SPLIT confined to
+        the narrow tree COLUMN rather than the row spanning the whole Studio, so its trailing content
+        (the BETA tag, `fixedControls`) sat pinned to the right edge of a 150–500px sliver instead of
+        the panel's own right edge every other panel in this workspace uses.
+
+        Rendering it here, a sibling of `StudioBody` rather than a child of one of its panes, fixes
+        both at once: it is never inside a `Layer`, so it is on screen (and `fixedControls`' gear is
+        reachable) in EVERY arrangement including the one that used to be dead, and it is measured
+        against the FULL Studio width (`toolbarRef`/`toolbarWidth`), not the tree column's — so
+        `studioToolbarFit` needs no change at all, only a wider real-world input.
+
+        `onSearch`/`onNew` still target content that lives INSIDE the tree pane (the search view, the
+        new-file row), so they go through `openSearch`/`openCreate` above rather than the bare
+        setters this used to call directly — either one un-collapses the tree first, exactly as the
+        global search shortcut already does, or a press from this now-always-reachable row would ask
+        for a view nothing on screen shows.
+
+        MOBILE IS DELIBERATELY UNTOUCHED — see the second `<Toolbar>` further down, inside the tree
+        pane's own content, gated on `isMobile` and otherwise byte-for-byte what this used to be. On
+        mobile `treeCollapsible` is always false (see that function's own header), so the dead state
+        this fixes cannot occur there, and this file stays scoped to the desktop half of a bug report
+        that explicitly asked for that scope.
+      */}
+      {!isMobile && (
+        <Toolbar
+          working={agent.working}
+          isMobile={false}
+          lang={lang}
+          onSearch={openSearch}
+          onNew={openCreate}
+          fit={toolbarFit}
+          rootRef={toolbarRef}
+          trailing={<>
+            {toolbarFit.beta !== 'hidden' && (
+              <BetaTag what={pt ? 'O Studio' : 'The Studio'} compact={toolbarFit.beta === 'compact'} />
+            )}
+            {/* THE FIXED TRIO — full screen, minimize (right slot only), gear — see
+                `fixedControls`' own header for the order and for why minimize is absent here at
+                the bottom. NEVER negotiated away by `toolbarFit` — see that function's own
+                header for why. */}
+            {fixedControls}
+          </>}
+        />
+      )}
       <StudioBody
         layout={layout}
         side={treeSide}
@@ -1396,29 +1485,20 @@ export function Studio({
         onCommit={commit}
         onCollapse={() => setTreeCollapsed(true)}
         tree={<>
-          {view === 'tree' && (
+          {/* MOBILE ONLY — desktop's copy of this exact row is hoisted above `StudioBody` now (see
+              that render's own comment). Kept here, unchanged, for the one viewport where the tree
+              pane is never truly hidden while nothing is open (`treeCollapsible` is always false on
+              mobile), so there is no dead state for the hoist to fix and no reason to touch it. */}
+          {isMobile && view === 'tree' && (
             <Toolbar
               working={agent.working}
-              isMobile={isMobile}
+              isMobile
               lang={lang}
-              onSearch={() => setView('search')}
-              onNew={kind => setCreating({ parentPath: '', kind, name: '', busy: false, error: null })}
+              onSearch={openSearch}
+              onNew={openCreate}
               fit={toolbarFit}
               rootRef={toolbarRef}
-              trailing={<>
-                {/* Dropped on mobile outright, exactly as before — the gear itself still carries
-                    "Studio" nowhere special to say, and the panel bar / mobile session menu already
-                    name it. On desktop, `toolbarFit.beta` narrows it further before it is ever
-                    dropped — a caveat is worth losing before the controls being fixed here are. */}
-                {!isMobile && toolbarFit.beta !== 'hidden' && (
-                  <BetaTag what={pt ? 'O Studio' : 'The Studio'} compact={toolbarFit.beta === 'compact'} />
-                )}
-                {/* THE FIXED TRIO — full screen, minimize (right slot only), gear — see
-                    `fixedControls`' own header for the order and for why minimize is absent here at
-                    the bottom. NEVER negotiated away by `toolbarFit` — see that function's own
-                    header for why. */}
-                {fixedControls}
-              </>}
+              trailing={<>{fixedControls}</>}
             />
           )}
 
@@ -1487,20 +1567,33 @@ export function Studio({
           )}
         </>}
         editor={
-          <EditorStack
-            sessionId={sessionId}
-            paths={mounted}
-            keys={mounted.map(p => tabs.find(t => t.path === p)?.id ?? p)}
-            activePath={activePath}
-            autosave={autosave}
-            lang={lang}
-            goTo={goTo}
-            onDirtyChange={(path, dirty) => setTabs(prev => markDirty(prev, path, dirty))}
-            harness={harness}
-            composerMounted={composerMounted}
-            onMention={onMention}
-            onOpenPath={path => openFile(path)}
-          />
+          <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0, display: 'flex' }}>
+            <EditorStack
+              sessionId={sessionId}
+              paths={mounted}
+              keys={mounted.map(p => tabs.find(t => t.path === p)?.id ?? p)}
+              activePath={activePath}
+              autosave={autosave}
+              lang={lang}
+              goTo={goTo}
+              onDirtyChange={(path, dirty) => setTabs(prev => markDirty(prev, path, dirty))}
+              harness={harness}
+              composerMounted={composerMounted}
+              onMention={onMention}
+              onOpenPath={path => openFile(path)}
+            />
+            {/* NOTHING IS OPEN — this is the state the hoisted toolbar above exists to make
+                recoverable, drawn rather than left blank (fix-wave review, Critical #1: "pick one,
+                state the reason"). Hiding the tree with no file open is left ALLOWED — refusing it
+                would take away a legitimate "minimal chrome" preference for a reader who has nothing
+                open yet and wants the toolbar/gear alone — so this is the other half of that choice:
+                an editor pane that says what happened and how to get a file into it, instead of the
+                blank region the dead panel used to leave. It costs `mounted.length === 0` to compute,
+                which is already read a few lines above for `EditorStack`'s own props. */}
+            {mounted.length === 0 && (
+              <StudioEditorEmptyState lang={lang} onShowTree={() => setTreeCollapsed(false)} />
+            )}
+          </div>
         }
       />
 
@@ -2035,6 +2128,53 @@ export function EditorStack({
           </Layer>
         )
       })}
+    </div>
+  )
+}
+
+/**
+ * StudioEditorEmptyState — nothing is open (fix-wave review, Critical #1). Drawn over the editor
+ * pane whenever `mounted.length === 0`, which now includes the state that used to be a dead panel:
+ * the tree minimized with no file open, where `editorShown` (above) makes this pane the one thing on
+ * screen instead of neither.
+ *
+ * IT NAMES THE WAY BACK RATHER THAN ONLY POINTING AT IT — the toolbar's own gear ("Mostrar árvore")
+ * is already reachable in every arrangement after the hoist above, so this button is a SECOND route
+ * to the exact same `setTreeCollapsed(false)` call, offered here for discoverability (a reader who
+ * has never opened the gear should not have to) rather than as a competing implementation — there is
+ * still exactly one ACTION, `treeCollapsed -> false`, only two places a reader can trigger it from,
+ * the same relationship the tab strip's own "back to tree" arrow already has with this same toggle.
+ *
+ * `aria-hidden` on the watermark only — the sentence and the button are real content, not decoration.
+ */
+function StudioEditorEmptyState({ lang, onShowTree }: { lang: 'pt' | 'en'; onShowTree: () => void }) {
+  const pt = lang === 'pt'
+  return (
+    <div style={{
+      position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24, textAlign: 'center',
+    }}>
+      <Watermark />
+      <p style={{
+        position: 'relative', margin: 0, fontSize: 12.5, lineHeight: 1.5,
+        color: 'var(--text-tertiary)', maxWidth: 280,
+      }}>
+        {pt ? 'Nenhum arquivo aberto.' : 'No file open.'}
+      </p>
+      <button
+        type="button"
+        className="ag-tap-icon"
+        onClick={onShowTree}
+        style={{
+          position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 6,
+          padding: '6px 12px', borderRadius: 7, border: '1px solid var(--border-subtle)',
+          background: 'var(--bg-elevated)', color: 'var(--text-secondary)', cursor: 'pointer',
+          fontFamily: 'inherit', fontSize: 12,
+        }}
+      >
+        <PanelLeftOpen size={13} />
+        {pt ? 'Mostrar árvore' : 'Show tree'}
+      </button>
     </div>
   )
 }
