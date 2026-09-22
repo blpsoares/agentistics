@@ -340,6 +340,33 @@ jobs:
           git tag "$TAG"
           git push origin main "$TAG"
 
+      # CARRY THE BUMP BACK TO `dev`. The step above commits the new version on `main` and nothing
+      # ever brought it home, so `dev`'s own `package.json` stayed at whatever it said the last time
+      # a bump reached it — 2.35.1, while `main` shipped 2.48.1, with 34 bump commits between them.
+      # A build from `dev` serves the right CODE and stamps a version months old, so `/api/version`
+      # reads as an old release: measured on this machine, a shipped feature was reported missing
+      # four separate times because that number was the only evidence anybody had.
+      #
+      # A merge, not a cherry-pick: `main` receives nothing but merges of `dev` plus these bump
+      # commits, so merging it into `dev` carries the bumps and nothing else. A CONFLICT is left
+      # alone and announced — the release itself already succeeded, and a workflow that force-pushes
+      # its way into a branch people are committing to is worse than a version number that lags.
+      - name: Carry the version bump back to dev
+        if: github.ref == 'refs/heads/main' && steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git fetch origin dev
+          git checkout -B dev origin/dev
+          if git merge --no-edit main; then
+            git push origin dev
+            echo "▶ carried ${{ steps.version.outputs.next }} back to dev"
+          else
+            git merge --abort
+            echo "::warning::could not merge main into dev — dev keeps its old version number until somebody merges it by hand"
+          fi
+          git checkout main
+
       # The VS Code extension, as an installable file on the release.
       #
       # It is how somebody without a marketplace account installs it:
