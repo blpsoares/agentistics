@@ -69,9 +69,9 @@ export function setRailOpen(id: string, open: boolean): void {
 }
 
 /** What the kanban's rows are grouped by. `none` is one lane holding everything. */
-export type LaneKey = 'none' | 'repo' | 'assignee' | 'harness' | 'priority'
+export type LaneKey = 'none' | 'repo' | 'harness' | 'priority'
 
-export const LANE_KEYS: readonly LaneKey[] = ['none', 'repo', 'assignee', 'harness', 'priority']
+export const LANE_KEYS: readonly LaneKey[] = ['none', 'repo', 'harness', 'priority']
 
 const isLane = (v: unknown): v is LaneKey => LANE_KEYS.includes(v as LaneKey)
 

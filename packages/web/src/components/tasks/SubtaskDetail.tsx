@@ -35,14 +35,13 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { sessionPath } from '../../lib/sessionRoute'
-import { NA, field, fmtInt, microLabel, surface } from './board'
+import { NA, fmtInt, fmtStamp, microLabel, surface } from './board'
 import { boardCopy, type Lang } from './copy'
 import { RailSection } from './RailSection'
 import { StatusChip } from './StatusChip'
 import { TaskProgressBar } from './TaskProgressBar'
 import { subtaskSessions } from './SubtaskSessions'
 import { SessionPicker } from './SessionPicker'
-import { DatePicker } from '../DatePicker'
 import { CommentsTab, Rollup, Stat } from './DeliveryDetail'
 import { subtaskRollupOf, subtaskStatsOf } from './subtaskRollup'
 import { isGroupSubtask } from './subtaskGroups'
@@ -72,7 +71,7 @@ export function SubtaskDetail(p: SubtaskDetailProps) {
   const { statuses } = useTaskStatuses()
 
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); await fn(); await p.reload(); setBusy(false) }
-  const patch = (changes: Partial<Pick<Subtask, 'status' | 'assignee' | 'dueDate' | 'startDate'>>) =>
+  const patch = (changes: Partial<Pick<Subtask, 'status'>>) =>
     run(() => patchSubtask(p.taskId, p.subtask.id, changes))
 
   const rollup = subtaskRollupOf(p.detail.subtaskRollups, p.subtask)
@@ -109,37 +108,28 @@ export function SubtaskDetail(p: SubtaskDetailProps) {
               onPick={st => void patch({ status: st as TaskStatus })}
             />
           </div>
-          <div style={{ flex: '1 1 120px', display: 'grid', gap: 5, minWidth: 0 }}>
-            <span style={{ ...microLabel, fontSize: 9 }}>{copy.owner}</span>
-            <input
-              defaultValue={p.subtask.assignee ?? ''} placeholder="—"
-              onBlur={e => {
-                if (e.target.value !== (p.subtask.assignee ?? '')) void patch({ assignee: e.target.value })
-              }}
-              style={field(isMobile)}
-            />
-          </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {([
-            ['Start', copy.start, p.subtask.startDate ?? ''],
-            ['Due', copy.due, p.subtask.dueDate ?? ''],
-          ] as const).map(([key, label, value]) => (
-            <div
-              key={key}
-              style={{
-                flex: '1 1 120px', display: 'flex', alignItems: 'center', ...surface,
-                background: 'var(--bg-elevated)', borderRadius: 7, padding: '1px 4px',
-              }}
-            >
-              <DatePicker
-                value={value} label={label} placeholder="DD/MM/YY" lang={p.lang}
-                {...(key === 'Due' && p.subtask.startDate ? { min: p.subtask.startDate } : {})}
-                onChange={v => void patch(key === 'Start' ? { startDate: v } : { dueDate: v })}
-              />
-            </div>
-          ))}
+        {/*
+         * `startedAt`/`deliveredAt` are SYSTEM facts, never a date somebody typed — see
+         * `Subtask.startedAt`'s own note. Read-only, exactly like the delivery's own PlanCard: no
+         * picker, no owner field, nothing to type.
+         */}
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+          <span style={{ minWidth: 0 }}>
+            <span style={{ ...microLabel, fontSize: 8, display: 'block' }}>{copy.started}</span>
+            <span style={{
+              fontSize: 12,
+              color: p.subtask.startedAt ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+            }}>{fmtStamp(p.subtask.startedAt, p.lang)}</span>
+          </span>
+          <span style={{ minWidth: 0 }}>
+            <span style={{ ...microLabel, fontSize: 8, display: 'block' }}>{copy.completed}</span>
+            <span style={{
+              fontSize: 12,
+              color: p.subtask.deliveredAt ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+            }}>{fmtStamp(p.subtask.deliveredAt, p.lang)}</span>
+          </span>
         </div>
       </div>
 

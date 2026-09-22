@@ -36,7 +36,7 @@ export type BoardStatus = string
  * lives here can never close a loop.
  */
 export type ColumnId =
-  | 'status' | 'priority' | 'assignee' | 'due' | 'claim' | 'progress' | 'attempts' | 'sessions'
+  | 'status' | 'priority' | 'due' | 'claim' | 'progress' | 'attempts' | 'sessions'
   | 'rounds' | 'tokens' | 'cost' | 'harnesses' | 'subtasks' | 'comments' | 'files' | 'links'
   | 'blockedBy' | 'created' | 'updated'
 
@@ -271,6 +271,20 @@ export const fmtInt = (n: number | null | undefined): string =>
 // board came to answer in dollars on a dashboard set to BRL.
 export const fmtBytes = (n: number): string =>
   (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`)
+
+/**
+ * `startedAt`/`deliveredAt` (`Task`/`Subtask`) are SYSTEM facts, not a date somebody typed — so
+ * they are read as a full MOMENT (date and time), never as a bare `yyyy-MM-dd` day. Lives here
+ * rather than on `DeliveryDetail.tsx` specifically so `SubtaskTable.tsx` and `TaskTable.tsx` (both
+ * imported BY `DeliveryDetail.tsx`) can read it too without a circular import — this file imports
+ * nothing local, so a name that lives here can never close a loop (see this file's own header).
+ */
+export function fmtStamp(iso: string | undefined, lang: 'pt' | 'en'): string {
+  if (!iso) return NA
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return NA
+  return d.toLocaleString(lang === 'pt' ? 'pt-BR' : 'en-US', { dateStyle: 'medium', timeStyle: 'short' })
+}
 
 /**
  * Cap a list for display, truthfully: `shown` is what fits, `extra` is what does not — never

@@ -60,12 +60,11 @@ import {
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { ConfirmModal } from '../../pages/settings/primitives'
 import {
-  fmtTokens, liveStatusMap, liveStatusOrder, microLabel, numeric, pill, statusStyle, surface,
-  type BoardStatus,
+  fmtStamp, fmtTokens, liveStatusMap, liveStatusOrder, microLabel, numeric, pill, statusStyle,
+  surface, type BoardStatus,
 } from './board'
 import { SessionPicker } from './SessionPicker'
 import { DoneNeedsSessionDialog } from './DoneNeedsSessionDialog'
-import { DatePicker } from '../DatePicker'
 import { TaskProgressBar } from './TaskProgressBar'
 import { subtaskSessions } from './SubtaskSessions'
 import { SubtaskActionsMenu } from './SubtaskActionsMenu'
@@ -305,8 +304,8 @@ export function SubtaskTable(p: SubtaskTableProps) {
                 convention the old trailing actions column used, and no sort: nothing to order by. */}
             <th style={{ ...microLabel, padding: '6px 9px', fontWeight: 600 }} />
             {([
-              [copy.subtasks, 'title'], ['Status', 'status'], [copy.owner, 'assignee'],
-              [copy.start, 'start'], [copy.due, 'due'], [copy.sessions, 'sessions'],
+              [copy.subtasks, 'title'], ['Status', 'status'],
+              [copy.started, 'started'], [copy.completed, 'completed'], [copy.sessions, 'sessions'],
               [copy.cost, 'cost'], [copy.tokens, 'tokens'],
             ] as Array<[string, SubtaskSortKey]>).map(([h, key]) => (
               <SortTh
@@ -329,7 +328,7 @@ export function SubtaskTable(p: SubtaskTableProps) {
         <tbody>
           {p.subtasks.length === 0 && (
             <tr>
-              <td colSpan={9} style={{ ...cell, fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.55 }}>
+              <td colSpan={8} style={{ ...cell, fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.55 }}>
                 {copy.nothingBrokenOut}
               </td>
             </tr>
@@ -464,28 +463,20 @@ export function SubtaskTable(p: SubtaskTableProps) {
                   onPick={s => void pickStatus(t, s)}
                 />
               </td>
+              {/* `startedAt`/`deliveredAt` are SYSTEM facts, never a date somebody typed — see
+                  `Subtask.startedAt`'s own note. Read-only: no picker, no owner column, nothing to
+                  type. */}
               <td style={{ ...cell, ...tint }}>
-                <input
-                  defaultValue={t.assignee ?? ''} placeholder="—"
-                  onBlur={e => { if (e.target.value !== (t.assignee ?? '')) void p.onPatch(t.id, { assignee: e.target.value }) }}
-                  style={bare}
-                />
-              </td>
-              {/* The dashboard's own picker, not `<input type="date">`: one calendar in the app,
-                  and a control that fits the column instead of overflowing it. The label is empty
-                  because the column heading above already says which date this is. */}
-              <td style={{ ...cell, ...tint }}>
-                <DatePicker
-                  value={t.startDate ?? ''} label="" placeholder="—" lang={p.lang}
-                  onChange={v => void p.onPatch(t.id, { startDate: v })}
-                />
+                <span style={{
+                  fontSize: 12,
+                  color: t.startedAt ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+                }}>{fmtStamp(t.startedAt, p.lang)}</span>
               </td>
               <td style={{ ...cell, ...tint }}>
-                <DatePicker
-                  value={t.dueDate ?? ''} label="" placeholder="—" lang={p.lang}
-                  min={t.startDate || undefined}
-                  onChange={v => void p.onPatch(t.id, { dueDate: v })}
-                />
+                <span style={{
+                  fontSize: 12,
+                  color: t.deliveredAt ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+                }}>{fmtStamp(t.deliveredAt, p.lang)}</span>
               </td>
               <td style={{ ...cell, minWidth: 190, ...tint }}>
                 {/* A MEMBER can never hold a session (`subtask_in_group`, refused server-side) —
@@ -535,7 +526,6 @@ export function SubtaskTable(p: SubtaskTableProps) {
               <td style={cell} />
               <td style={cell} />
               <td style={cell} />
-              <td style={cell} />
               <td style={{ ...cell, minWidth: 190 }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', minWidth: 0 }}>
                   {directSessions.map(s => (
@@ -561,7 +551,7 @@ export function SubtaskTable(p: SubtaskTableProps) {
             </tr>
           )}
           <tr>
-            <td colSpan={9} style={{ ...cell }}>
+            <td colSpan={8} style={{ ...cell }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, width: '100%' }}>
                 <Plus size={12} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
                 <input
