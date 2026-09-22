@@ -37,7 +37,7 @@
  * for the same refusal.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { asideCache, asideKey } from '../../lib/asideCache'
 import { focusMissNotice, isFocusedRow, rowsCarry, ROW_FLASH } from '../../lib/noteFocus'
 import { BarChart3, Bot, Brain, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Eye, FileEdit, Loader, PanelRightClose, Pencil, Plug, Plus, Send, Sparkles, Terminal, Trash2, Workflow } from 'lucide-react'
@@ -206,6 +206,17 @@ export interface ArtifactsAsideProps {
    */
   hideCloseButton?: boolean
   /**
+   * THE PANEL'S OWN FULL-SCREEN/MINIMIZE/GEAR TRIO, folded into THIS header's own row instead of a
+   * second, separate strip above it (owner: "todos os componentes desse aside devem ser assim...
+   * nao deve ter um header vazio, os icones de maximizar, minimizar etc devem ficar na mesma linha
+   * do titulo"). `SessionsPage`'s old `rightSlotBar` used to render `PanelFixedControls` in its own
+   * row, ABOVE this header — two rows for one panel, the top one carrying nothing else, which is
+   * the "empty header" this prop removes. Absent draws no trailing controls at all — the caller
+   * decides whether any exist for this placement (the right slot always does; a mount with no such
+   * controls, or none built for this render, simply passes nothing).
+   */
+  headerControls?: ReactNode
+  /**
    * The conversation's turns, for the LIVE tab.
    *
    * The feed is derived from the same turns the chat renders, so it can never claim something the
@@ -231,7 +242,7 @@ export interface ArtifactsAsideProps {
 
 export function ArtifactsAside({
   sessionId, cwd, lang, artifacts, loading, unavailable, older, turns, onClose,
-  unlistedWrites, outsideNote, hideCloseButton,
+  unlistedWrites, outsideNote, hideCloseButton, headerControls,
   activeTab, focusRequest, session, onOpenTask, onTaskChanged, metrics,
 }: ArtifactsAsideProps) {
   const pt = lang === 'pt'
@@ -506,26 +517,34 @@ export function ArtifactsAside({
 
   const header = (
     <header style={{
-      display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0,
+      display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0, minWidth: 0,
       padding: '10px 12px', borderBottom: '1px solid var(--border)',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.3, color: 'var(--text-primary)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        {/* THE TITLE TRUNCATES, THE CONTROLS NEVER MOVE (owner: "um painel cujo título é longo não
+            deve empurrar os controles para fora da linha") — `minWidth: 0` on this whole row plus
+            on the title span itself is what lets `text-overflow: ellipsis` engage instead of the
+            span refusing to shrink below its own content width, the ordinary flexbox trap. */}
+        <span style={{
+          fontSize: 12, fontWeight: 700, letterSpacing: 0.3, color: 'var(--text-primary)',
+          minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
           {panelTitle(activeTab, pt)}
         </span>
         {artifacts.length > 0 && (
-          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+          <span style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>
             {artifacts.length} {pt ? (artifacts.length === 1 ? 'arquivo' : 'arquivos') : (artifacts.length === 1 ? 'file' : 'files')}
             {created > 0 && ` · ${created} ${pt ? (created === 1 ? 'novo' : 'novos') : 'new'}`}
           </span>
         )}
+        <span style={{ flex: 1 }} />
         {!hideCloseButton && (
           <button
             onClick={onClose}
             aria-label={pt ? 'Fechar artefatos' : 'Close artifacts'}
             title={pt ? 'Fechar o painel' : 'Close the panel'}
             style={{
-              marginLeft: 'auto', display: 'flex', width: 26, height: 26, borderRadius: 7,
+              display: 'flex', width: 26, height: 26, borderRadius: 7, flexShrink: 0,
               alignItems: 'center', justifyContent: 'center', border: 'none',
               background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer',
             }}
@@ -533,6 +552,10 @@ export function ArtifactsAside({
             <PanelRightClose size={15} />
           </button>
         )}
+        {/* THE PANEL'S OWN FULL-SCREEN/MINIMIZE/GEAR — see `ArtifactsAsideProps.headerControls`'s
+            own header for why this used to be a second, separate (and mostly empty) row above this
+            one instead of the trailing end of it. */}
+        {headerControls}
       </div>
       {shortfall.map(line => (
         <p key={line} style={{
