@@ -133,3 +133,27 @@ export const clusterBarStyle = (clustered: boolean): CSSProperties =>
  *  group read as one container instead of a caption repeated on each member. */
 export const clusterTintStyle = (clustered: boolean): CSSProperties =>
   (clustered ? { background: CLUSTER_TINT } : {})
+
+/**
+ * Which of `clusterSubtaskRows`' own rows are actually DRAWN, given which groups the reader has
+ * chosen to open — product feedback, 2026-09-21: with 30+ done subtasks spread across several
+ * groups, every member always visible turned the list into a wall of struck-through rows nobody
+ * could scan. A group therefore reads as an ACCORDION, collapsed by default (the caller's `Set` of
+ * expanded ids starts empty), the same interaction this board already uses one level up for a
+ * task's own subtask expansion (`TaskTable`'s `expanded` state + chevron).
+ *
+ * Expand/collapse is UI STATE, never something this pure layout function owns — it is handed in as
+ * a set so the same clustered rows can be filtered without recomputing the cluster or touching
+ * `p.subtasks`. Only a genuinely CLUSTERED member (`depth === 1`, which `clusterSubtaskRows` only
+ * ever assigns to a member sitting under a non-empty group) is foldable; a header, a loose subtask
+ * and an ORPHANED member (no cluster to fold into) are always `depth === 0` and always show — the
+ * same rows `clustered` already marks as having nothing to draw a bar down to.
+ */
+export function visibleClusterRows(
+  rows: readonly SubtaskClusterRow[],
+  expandedGroupIds: ReadonlySet<string>,
+): SubtaskClusterRow[] {
+  return rows.filter(r => (
+    r.depth === 0 || (r.subtask.parentGroupId !== undefined && expandedGroupIds.has(r.subtask.parentGroupId))
+  ))
+}
