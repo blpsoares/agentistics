@@ -54,7 +54,8 @@ import { boardCopy, statusLabel, type Lang } from './copy'
 import { subtaskSessions } from './SubtaskSessions'
 import { SubtaskActionsMenu } from './SubtaskActionsMenu'
 import {
-  clusterBarStyle, clusterSubtaskRows, clusterTintStyle, groupOf, isGroupMember, isGroupSubtask,
+  clusterBarStyle, clusterSubtaskRows, clusterTintStyle, groupMembers, groupOf, isGroupMember,
+  isGroupSubtask, visibleClusterRows,
 } from './subtaskGroups'
 import { subtaskRollupOf } from './subtaskRollup'
 import { PickerMenu } from './PickerMenu'
@@ -327,6 +328,27 @@ function SubtaskRows({
     color: 'var(--text-secondary)', fontSize: 12, fontFamily: 'inherit',
     minHeight: isMobile ? 44 : undefined,
   }
+  /**
+   * Which GROUPS are showing their members — collapsed by default, mirroring `SubtaskTable`'s own
+   * accordion state exactly (see its doc comment). Local to this component, which is deliberate
+   * rather than incidental: `SubtaskRows` only mounts while its task row is expanded (the caller
+   * renders it behind `{open && (…)}`), so folding the task closed and reopening it already resets
+   * every group back to collapsed — one state reset instead of two.
+   */
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
+  const toggleGroup = (groupId: string) => setExpandedGroups(prev => {
+    const next = new Set(prev)
+    next.has(groupId) ? next.delete(groupId) : next.add(groupId)
+    return next
+  })
+  // Icon-only, small on purpose — `.ag-tap-icon` (index.css) projects the mobile 44px hit area
+  // around it without painting a 44x44 box in a table cell that has no room to spare. Same rule
+  // `SubtaskActionsMenu`'s gear trigger and `SubtaskTable`'s own version of this chevron follow.
+  const chevronBtn: React.CSSProperties = {
+    background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+    flexShrink: 0, minWidth: 18, minHeight: 18,
+  }
   // 1 (leading) + 6 named cells + filler must equal cols + 2 — the task row above is
   // [leading][title][cols…], and the leading column is there in BOTH modes (Select only adds the
   // checkbox INSIDE it), so this arithmetic does not depend on whether rows are being picked.
@@ -337,12 +359,16 @@ function SubtaskRows({
   // tint, rather than a caption repeated on every member row.
   return (
     <>
-      {clusterSubtaskRows(subtasks).map(({ subtask: t, depth, clustered }) => {
+      {visibleClusterRows(clusterSubtaskRows(subtasks), expandedGroups).map(({ subtask: t, depth, clustered }) => {
         const isMember = isGroupMember(t)
         const isGroup = isGroupSubtask(t)
         const view = subtaskRollups.find(v => v.id === t.id)
         const parentGroup = isMember && !clustered ? groupOf(t, subtasks) : undefined
         const tint = clusterTintStyle(clustered)
+        // A non-empty group's own header — see `SubtaskTable`'s identical reasoning.
+        const isGroupHeader = isGroup && clustered
+        const groupOpen = expandedGroups.has(t.id)
+        const memberCount = isGroupHeader ? groupMembers(t.id, subtasks).length : 0
         return (
         <tr key={t.id} style={{ background: clustered ? undefined : 'var(--bg-surface)' }}>
           {/* The leading "checkbox" slot every row above this one uses for batch-select — a subtask
@@ -369,19 +395,45 @@ function SubtaskRows({
               nesting that replaces the old "parte do grupo" caption for every properly clustered
               row. */}
           <td style={{ padding: cellPad, paddingLeft: indent + (depth === 1 ? 20 : 0), ...tint }}>
-            <input
-              value={t.title}
-              onChange={e => void onPatch(t.id, { title: e.target.value })}
-              style={{
-                ...bare,
-                color: t.done ? 'var(--text-tertiary)' : 'var(--text-secondary)', fontSize: 12.5,
-                textDecoration: t.done ? 'line-through' : 'none',
-                // A GROUP's header reads as a container's title, not another row — the weight is
-                // what makes it read as a HEADING when the row is scanned rather than compared
-                // cell-by-cell against its neighbours.
-                fontWeight: isGroup && clustered ? 700 : undefined,
-              }}
-            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              {/* Same accordion toggle as `SubtaskTable`'s inline view — collapsed by default. */}
+              {isGroupHeader && (
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(t.id)}
+                  aria-expanded={groupOpen}
+                  aria-label={groupOpen
+                    ? (lang === 'pt' ? `Recolher grupo: ${t.title}` : `Collapse group: ${t.title}`)
+                    : (lang === 'pt' ? `Expandir grupo: ${t.title}` : `Expand group: ${t.title}`)}
+                  title={groupOpen
+                    ? (lang === 'pt' ? 'Recolher grupo' : 'Collapse group')
+                    : (lang === 'pt' ? 'Expandir grupo' : 'Expand group')}
+                  className="ag-tap-icon"
+                  style={chevronBtn}
+                >{groupOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</button>
+              )}
+              <input
+                value={t.title}
+                onChange={e => void onPatch(t.id, { title: e.target.value })}
+                style={{
+                  ...bare, flex: 1, minWidth: 0,
+                  color: t.done ? 'var(--text-tertiary)' : 'var(--text-secondary)', fontSize: 12.5,
+                  textDecoration: t.done ? 'line-through' : 'none',
+                  // A GROUP's header reads as a container's title, not another row — the weight is
+                  // what makes it read as a HEADING when the row is scanned rather than compared
+                  // cell-by-cell against its neighbours.
+                  fontWeight: isGroup && clustered ? 700 : undefined,
+                }}
+              />
+            </div>
+            {/* Collapsed, say how many members are folded — the same summary `SubtaskTable` shows. */}
+            {isGroupHeader && !groupOpen && (
+              <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                {memberCount} {memberCount === 1
+                  ? (lang === 'pt' ? 'subtarefa' : 'subtask')
+                  : (lang === 'pt' ? 'subtarefas' : 'subtasks')}
+              </div>
+            )}
             {isGroup && view?.groupProgress && (
               <TaskProgressBar done={view.groupProgress.done} total={view.groupProgress.total} height={3} />
             )}

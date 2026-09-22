@@ -53,7 +53,7 @@
  */
 
 import { useState } from 'react'
-import { Plus } from 'lucide-react'
+import { ChevronDown, ChevronRight, Plus } from 'lucide-react'
 import {
   cycleSort, type StagedSessionDraft, type SubtaskSortKey, type SubtaskSortSpec, type TaskStatusDef,
 } from '@agentistics/core'
@@ -70,7 +70,8 @@ import { TaskProgressBar } from './TaskProgressBar'
 import { subtaskSessions } from './SubtaskSessions'
 import { SubtaskActionsMenu } from './SubtaskActionsMenu'
 import {
-  clusterBarStyle, clusterSubtaskRows, clusterTintStyle, groupOf, isGroupMember, isGroupSubtask,
+  clusterBarStyle, clusterSubtaskRows, clusterTintStyle, groupMembers, groupOf, isGroupMember,
+  isGroupSubtask, visibleClusterRows,
 } from './subtaskGroups'
 import { SessionRef } from './SessionRef'
 import { SortTh } from './SortHeader'
@@ -231,6 +232,27 @@ export function SubtaskTable(p: SubtaskTableProps) {
    *  requires opening `StagedSessionCompose` first. */
   const [deleting, setDeleting] = useState<Subtask | null>(null)
   const [stagedError, setStagedError] = useState<string | null>(null)
+  /**
+   * Which GROUPS are showing their members (product feedback, 2026-09-21: "por padrão sempre vem
+   * minimizado os grupos e o usuário escolhe expandir") — a group with at least one member starts
+   * COLLAPSED, the same accordion `TaskTable`'s own task-row expansion already uses one level up.
+   * Never persisted and never seeded from anything remembered: the same "a mode nobody chose must
+   * not still be armed tomorrow" reasoning this board already applies to Select mode — a fresh
+   * mount starts every group closed again.
+   */
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
+  const toggleGroup = (groupId: string) => setExpandedGroups(prev => {
+    const next = new Set(prev)
+    next.has(groupId) ? next.delete(groupId) : next.add(groupId)
+    return next
+  })
+  // Icon-only, small on purpose — `.ag-tap-icon` (index.css) projects the mobile 44px hit area
+  // around it without painting a 44x44 box in a table cell that has no room to spare.
+  const chevronBtn: React.CSSProperties = {
+    background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+    flexShrink: 0, minWidth: 18, minHeight: 18,
+  }
   const staged = boardCopy(p.lang).staged
   const L = boardCopy(p.lang).list
   /**
@@ -312,7 +334,7 @@ export function SubtaskTable(p: SubtaskTableProps) {
               </td>
             </tr>
           )}
-          {clusterSubtaskRows(ordered).map(({ subtask: t, depth, clustered }) => {
+          {visibleClusterRows(clusterSubtaskRows(ordered), expandedGroups).map(({ subtask: t, depth, clustered }) => {
             // A GROUP MEMBER (§F.1) never carries a session of its own — refused server-side
             // (`subtask_in_group`) — so it has no rollup bucket at all (`subtaskViews` excludes it
             // outright). `r` is therefore `undefined` for it by construction, which already renders
@@ -329,6 +351,11 @@ export function SubtaskTable(p: SubtaskTableProps) {
             // bar/tint below already say where it belongs; the caption would just repeat that.
             const parentGroup = isMember && !clustered ? groupOf(t, p.subtasks) : undefined
             const tint = clusterTintStyle(clustered)
+            // A non-empty group's own header — `clustered` is only ever true on a group row when it
+            // HAS members (see `clusterSubtaskRows`), so this is exactly the accordion toggle.
+            const isGroupHeader = isGroup && clustered
+            const groupOpen = expandedGroups.has(t.id)
+            const memberCount = isGroupHeader ? groupMembers(t.id, p.subtasks).length : 0
             return (
             <tr key={t.id}>
               {/* ONE gear, leading the row — every action that used to be a scattered icon-only
@@ -359,23 +386,55 @@ export function SubtaskTable(p: SubtaskTableProps) {
               {/* A MEMBER is indented one level under its group's header — the visual nesting that
                   replaces the old "parte do grupo" caption for every properly clustered row. */}
               <td style={{ ...cell, minWidth: 180, ...tint, ...(depth === 1 ? { paddingLeft: 30 } : {}) }}>
-                <input
-                  defaultValue={t.title}
-                  onBlur={e => { if (e.target.value.trim() !== t.title) void p.onPatch(t.id, { title: e.target.value }) }}
-                  style={{
-                    ...bare,
-                    color: t.done ? 'var(--text-tertiary)' : 'var(--text-primary)',
-                    textDecoration: t.done ? 'line-through' : 'none',
-                    fontSize: 12.5,
-                    // A GROUP's header reads as a container's title, not another row — the bar and
-                    // tint carry most of it, but the weight is what makes it read as a HEADING when
-                    // the row is scanned rather than compared cell-by-cell against its neighbours.
-                    fontWeight: isGroup && clustered ? 700 : undefined,
-                  }}
-                />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  {/* The accordion toggle — collapsed by default (product feedback, 2026-09-21),
+                      the same chevron interaction `TaskTable`'s own task-row expansion already
+                      uses one level up. A separate button, never the title input itself: the title
+                      is an editable field and clicking into it must focus it, not fold the group. */}
+                  {isGroupHeader && (
+                    <button
+                      type="button"
+                      onClick={() => toggleGroup(t.id)}
+                      aria-expanded={groupOpen}
+                      aria-label={groupOpen
+                        ? (p.lang === 'pt' ? `Recolher grupo: ${t.title}` : `Collapse group: ${t.title}`)
+                        : (p.lang === 'pt' ? `Expandir grupo: ${t.title}` : `Expand group: ${t.title}`)}
+                      title={groupOpen
+                        ? (p.lang === 'pt' ? 'Recolher grupo' : 'Collapse group')
+                        : (p.lang === 'pt' ? 'Expandir grupo' : 'Expand group')}
+                      className="ag-tap-icon"
+                      style={chevronBtn}
+                    >{groupOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</button>
+                  )}
+                  <input
+                    defaultValue={t.title}
+                    onBlur={e => { if (e.target.value.trim() !== t.title) void p.onPatch(t.id, { title: e.target.value }) }}
+                    style={{
+                      ...bare, flex: 1, minWidth: 0,
+                      color: t.done ? 'var(--text-tertiary)' : 'var(--text-primary)',
+                      textDecoration: t.done ? 'line-through' : 'none',
+                      fontSize: 12.5,
+                      // A GROUP's header reads as a container's title, not another row — the bar and
+                      // tint carry most of it, but the weight is what makes it read as a HEADING when
+                      // the row is scanned rather than compared cell-by-cell against its neighbours.
+                      fontWeight: isGroup && clustered ? 700 : undefined,
+                    }}
+                  />
+                </div>
+                {/* Collapsed, the header still says how many members are folded away — the whole
+                    point of the accordion is scanning many groups without opening each one. Gone
+                    the instant it opens: the members below already say it better. */}
+                {isGroupHeader && !groupOpen && (
+                  <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                    {memberCount} {memberCount === 1
+                      ? (p.lang === 'pt' ? 'subtarefa' : 'subtask')
+                      : (p.lang === 'pt' ? 'subtarefas' : 'subtasks')}
+                  </div>
+                )}
                 {/* A GROUP's own progress, from its members' `status` (§F.1's `groupProgress`) —
                     the same round-down bar the header above draws for the whole delivery, one
-                    hierarchy level down. Absent when the group has no members yet. */}
+                    hierarchy level down. Absent when the group has no members yet. Kept visible
+                    whether the group is open or closed — completion is worth seeing at a glance. */}
                 {isGroup && view?.groupProgress && (
                   <TaskProgressBar done={view.groupProgress.done} total={view.groupProgress.total} height={3} />
                 )}

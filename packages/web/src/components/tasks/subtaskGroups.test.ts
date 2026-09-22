@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test'
 import { sortSubtasks } from '@agentistics/core'
 import {
   clusterSubtaskRows, createGroupCandidates, groupMembers, groupOf, isGroupMember, isGroupSubtask,
-  joinGroupCandidates,
+  joinGroupCandidates, visibleClusterRows,
 } from './subtaskGroups'
 import type { Subtask } from '../../lib/tasks'
 
@@ -124,4 +124,48 @@ test('sorting keeps an orphaned member as a loose row and never drops a row', ()
   const out = clusterSubtaskRows(sortSubtasks(list, { key: 'title', dir: 'desc' }))
   expect(out.map(r => r.subtask.id)).toEqual(['s', 'orphan'])
   expect(out.every(r => !r.clustered)).toBe(true)
+})
+
+// --- visibleClusterRows ----------------------------------------------------------------------
+
+test('visibleClusterRows: a collapsed group (empty expanded set) hides its members', () => {
+  const subtasks = [
+    sub({ id: 'g', isGroup: true }),
+    sub({ id: 'm1', parentGroupId: 'g' }),
+    sub({ id: 'm2', parentGroupId: 'g' }),
+    sub({ id: 'loose' }),
+  ]
+  const out = visibleClusterRows(clusterSubtaskRows(subtasks), new Set())
+  expect(out.map(r => r.subtask.id)).toEqual(['g', 'loose'])
+})
+
+test('visibleClusterRows: an expanded group shows every member, in order', () => {
+  const subtasks = [
+    sub({ id: 'g', isGroup: true }),
+    sub({ id: 'm1', parentGroupId: 'g' }),
+    sub({ id: 'm2', parentGroupId: 'g' }),
+  ]
+  const out = visibleClusterRows(clusterSubtaskRows(subtasks), new Set(['g']))
+  expect(out.map(r => r.subtask.id)).toEqual(['g', 'm1', 'm2'])
+})
+
+test('visibleClusterRows: an empty group, a loose subtask and an orphaned member are never hidden', () => {
+  const subtasks = [
+    sub({ id: 'empty-group', isGroup: true }),
+    sub({ id: 'orphan', parentGroupId: 'gone' }),
+    sub({ id: 'loose' }),
+  ]
+  const out = visibleClusterRows(clusterSubtaskRows(subtasks), new Set())
+  expect(out.map(r => r.subtask.id)).toEqual(['empty-group', 'orphan', 'loose'])
+})
+
+test('visibleClusterRows: several groups collapse and expand independently', () => {
+  const subtasks = [
+    sub({ id: 'g1', isGroup: true }),
+    sub({ id: 'm1', parentGroupId: 'g1' }),
+    sub({ id: 'g2', isGroup: true }),
+    sub({ id: 'm2', parentGroupId: 'g2' }),
+  ]
+  const out = visibleClusterRows(clusterSubtaskRows(subtasks), new Set(['g2']))
+  expect(out.map(r => r.subtask.id)).toEqual(['g1', 'g2', 'm2'])
 })
