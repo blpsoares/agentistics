@@ -318,13 +318,12 @@ describe('StudioHost is mounted once, through mountStudioHostPanel (I4)', () => 
 
     // LAST field, appended right before the closing `})}` — the shape the re-review found that the
     // occurrence-count test cannot see at all, because it never touches the fixed prefix string.
-    // `onMinimizeRight:` is the literal's current last field (the placement-menu wiring added
-    // `slot`/`onMove`/`onMinimizeRight` after `onToggleFullscreen`) — this must move whenever a
-    // field is added after it, or the plant silently stops matching anything and the test passes
-    // for the wrong reason (see the failure this exact drift caused when `target: studioTarget,`,
-    // then `onMention: onStudioMention,`, then `onToggleFullscreen: …`, were each in turn assumed
-    // to be last).
-    const LAST_FIELD = 'onMinimizeRight: rightIsStudio ? () => setRightOpen(false) : undefined,'
+    // This must move whenever a field is added after it, or the plant silently stops matching
+    // anything and the test passes for the wrong reason (see the failure this exact drift caused
+    // when `target: studioTarget,`, then `onMention: onStudioMention,`, then
+    // `onToggleFullscreen: …`, then `onMinimizeRight: …`, were each in turn assumed to be last —
+    // PIN (spec §11 item 3) is the current one).
+    const LAST_FIELD = "pinned: rightIsStudio\n          ? { active: rawSlotLayout.pinned.studio, onToggle: () => togglePinned('studio') }\n          : undefined,"
     const last = SRC.replace(
       LAST_FIELD + CALL_CLOSE,
       `${LAST_FIELD}\n        key: rightIsStudio ? 'right' : 'bottom',` + CALL_CLOSE,
@@ -459,5 +458,61 @@ describe('the dedicated-terminal branch falls through to centre on desktop (I2)'
   test('the scan still sees an unconditional return reintroduced', () => {
     const reverted = SRC.replace('if (isMobile) return dedicated\n    centre = dedicated', 'return dedicated')
     expect(reverted.includes('if (isMobile) return dedicated')).toBe(false)
+  })
+})
+
+/**
+ * THE NARROW-WIDTH OVERLAY'S CLICK-OUTSIDE/ESC EFFECT IS RAIL-ONLY (spec §11 item 4: "the bottom
+ * band keeps today's behaviour exactly; nothing there changes"). A unit test cannot mount this page
+ * against a real DOM (`packages/web` has no jsdom, same reason every other block in this file is a
+ * source scan rather than an interaction test) — so the SHAPE is what is asserted: the effect's own
+ * body, sliced out by its two unique anchors, must early-return before doing anything unless
+ * `artShell === 'overlay'`, and must never mention the bottom band's own machinery
+ * (`bottomOpen`/`setBandOpen`/`ShellBand`/`SessionPanel`) anywhere inside it. That is what makes it
+ * structurally impossible for this effect to reach into the bottom band's collapse/minimize path,
+ * rather than merely unlikely today.
+ */
+describe('the narrow-overlay click-outside/Esc effect never touches the bottom band (spec §11 item 4)', () => {
+  const START = "if (artShell !== 'overlay') return"
+  const END = "}, [artShell, slotLayout.right, rawSlotLayout.pinned, closeSlotPanel, setRightOpen])"
+
+  function effectBody(src: string): string {
+    const start = src.indexOf(START)
+    const end = src.indexOf(END, start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    return src.slice(start, end)
+  }
+
+  test('the effect exists exactly once', () => {
+    expect([...SRC.matchAll(new RegExp(START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))]).toHaveLength(1)
+  })
+
+  test('the body never mentions the bottom band’s own state or components', () => {
+    const body = effectBody(SRC)
+    expect(body).not.toMatch(/bottomOpen/)
+    expect(body).not.toMatch(/setBandOpen/)
+    expect(body).not.toMatch(/ShellBand/)
+    expect(body).not.toMatch(/SessionPanel/)
+  })
+
+  test('the body decides through the shared pure overlayOutsideAction, never a bespoke inline rule', () => {
+    expect(effectBody(SRC)).toContain('overlayOutsideAction(')
+  })
+
+  test('both the click and the Esc branch route through the same minimize, gated on the same decision', () => {
+    const body = effectBody(SRC)
+    expect([...body.matchAll(/overlayOutsideAction\(/g)]).toHaveLength(2)
+    expect([...body.matchAll(/minimize\(\)/g)]).toHaveLength(2)
+  })
+
+  // PLANTED-REVERT: a version of this effect with the early return removed would run on EVERY
+  // shell, including the bottom band's own — exactly what item 4 forbids. Simulating that removal
+  // is what this whole describe block would fail to find: the anchor the other tests slice on is
+  // gone, so `effectBody` throws rather than silently scanning an empty (falsely "clean") string.
+  test('[planted-revert coverage] removing the guard clause is caught — the anchor this block slices on disappears', () => {
+    const reverted = SRC.replace(`${START}\n`, '')
+    expect(reverted).not.toContain(START)
+    expect(SRC).toContain(START) // the real file still has it
   })
 })

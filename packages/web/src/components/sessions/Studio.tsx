@@ -225,6 +225,13 @@ export interface StudioProps {
    * buffers survive, and it never asks the "discard?" question `onExit`'s own close does.
    */
   onMinimizeRight?: () => void
+  /**
+   * PIN (narrow-overlay pass, 2026-09-22, spec §11) — present ONLY while `slot === 'right'`, same
+   * gating `onMinimizeRight` already follows and for the same reason: the bottom band keeps today's
+   * behaviour exactly, and pin is a right-slot-only fact. `SessionsPage`'s own caller passes it
+   * conditionally on `rightIsStudio`, mirroring `onMinimizeRight`'s own call site exactly.
+   */
+  pinned?: { active: boolean; onToggle: () => void }
 }
 
 /** Which layer the panel is showing while no file is open. */
@@ -931,7 +938,7 @@ export function nextGoTo(
 
 export function Studio({
   sessionId, lang, autosave, turns, onExit, harness, composerMounted = true, onMention,
-  fullscreen = false, onToggleFullscreen, slot, placement, onMove, onMinimizeRight,
+  fullscreen = false, onToggleFullscreen, slot, placement, onMove, onMinimizeRight, pinned,
 }: StudioProps) {
   const isMobile = useIsMobile()
   const pt = lang === 'pt'
@@ -1383,6 +1390,11 @@ export function Studio({
           minimizeLabel: pt ? 'Minimizar o Studio' : 'Minimize the Studio',
         }
         : {})}
+      // PIN (spec §11 item 3) — right-slot only, same `slot === 'right'` gate as the minimize icon
+      // immediately above. `pinned` is already conditionally absent at the bottom (the call site
+      // never passes it there), but the explicit slot check is what keeps this correct even if a
+      // future caller stops bothering to omit it.
+      {...(slot === 'right' && pinned ? { pinned } : {})}
       gearLabel={pt ? 'Opções do Studio' : 'Studio options'}
       gearEntries={gearEntries}
       isMobile={isMobile}
