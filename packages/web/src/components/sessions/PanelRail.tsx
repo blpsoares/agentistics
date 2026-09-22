@@ -306,6 +306,11 @@ export function PanelRail({
 
   return (
     <div
+      // `data-panel-rail` — the narrow-overlay's own "was this click on the rail" test (spec §11
+      // item 2: clicking the rail switches panels, it is never "clicking away"). Marks the WHOLE
+      // rail root, config area included, not only the `role="tablist"` icon column — the eye and
+      // the overflow "more" button sit outside that column and are just as much "the rail".
+      data-panel-rail="true"
       style={{
         position: 'relative', display: 'flex', flexDirection: 'column', width: railWidth, flexShrink: 0,
         borderLeft: dragOver === 'bar' ? '1px solid var(--anthropic-orange)' : '1px solid var(--border)',

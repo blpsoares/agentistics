@@ -429,3 +429,119 @@ describe('PanelFixedControls — full screen, minimize, gear, in that order', ()
     expect(html).toContain('Contents options')
   })
 })
+
+/**
+ * PIN (narrow-overlay pass, 2026-09-22, spec §11 item 3) — absent wherever the caller does not offer
+ * it (the bottom band's own bars never pass it), present as a fourth control between minimize and
+ * the gear, its PRESSED state visible on the row itself (not only in the tooltip).
+ */
+describe('PanelFixedControls — pin, between minimize and the gear', () => {
+  const gearEntries = [{ id: 'move-right', label: 'Move Hardware to the right', icon: <span />, onSelect: () => {} }]
+
+  test('absent entirely when the caller offers no pin — the bottom band’s own bars', () => {
+    const html = renderToStaticMarkup(
+      <PanelFixedControls
+        lang="en" panelName="Hardware"
+        fullscreen={{ active: false, onToggle: () => {} }}
+        onMinimize={() => {}} minimizeLabel="Minimize Hardware"
+        gearLabel="Hardware options" gearEntries={gearEntries}
+      />,
+    )
+    expect(html).not.toContain('Pin Hardware')
+    expect(html).not.toContain('Unpin Hardware')
+  })
+
+  test('present, and sits between minimize and the gear — full screen, minimize, pin, gear, in that order', () => {
+    const html = renderToStaticMarkup(
+      <PanelFixedControls
+        lang="en" panelName="Hardware"
+        fullscreen={{ active: false, onToggle: () => {} }}
+        onMinimize={() => {}} minimizeLabel="Minimize Hardware"
+        pinned={{ active: false, onToggle: () => {} }}
+        gearLabel="Hardware options" gearEntries={gearEntries}
+      />,
+    )
+    const fullscreenAt = html.indexOf('Hardware full screen')
+    const minimizeAt = html.indexOf('Minimize Hardware')
+    const pinAt = html.indexOf('Pin Hardware')
+    const gearAt = html.indexOf('Hardware options')
+    expect(fullscreenAt).toBeGreaterThan(-1)
+    expect(minimizeAt).toBeGreaterThan(-1)
+    expect(pinAt).toBeGreaterThan(-1)
+    expect(gearAt).toBeGreaterThan(-1)
+    expect(fullscreenAt).toBeLessThan(minimizeAt)
+    expect(minimizeAt).toBeLessThan(pinAt)
+    expect(pinAt).toBeLessThan(gearAt)
+  })
+
+  test('unpinned: neutral colour, aria-pressed=false, and the "Pin X" label', () => {
+    const html = renderToStaticMarkup(
+      <PanelFixedControls
+        lang="en" panelName="Hardware"
+        pinned={{ active: false, onToggle: () => {} }}
+        gearLabel="Hardware options" gearEntries={gearEntries}
+      />,
+    )
+    expect(html).toContain('Pin Hardware')
+    expect(html).not.toContain('Unpin Hardware')
+    expect(html).toContain('aria-pressed="false"')
+  })
+
+  test('pinned: accent orange, aria-pressed=true, and the "Unpin X" label — visible at a glance, not only in the tooltip', () => {
+    const html = renderToStaticMarkup(
+      <PanelFixedControls
+        lang="en" panelName="Hardware"
+        pinned={{ active: true, onToggle: () => {} }}
+        gearLabel="Hardware options" gearEntries={gearEntries}
+      />,
+    )
+    expect(html).toContain('Unpin Hardware')
+    expect(html).toContain('aria-pressed="true"')
+    // The pin glyph itself is FILLED while active (`fill="currentColor"`), not colour alone.
+    expect(html).toContain('fill="currentColor"')
+  })
+
+  test('the pinned button is the accent orange, matching the codebase’s one "this is active" colour', () => {
+    const html = renderToStaticMarkup(
+      <PanelFixedControls
+        lang="en" panelName="Hardware"
+        pinned={{ active: true, onToggle: () => {} }}
+        gearLabel="Hardware options" gearEntries={gearEntries}
+      />,
+    )
+    // The trailing pin <button>'s own inline style — same technique the minimize-colour test above
+    // uses (a whole-document string match; there is exactly one accent-orange consumer here when
+    // minimize is absent, so this is unambiguous).
+    expect(html).toContain('color:var(--anthropic-orange)')
+  })
+
+  test('pt labels: "Fixar X" / "Desafixar X"', () => {
+    const html = renderToStaticMarkup(
+      <PanelFixedControls
+        lang="pt" panelName="Hardware"
+        pinned={{ active: false, onToggle: () => {} }}
+        gearLabel="Opções Hardware" gearEntries={gearEntries}
+      />,
+    )
+    expect(html).toContain('Fixar Hardware')
+    const pinnedHtml = renderToStaticMarkup(
+      <PanelFixedControls
+        lang="pt" panelName="Hardware"
+        pinned={{ active: true, onToggle: () => {} }}
+        gearLabel="Opções Hardware" gearEntries={gearEntries}
+      />,
+    )
+    expect(pinnedHtml).toContain('Desafixar Hardware')
+  })
+
+  test('the panel name appears in the pin’s own label too — same rule as the rest of the trio', () => {
+    const html = renderToStaticMarkup(
+      <PanelFixedControls
+        lang="en" panelName="Contents"
+        pinned={{ active: false, onToggle: () => {} }}
+        gearLabel="Contents options" gearEntries={gearEntries}
+      />,
+    )
+    expect(html).toContain('Pin Contents')
+  })
+})
