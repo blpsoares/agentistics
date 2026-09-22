@@ -20,16 +20,16 @@ describe('sortSubtasks', () => {
     expect(ids(sortSubtasks(list, { key: 'title', dir: 'desc' }))).toEqual(['3', '1', '2'])
   })
 
-  it('puts a subtask with no owner / no date LAST whichever way the arrow points', () => {
+  it('puts a subtask with no startedAt/deliveredAt LAST whichever way the arrow points', () => {
     const list = [
       sub('none'),
-      sub('late', { dueDate: '2026-09-30', assignee: 'Zed' }),
-      sub('soon', { dueDate: '2026-09-01', assignee: 'amy' }),
+      sub('late', { deliveredAt: '2026-09-30', startedAt: '2026-09-20' }),
+      sub('soon', { deliveredAt: '2026-09-01', startedAt: '2026-08-01' }),
     ]
-    expect(ids(sortSubtasks(list, { key: 'due', dir: 'asc' }))).toEqual(['soon', 'late', 'none'])
-    expect(ids(sortSubtasks(list, { key: 'due', dir: 'desc' }))).toEqual(['late', 'soon', 'none'])
-    expect(ids(sortSubtasks(list, { key: 'assignee', dir: 'asc' }))).toEqual(['soon', 'late', 'none'])
-    expect(ids(sortSubtasks(list, { key: 'assignee', dir: 'desc' }))).toEqual(['late', 'soon', 'none'])
+    expect(ids(sortSubtasks(list, { key: 'completed', dir: 'asc' }))).toEqual(['soon', 'late', 'none'])
+    expect(ids(sortSubtasks(list, { key: 'completed', dir: 'desc' }))).toEqual(['late', 'soon', 'none'])
+    expect(ids(sortSubtasks(list, { key: 'started', dir: 'asc' }))).toEqual(['soon', 'late', 'none'])
+    expect(ids(sortSubtasks(list, { key: 'started', dir: 'desc' }))).toEqual(['late', 'soon', 'none'])
   })
 
   it('follows the pipeline for status when given one, unknown statuses last', () => {
@@ -54,8 +54,8 @@ describe('sortSubtasks', () => {
   })
 
   it('is TOTAL: equal values keep the order the list had, both directions', () => {
-    const list = [sub('c', { assignee: 'x' }), sub('a', { assignee: 'x' }), sub('b', { assignee: 'x' })]
-    expect(ids(sortSubtasks(list, { key: 'assignee', dir: 'asc' }))).toEqual(['c', 'a', 'b'])
-    expect(ids(sortSubtasks(list, { key: 'assignee', dir: 'desc' }))).toEqual(['c', 'a', 'b'])
+    const list = [sub('c', { startedAt: 'x' }), sub('a', { startedAt: 'x' }), sub('b', { startedAt: 'x' })]
+    expect(ids(sortSubtasks(list, { key: 'started', dir: 'asc' }))).toEqual(['c', 'a', 'b'])
+    expect(ids(sortSubtasks(list, { key: 'started', dir: 'desc' }))).toEqual(['c', 'a', 'b'])
   })
 })

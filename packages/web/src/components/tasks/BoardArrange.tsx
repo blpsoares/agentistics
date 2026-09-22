@@ -45,7 +45,6 @@ export const BOARD_SORT_KEYS: readonly SortKey[] = BOARD_SORTS.map(s => s.key)
 const LANE_LABEL: Record<LaneKey, string> = {
   none: 'No swimlanes',
   repo: 'Repository',
-  assignee: 'Owner',
   harness: 'Harness',
   priority: 'Priority',
 }

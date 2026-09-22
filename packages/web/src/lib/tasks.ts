@@ -71,13 +71,18 @@ export interface TaskRecord {
   createdAt: string
   updatedAt: string
   deliveredAt?: string
+  /**
+   * When real work actually began, ISO — system-stamped, never user-editable. See the server's
+   * `Task.startedAt` for the full rule.
+   */
+  startedAt?: string
   repo?: string
   /** Task ids that must finish first. */
   blockedBy?: string[]
   links?: TaskLink[]
   /** Absent reads as `none` — "nobody has said", which is not the same as `low`. */
   priority?: TaskPriorityId
-  assignee?: string
+  /** SUPERSEDED by `startedAt`/`deliveredAt` — kept only so old records round-trip; no UI sets it. */
   dueDate?: string
   startDate?: string
   labels?: string[]
@@ -225,9 +230,13 @@ export interface Subtask {
   status: TaskStatus
   createdAt: string
   updatedAt: string
-  assignee?: string
+  /** SUPERSEDED by `startedAt`/`deliveredAt` — kept only so old records round-trip; no UI sets it. */
   dueDate?: string
   startDate?: string
+  /** System-stamped, never user-editable — mirror of the server's `Subtask.startedAt`. */
+  startedAt?: string
+  /** System-stamped, never user-editable — mirror of the server's `Subtask.deliveredAt`. */
+  deliveredAt?: string
   sessionId?: string
   notes?: string
   /**
@@ -254,7 +263,7 @@ export interface Subtask {
    * The GROUP this subtask is a MEMBER of — the group's own subtask id, from the SAME task. A
    * member never receives a session of its own and therefore has no rollup bucket of its own
    * either (`SubtaskView.groupProgress` lives on the GROUP's own view, not the member's); it still
-   * has its own `status`/`assignee`/dates/comments, and its `status` is what feeds the group's
+   * has its own `status`/dates/comments, and its `status` is what feeds the group's
    * `groupProgress`. Absent reads as "not a member". Mirror of the server's
    * `Subtask.parentGroupId` (`task-model.ts`).
    */
@@ -515,7 +524,6 @@ export interface TaskFieldPatch {
   title?: string
   detail?: string
   priority?: TaskPriorityId
-  assignee?: string
   dueDate?: string
   startDate?: string
   labels?: string[]
@@ -699,7 +707,7 @@ export const removeComment = (ref: string, id: string) =>
  * group) — so it is typed apart rather than folded into `Partial<Pick<Subtask, …>>`.
  */
 export type SubtaskPatch = Partial<Pick<Subtask,
-  'title' | 'status' | 'assignee' | 'dueDate' | 'startDate' | 'sessionId' | 'notes' | 'blockedBy'
+  'title' | 'status' | 'dueDate' | 'startDate' | 'sessionId' | 'notes' | 'blockedBy'
 >> & {
   /** Join (a group's own subtask id) or leave (`null`) a group — see `checkParentGroup`
    *  (`task-attach.ts`). Absent leaves membership alone. */

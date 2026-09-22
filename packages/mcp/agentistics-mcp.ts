@@ -264,7 +264,7 @@ const TOOLS: Tool[] = [
   {
     name: "agentistics_task_subtask",
     description:
-      "BETA — the task board is new and still changing; its shapes may move between releases. Add a subtask, or change one. Pass `title` to add; pass `id` with `done`, `status`, `assignee`, `dueDate`, `startDate`, `blockedBy` or `parentGroupId` to edit one. A subtask carries the same columns its parent does; its own cost, tokens, rounds and harness are rolled up from the sessions filed under it — the PARENT task's rollup is the sum of all its subtasks' sessions. A subtask CAN be blocked by another subtask of the SAME parent (pass `blockedBy` as the full list of sibling subtask ids that must be `done` first; a sibling outside this task, or the subtask itself, is dropped rather than accepted) — this is separate from agentistics_task_blocked_by, which blocks a whole TASK on other tasks. **`done` REQUIRES the subtask to have at least one session filed under it** and is refused (422, `done_needs_session`) without one — EXCEPT for a group MEMBER (`parentGroupId` set), which can never hold a session of its own (see below) and therefore reaches `done` through this same edit with no session required; a GROUP itself (`isGroup: true`) and an ordinary loose subtask both still need one. To put a session ON a subtask use agentistics_task_session with `subtaskId` — a subtask holds ANY NUMBER of sessions, so the link lives on the session, not in a field here. **SUBTASK GROUPS are a real hierarchy level, not a label**: pass `isGroup: true` with `title` to create a GROUP — a peer row that CAN hold a session, exactly like a loose subtask. Pass `id` (a subtask) with `parentGroupId` (a group's own subtask id, from the SAME parent task) to make it a MEMBER of that group — join with the group's id, leave with `parentGroupId: ''`. A refused reference (the id names no subtask, names one that is not `isGroup: true`, names a different task, or the subtask being patched is itself a group) is refused as `invalid_group` (422). **Joining a group is ALSO refused (422, `subtask_has_sessions`) when the subtask already has a session filed on it** — a member gets no rollup bucket of its own, so that session's cost would silently drop out of every visible breakdown while the task's own total kept counting it; detach the session first. **A MEMBER can never hold a session of its own** — filing on one is refused by agentistics_task_session with `subtask_in_group` (422); only the group itself accounts for a session, and a member's own status/assignee/dates/comments still exist and feed the group's progress percentage.",
+      "BETA — the task board is new and still changing; its shapes may move between releases. Add a subtask, or change one. Pass `title` to add; pass `id` with `done`, `status`, `dueDate`, `startDate`, `blockedBy` or `parentGroupId` to edit one. `startedAt`/`deliveredAt` are system-stamped facts (when real work began / when this piece reached `done`) and are never set through this tool — they are read back on the subtask record. A subtask carries the same columns its parent does; its own cost, tokens, rounds and harness are rolled up from the sessions filed under it — the PARENT task's rollup is the sum of all its subtasks' sessions. A subtask CAN be blocked by another subtask of the SAME parent (pass `blockedBy` as the full list of sibling subtask ids that must be `done` first; a sibling outside this task, or the subtask itself, is dropped rather than accepted) — this is separate from agentistics_task_blocked_by, which blocks a whole TASK on other tasks. **`done` REQUIRES the subtask to have at least one session filed under it** and is refused (422, `done_needs_session`) without one — EXCEPT for a group MEMBER (`parentGroupId` set), which can never hold a session of its own (see below) and therefore reaches `done` through this same edit with no session required; a GROUP itself (`isGroup: true`) and an ordinary loose subtask both still need one. **The moment every one of a task's top-level subtasks (loose subtasks and groups — a group's own members never count separately) reaches `done`, the parent task auto-delivers too.** To put a session ON a subtask use agentistics_task_session with `subtaskId` — a subtask holds ANY NUMBER of sessions, so the link lives on the session, not in a field here. **SUBTASK GROUPS are a real hierarchy level, not a label**: pass `isGroup: true` with `title` to create a GROUP — a peer row that CAN hold a session, exactly like a loose subtask. Pass `id` (a subtask) with `parentGroupId` (a group's own subtask id, from the SAME parent task) to make it a MEMBER of that group — join with the group's id, leave with `parentGroupId: ''`. A refused reference (the id names no subtask, names one that is not `isGroup: true`, names a different task, or the subtask being patched is itself a group) is refused as `invalid_group` (422). **Joining a group is ALSO refused (422, `subtask_has_sessions`) when the subtask already has a session filed on it** — a member gets no rollup bucket of its own, so that session's cost would silently drop out of every visible breakdown while the task's own total kept counting it; detach the session first. **A MEMBER can never hold a session of its own** — filing on one is refused by agentistics_task_session with `subtask_in_group` (422); only the group itself accounts for a session, and a member's own status/dates/comments still exist and feed the group's progress percentage.",
     inputSchema: {
       type: "object",
       properties: {
@@ -280,7 +280,6 @@ const TOOLS: Tool[] = [
           type: "string",
           enum: ["backlog", "todo", "in_progress", "blocked", "in_review", "done", "abandoned"],
         },
-        assignee: { type: "string" },
         dueDate: { type: "string" },
         startDate: { type: "string" },
         blockedBy: {
@@ -364,7 +363,7 @@ const TOOLS: Tool[] = [
   {
     name: "agentistics_task_activity",
     description:
-      "BETA — the task board is new and still changing; its shapes may move between releases. What has been HAPPENING, newest first — status moves, claims, releases, priority and assignee changes, sessions filed. Pass `ref` for one task, or nothing for the whole board. On a board several agents drive this is how you find out what the others did without asking them.",
+      "BETA — the task board is new and still changing; its shapes may move between releases. What has been HAPPENING, newest first — status moves, claims, releases, priority changes, sessions filed. Pass `ref` for one task, or nothing for the whole board. On a board several agents drive this is how you find out what the others did without asking them.",
     inputSchema: {
       type: "object",
       properties: { ref: { type: "string" }, limit: { type: "number" } },
@@ -374,7 +373,7 @@ const TOOLS: Tool[] = [
   {
     name: "agentistics_task_edit",
     description:
-      "BETA — the task board is new and still changing; its shapes may move between releases. Set a task's fields: `title`, `detail`, `priority` (urgent | high | medium | low | none), `assignee`, `dueDate` / `startDate` (yyyy-mm-dd), `labels`. An absent field is left alone; an EMPTY STRING clears it. `priority` defaults to `none`, which means 'nobody has said' and is not the same as `low`. Pass `actor` so the change is recorded against you in the activity log.",
+      "BETA — the task board is new and still changing; its shapes may move between releases. Set a task's fields: `title`, `detail`, `priority` (urgent | high | medium | low | none), `dueDate` / `startDate` (yyyy-mm-dd), `labels`. An absent field is left alone; an EMPTY STRING clears it. `priority` defaults to `none`, which means 'nobody has said' and is not the same as `low`. `startedAt`/`deliveredAt` are system-stamped facts and are never set through this tool. Pass `actor` so the change is recorded against you in the activity log.",
     inputSchema: {
       type: "object",
       properties: {
@@ -382,7 +381,6 @@ const TOOLS: Tool[] = [
         title: { type: "string" },
         detail: { type: "string" },
         priority: { type: "string", enum: ["urgent", "high", "medium", "low", "none"] },
-        assignee: { type: "string" },
         dueDate: { type: "string" },
         startDate: { type: "string" },
         labels: { type: "array", items: { type: "string" } },
@@ -725,7 +723,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         // `parentGroupId` is here too (§F.1: joining/leaving a group) — it is typed as a plain
         // string in the tool schema, with `""` meaning "leave", so it matches the same
         // `typeof === "string"` filter as every other column and needs no special casing.
-        const cols = ["status", "assignee", "dueDate", "startDate", "title", "parentGroupId"] as const;
+        const cols = ["status", "dueDate", "startDate", "title", "parentGroupId"] as const;
         const named = cols.filter(c => typeof a?.[c] === "string");
         // `blockedBy` is an ARRAY, so it never matches the string-valued `cols` filter above and
         // was silently dropped — a subtask genuinely can be blocked by a sibling (`Subtask.blockedBy`,
@@ -734,7 +732,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         // NOTE: when ANY named column (incl. `parentGroupId`) is present, this branch never
         // forwards `done` at all — a caller combining `parentGroupId` with `done: true` in one call
         // gets no error and `done` is just dropped. The same is true of every other named column
-        // (`status`, `assignee`, …); fixing that general mechanism is a bigger, separate change and
+        // (`status`, `dueDate`, …); fixing that general mechanism is a bigger, separate change and
         // deliberately out of scope here. The `parentGroupId`/`done` case is instead documented as a
         // limitation on both fields' own tool-schema descriptions above: callers are told to send
         // them as two separate calls.
@@ -797,7 +795,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const a = args as any;
         const ref = encodeURIComponent(String(a?.ref ?? ""));
         const patch: Record<string, unknown> = {};
-        for (const f of ["title", "detail", "priority", "assignee", "dueDate", "startDate", "actor"]) {
+        for (const f of ["title", "detail", "priority", "dueDate", "startDate", "actor"]) {
           if (typeof a?.[f] === "string") patch[f] = a[f];
         }
         if (Array.isArray(a?.labels)) patch.labels = a.labels;

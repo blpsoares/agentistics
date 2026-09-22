@@ -1843,7 +1843,6 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           const result = await mod.patchSubtask(body.id, {
             ...(typeof body.title === 'string' ? { title: body.title } : {}),
             ...(typeof body.status === 'string' ? { status: body.status as never } : {}),
-            ...(typeof body.assignee === 'string' ? { assignee: body.assignee } : {}),
             ...(typeof body.dueDate === 'string' ? { dueDate: body.dueDate } : {}),
             ...(typeof body.startDate === 'string' ? { startDate: body.startDate } : {}),
             ...(typeof body.sessionId === 'string' ? { sessionId: body.sessionId } : {}),
@@ -1923,7 +1922,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         })
         return json(out, out.ok ? 200 : 404)
       }
-      const FIELDS = ['title', 'detail', 'priority', 'assignee', 'dueDate', 'startDate'] as const
+      const FIELDS = ['title', 'detail', 'priority', 'dueDate', 'startDate'] as const
       // `shared` is a BOOLEAN and is therefore tested separately: it is the one field of this patch
       // whose `false` is a decision rather than an absence, and a truthiness test would make
       // turning sharing OFF indistinguishable from not asking.

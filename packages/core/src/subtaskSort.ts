@@ -27,7 +27,7 @@
 import { statusRank, type SortDir } from './taskSort'
 
 export type SubtaskSortKey =
-  | 'title' | 'status' | 'assignee' | 'start' | 'due' | 'sessions' | 'cost' | 'tokens'
+  | 'title' | 'status' | 'started' | 'completed' | 'sessions' | 'cost' | 'tokens'
 
 export interface SubtaskSortSpec {
   key: SubtaskSortKey
@@ -39,9 +39,9 @@ export interface SortableSubtask {
   id: string
   title: string
   status: string
-  assignee?: string
-  startDate?: string
-  dueDate?: string
+  /** System-stamped, read-only — see `task-model.ts`'s `Subtask.startedAt`/`deliveredAt`. */
+  startedAt?: string
+  deliveredAt?: string
 }
 
 /**
@@ -71,9 +71,8 @@ function valueOf<T extends SortableSubtask>(
   switch (key) {
     case 'title': return s.title.toLowerCase()
     case 'status': return ctx?.statusOrder ? statusRank(ctx.statusOrder, s.status) : s.status
-    case 'assignee': return s.assignee?.toLowerCase() || null
-    case 'start': return s.startDate || null
-    case 'due': return s.dueDate || null
+    case 'started': return s.startedAt || null
+    case 'completed': return s.deliveredAt || null
     case 'sessions': return ctx?.measureOf?.(s)?.sessions ?? null
     case 'cost': return ctx?.measureOf?.(s)?.costUSD ?? null
     case 'tokens': return ctx?.measureOf?.(s)?.tokens ?? null

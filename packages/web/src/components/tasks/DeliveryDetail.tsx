@@ -19,14 +19,14 @@
  * aside is exactly the asymmetry this move exists to end.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import {
-  Bot, ChevronDown, ChevronRight, ExternalLink, FileText, FileVideo, Link2, MessageSquare, Paperclip,
+  ChevronDown, ChevronRight, ExternalLink, FileText, FileVideo, Link2, MessageSquare, Paperclip,
   Pencil, Plus, Trash2, X, XCircle,
 } from 'lucide-react'
 import { PRIORITY_ORDER, composePromptWithPaths, type TaskPriorityId } from '@agentistics/core'
@@ -39,7 +39,7 @@ import {
   type CommentAttachment, type CommentPart,
 } from '../../lib/commentBody'
 import {
-  NA, PRIORITY, SESSION_STATE, button, claimLeft, field, fmtInt, fmtTokens,
+  NA, PRIORITY, SESSION_STATE, button, field, fmtInt, fmtStamp, fmtTokens,
   harnessColor, microLabel, numeric, pill, statusStyle, surface,
 } from './board'
 import { useMoney } from './money'
@@ -54,10 +54,9 @@ import { BlockedSubtaskResolve } from './BlockedSubtaskResolve'
 import { StagedSessionLaunchConfirm } from './StagedSessionLaunchConfirm'
 import { TaskFiles } from './TaskFiles'
 import { TaskProgressBar } from './TaskProgressBar'
-import { DatePicker } from '../DatePicker'
 import { ConfirmModal, Select } from '../../pages/settings/primitives'
 import {
-  addComment, addLink, addSubtask, attachSession, claimTask, clearStagedSession, deleteFile,
+  addComment, addLink, addSubtask, attachSession, clearStagedSession, deleteFile,
   deleteTask, detachSession, editComment, editTask, fileUrl, fmtDuration, materializeStagedAttachments,
   markTask, patchSubtask, removeComment, removeLink, removeSubtask, saveStagedSession, setBlockedBy,
   uploadFile, useTaskActivity, useTaskDetail, useTaskList, useTaskStatuses,
@@ -66,11 +65,15 @@ import {
 } from '../../lib/tasks'
 
 /**
- * The PLAN half of a task: how urgent, whose it is, when it is due, and who is on it right now.
+ * The PLAN half of a task: how urgent it is, and where it stands.
  *
  * It sits at the top of the rail because these are the fields that decide what happens NEXT, while
- * everything below them (cost, rounds, tokens) records what already happened. The claim is here
- * rather than under Actions for the same reason: it is a statement about the present.
+ * everything below them (cost, rounds, tokens) records what already happened. There is no owner
+ * field and no claim/lease control here — a product owner asked for both to go: nobody is assigned
+ * by name on this board, and "who is working on it right now" is answered by the sessions filed
+ * under it, not by a separate hand-raised statement. `startedAt`/`deliveredAt` are the two dates
+ * this card shows, and both are SYSTEM facts (see `Task.startedAt`'s own note) — there is nothing
+ * to type, only something to read.
  */
 /**
  * What has happened to THIS task, newest first.
@@ -116,7 +119,10 @@ function ActivityTab({ id }: { id: string }) {
   )
 }
 
-function PlanCard({ task, busy, lang, statuses, onPatch, onStatus, onClaim }: {
+/** `startedAt`/`deliveredAt` are system facts, not a date somebody typed — see their own note on
+ *  `Task.startedAt` — so they are read as a full moment (date AND time), the same way the activity
+ *  log already reads `TaskEvent.at`, never as a bare `yyyy-MM-dd` day. */
+function PlanCard({ task, busy, lang, statuses, onPatch, onStatus }: {
   task: TaskRecord
   busy: boolean
   onPatch: (patch: TaskFieldPatch) => void | Promise<void>
@@ -124,15 +130,7 @@ function PlanCard({ task, busy, lang, statuses, onPatch, onStatus, onClaim }: {
   /** The board's LIVE status list (`lib/tasks.ts`'s `useTaskStatuses`) — `null` while it loads. */
   statuses: ReturnType<typeof useTaskStatuses>['statuses']
   onStatus: (s: TaskStatus) => void | Promise<void>
-  onClaim: (release: boolean) => void | Promise<void>
 }) {
-  const isMobile = useIsMobile()
-  const [nowMs, setNowMs] = useState(() => Date.now())
-  useEffect(() => {
-    const t = setInterval(() => setNowMs(Date.now()), 60_000)
-    return () => clearInterval(t)
-  }, [])
-  const lease = task.claim ? claimLeft(task.claim.expiresAt, nowMs) : null
   const copy = boardCopy(lang)
 
   return (
@@ -172,70 +170,29 @@ function PlanCard({ task, busy, lang, statuses, onPatch, onStatus, onClaim }: {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gap: 5 }}>
-        <span style={{ ...microLabel, fontSize: 9 }}>{copy.owner}</span>
-        <input
-          defaultValue={task.assignee ?? ''} placeholder="a person, or an agent"
-          onBlur={e => {
-            if (e.target.value.trim() !== (task.assignee ?? '')) void onPatch({ assignee: e.target.value })
-          }}
-          style={field(isMobile)}
-        />
-      </div>
-
       {/*
-       * The dashboard's OWN date picker, not `<input type="date">`.
-       *
-       * The native control brings the browser's calendar, the browser's locale and a width that
-       * ignores its container — it hung out of this rail — and it looks like nothing else in the
-       * app. One picker, drawn the same way here as in the filter bar.
+       * `startedAt`/`deliveredAt` are SYSTEM facts, never a date somebody typed — see
+       * `Task.startedAt`'s own note. There is no picker and no clear button here: a product owner
+       * asked for these two to be observed, not scheduled, so the card only ever READS them.
        */}
       <div style={{ display: 'grid', gap: 5 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ ...microLabel, fontSize: 9, flex: 1 }}>{copy.dates}</span>
-          {(task.startDate || task.dueDate) && (
-            <button
-              onClick={() => void onPatch({ startDate: '', dueDate: '' })}
-              title={copy.clearDates}
-              style={{
-                background: 'none', border: 'none', cursor: 'pointer', display: 'flex',
-                color: 'var(--text-tertiary)', padding: 0,
-              }}
-            ><X size={12} /></button>
-          )}
+        <span style={{ ...microLabel, fontSize: 9 }}>{copy.dates}</span>
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+          <span style={{ minWidth: 0 }}>
+            <span style={{ ...microLabel, fontSize: 8, display: 'block' }}>{copy.started}</span>
+            <span style={{
+              fontSize: 12,
+              color: task.startedAt ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+            }}>{fmtStamp(task.startedAt, lang)}</span>
+          </span>
+          <span style={{ minWidth: 0 }}>
+            <span style={{ ...microLabel, fontSize: 8, display: 'block' }}>{copy.completed}</span>
+            <span style={{
+              fontSize: 12,
+              color: task.deliveredAt ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+            }}>{fmtStamp(task.deliveredAt, lang)}</span>
+          </span>
         </div>
-        {/*
-         * One picker per ROW, not two side by side.
-         *
-         * The pair fits the filter bar, which is as wide as the page; in a 280px rail they came out
-         * 9px over the card and the second one hung into the gutter. Stacking also lets each keep
-         * its own label, which is what a person reads when the two are a month apart.
-         *
-         * `key` is the picker's own English identifier ('Start'/'Due'), used below to decide which
-         * date field a change patches — `DatePicker` never sees it, only the already-translated
-         * word from `copy`, since it prints whatever `label` it is handed verbatim.
-         */}
-        {([
-          ['Start', copy.start, task.startDate ?? ''],
-          ['Due', copy.due, task.dueDate ?? ''],
-        ] as const).map(([key, label, value]) => (
-          <div
-            key={key}
-            style={{
-              display: 'flex', alignItems: 'center', ...surface,
-              background: 'var(--bg-elevated)', borderRadius: 7, padding: '1px 4px',
-            }}
-          >
-            <DatePicker
-              value={value}
-              label={label}
-              placeholder="DD/MM/YY"
-              lang={lang}
-              {...(key === 'Due' && task.startDate ? { min: task.startDate } : {})}
-              onChange={v => void onPatch(key === 'Start' ? { startDate: v } : { dueDate: v })}
-            />
-          </div>
-        ))}
       </div>
 
       {task.status === 'blocked' && task.blockedReason && (() => {
@@ -256,39 +213,6 @@ function PlanCard({ task, busy, lang, statuses, onPatch, onStatus, onClaim }: {
         )
       })()}
 
-      <div style={{ display: 'grid', gap: 6, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
-        <span style={{ ...microLabel, fontSize: 9 }}>{copy.workingOnIt}</span>
-        {task.claim
-          ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={pill(lease!.expired ? 'var(--text-tertiary)' : 'var(--accent-green)')}>
-                <Bot size={10} /> {task.claim.by}
-              </span>
-              <span style={{
-                fontSize: 11,
-                color: lease!.expired ? 'var(--accent-red)' : 'var(--text-tertiary)',
-              }}>{lease!.text}</span>
-              <span style={{ flex: 1 }} />
-              <button
-                disabled={busy} onClick={() => void onClaim(true)}
-                style={{ ...button(isMobile), height: isMobile ? 44 : 26 }}
-                title={lease!.expired ? copy.releaseTitleExpired : copy.releaseTitle}
-              >{copy.release}</button>
-            </div>
-          )
-          : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)', flex: 1 }}>
-                {copy.free}
-              </span>
-              <button
-                disabled={busy} onClick={() => void onClaim(false)}
-                style={{ ...button(isMobile), height: isMobile ? 44 : 26 }}
-                title={copy.takeItTitle}
-              >{copy.takeIt}</button>
-            </div>
-          )}
-      </div>
     </div>
   )
 }
@@ -1454,6 +1378,47 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
                 <div style={{ ...microLabel, marginBottom: 9 }}>{copy.wholeDelivery}</div>
                 <Rollup r={detail.rollup} lang={lang} />
               </div>
+              {/*
+               * The evidence that used to live in the rail's "ENTREGA"/"TOKENS" sections — moved
+               * here rather than removed. A product owner asked for that duplicate, harder-to-scan
+               * area to go, but the numbers it carried (delivery time, agent runs, commits, files,
+               * tool errors, lines changed, and the raw token split) are still real facts about the
+               * delivery, so they join the metrics area this tab already is instead of vanishing.
+               */}
+              <div style={{ ...surface, padding: 14, display: 'grid', gap: 10 }}>
+                <div style={microLabel}>{copy.delivery}</div>
+                <Stat label={copy.deliveryTime} value={duration ?? NA} />
+                {duration === null && (
+                  <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: -8 }}>{copy.stillOpen}</div>
+                )}
+                <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+                  <Stat label={copy.agentRuns} value={fmtInt(stats.agentRuns)} />
+                  <Stat label={copy.commits} value={fmtInt(stats.commits)} />
+                </div>
+                <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+                  <Stat label={copy.files} value={fmtInt(stats.filesModified)} />
+                  <Stat label={copy.errors} value={fmtInt(stats.toolErrors)} />
+                </div>
+                <Stat
+                  label={copy.lines}
+                  value={stats.linesAdded === null && stats.linesRemoved === null
+                    ? NA : `+${stats.linesAdded ?? 0} / −${stats.linesRemoved ?? 0}`}
+                />
+              </div>
+              {stats.tokens && (
+                <div style={{ ...surface, padding: 14, display: 'grid', gap: 8 }}>
+                  <div style={microLabel}>Tokens</div>
+                  {([['Input', copy.tokenInput, stats.tokens.input], ['Output', copy.tokenOutput, stats.tokens.output],
+                     ['Cache read', copy.tokenCacheRead, stats.tokens.cacheRead],
+                     ['Cache write', copy.tokenCacheWrite, stats.tokens.cacheWrite]] as const)
+                    .map(([key, label, v]) => (
+                      <div key={key} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5 }}>
+                        <span style={{ color: 'var(--text-tertiary)' }}>{label}</span>
+                        <span style={numeric}>{v.toLocaleString()}</span>
+                      </div>
+                    ))}
+                </div>
+              )}
               <div style={{ display: 'grid', gap: 12, gridTemplateColumns: oneColumn ? '1fr' : 'repeat(auto-fit, minmax(230px, 1fr))' }}>
                 <div style={{ ...surface, padding: 14, display: 'grid', gap: 9 }}>
                   <div style={microLabel}>{copy.models}</div>
@@ -1572,48 +1537,7 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
               if (!result.ok && result.reason === 'done_needs_session') { setDoneRefusal(true); return }
               await reload()
             }}
-            onClaim={async release => {
-              // `force` on a release: this is a person at the board, and the whole reason the lease
-              // is visible here is so a stale one can be cleared without hunting down the agent.
-              await run(() => claimTask(id, { by: 'you', ...(release ? { release: true, force: true } : { takeover: true }) }))
-            }}
           />
-
-          <RailSection id="details" title={copy.delivery} badge={duration ?? NA} defaultOpen>
-            <div style={{ display: 'grid', gap: 10 }}>
-              <Stat label={copy.deliveryTime} value={duration ?? NA} />
-              {duration === null && (
-                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: -8 }}>{copy.stillOpen}</div>
-              )}
-              <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
-                <Stat label={copy.agentRuns} value={fmtInt(stats.agentRuns)} />
-                <Stat label={copy.commits} value={fmtInt(stats.commits)} />
-              </div>
-              <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
-                <Stat label={copy.files} value={fmtInt(stats.filesModified)} />
-                <Stat label={copy.errors} value={fmtInt(stats.toolErrors)} />
-              </div>
-              <Stat
-                label={copy.lines}
-                value={stats.linesAdded === null && stats.linesRemoved === null
-                  ? NA : `+${stats.linesAdded ?? 0} / −${stats.linesRemoved ?? 0}`}
-              />
-            </div>
-          </RailSection>
-
-          {stats.tokens && (
-            <RailSection id="tokens" title="Tokens" badge={fmtTokens(detail.rollup.tokens)}>
-              {([['Input', copy.tokenInput, stats.tokens.input], ['Output', copy.tokenOutput, stats.tokens.output],
-                 ['Cache read', copy.tokenCacheRead, stats.tokens.cacheRead],
-                 ['Cache write', copy.tokenCacheWrite, stats.tokens.cacheWrite]] as const)
-                .map(([key, label, v]) => (
-                  <div key={key} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5 }}>
-                    <span style={{ color: 'var(--text-tertiary)' }}>{label}</span>
-                    <span style={numeric}>{v.toLocaleString()}</span>
-                  </div>
-                ))}
-            </RailSection>
-          )}
 
           <RailSection id="links" title={copy.links} badge={detail.task.links?.length ?? 0}>
             <LinksPanel id={id} task={detail.task} onChanged={reload} bare />

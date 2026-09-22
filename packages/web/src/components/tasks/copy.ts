@@ -53,9 +53,9 @@ export interface BoardCopy {
    * closely and were the last English left on a Portuguese board.
    */
   subtasks: string
-  owner: string
-  start: string
-  due: string
+  /** System-stamped, read-only facts — see `Subtask.startedAt`/`deliveredAt`'s own note. */
+  started: string
+  completed: string
   sessions: string
   addSubtask: string
   nothingBrokenOut: string
@@ -89,22 +89,14 @@ export interface BoardCopy {
   wholeDelivery: string
   deleteDelivery: string
   /**
-   * `PlanCard`'s own fields — status/priority/owner/dates/claim — and the `Rollup` stat row beside
-   * it. These were the last English left on an otherwise-translated delivery page: the tab bar
-   * above them and the rail sections around them already read Portuguese, so a plain "Cost" /
-   * "Working on it" sitting between two Portuguese headings read as broken rather than untranslated.
+   * `PlanCard`'s own fields — status/priority/dates — and the `Rollup` stat row beside it. These
+   * were the last English left on an otherwise-translated delivery page: the tab bar above them and
+   * the rail sections around them already read Portuguese, so a plain "Cost" sitting between two
+   * Portuguese headings read as broken rather than untranslated.
    */
   priority: string
   dates: string
-  clearDates: string
   waitingOn: string
-  workingOnIt: string
-  free: string
-  takeIt: string
-  takeItTitle: string
-  release: string
-  releaseTitleExpired: string
-  releaseTitle: string
   cost: string
   yourPrompts: string
   yourPromptsTitle: string
@@ -236,9 +228,8 @@ const EN: BoardCopy = {
   searchOrCreate: 'Search deliveries, or type a new name',
   newWithDetails: 'New delivery with all the details…',
   subtasks: 'Subtasks',
-  owner: 'Owner',
-  start: 'Start',
-  due: 'Due',
+  started: 'Started',
+  completed: 'Completed',
   sessions: 'Sessions',
   addSubtask: 'Add a subtask, then Enter',
   nothingBrokenOut:
@@ -268,15 +259,7 @@ const EN: BoardCopy = {
   deleteDelivery: 'Delete this delivery',
   priority: 'Priority',
   dates: 'Dates',
-  clearDates: 'Clear both dates',
   waitingOn: 'Waiting on',
-  workingOnIt: 'Working on it',
-  free: 'Free — nobody has taken it.',
-  takeIt: 'Take it',
-  takeItTitle: 'Take it, so an agent asking what to work on is told somebody has this',
-  release: 'Release',
-  releaseTitleExpired: 'The lease has run out — clear the holder',
-  releaseTitle: 'Give the task back to the board',
   cost: 'Cost',
   yourPrompts: 'Your prompts',
   yourPromptsTitle: 'How many times you prompted, across every session filed here',
@@ -357,10 +340,10 @@ const EN: BoardCopy = {
     columnUseHand: 'Use hand order',
     keys: {
       manual: 'Hand order', priority: 'Priority', title: 'Title', status: 'Status',
-      created: 'Newest', updated: 'Last touched', due: 'Due date', assignee: 'Owner',
+      created: 'Newest', updated: 'Last touched', due: 'Due date',
       cost: 'Cost', tokens: 'Tokens', rounds: 'Your prompts', sessions: 'Sessions',
       attempts: 'Attempts', comments: 'Comments', subtasks: 'Subtasks', progress: 'Progress', harnesses: 'Harnesses',
-      delivered: 'Delivered', start: 'Start',
+      delivered: 'Delivered', started: 'Started',
     },
   },
 }
@@ -396,9 +379,8 @@ const PT: BoardCopy = {
   searchOrCreate: 'Buscar entregas, ou digitar um nome novo',
   newWithDetails: 'Nova entrega, com todos os detalhes…',
   subtasks: 'Subtarefas',
-  owner: 'Responsável',
-  start: 'Início',
-  due: 'Prazo',
+  started: 'Início',
+  completed: 'Concluído em',
   sessions: 'Sessões',
   addSubtask: 'Adicionar subtarefa e apertar Enter',
   nothingBrokenOut:
@@ -428,15 +410,7 @@ const PT: BoardCopy = {
   deleteDelivery: 'Excluir esta entrega',
   priority: 'Prioridade',
   dates: 'Datas',
-  clearDates: 'Limpar as duas datas',
   waitingOn: 'Aguardando',
-  workingOnIt: 'Em andamento',
-  free: 'Livre — ninguém pegou ainda.',
-  takeIt: 'Pegar',
-  takeItTitle: 'Pegar, para dizer a um agente perguntando o que fazer que alguém já está nisso',
-  release: 'Liberar',
-  releaseTitleExpired: 'O prazo da posse expirou — limpar o responsável',
-  releaseTitle: 'Devolver a tarefa para o quadro',
   cost: 'Custo',
   yourPrompts: 'Seus prompts',
   yourPromptsTitle: 'Quantas vezes você fez um prompt, em todas as sessões filiadas aqui',
@@ -517,10 +491,10 @@ const PT: BoardCopy = {
     columnUseHand: 'Usar ordem manual',
     keys: {
       manual: 'Ordem manual', priority: 'Prioridade', title: 'Título', status: 'Status',
-      created: 'Mais recentes', updated: 'Última alteração', due: 'Prazo', assignee: 'Responsável',
+      created: 'Mais recentes', updated: 'Última alteração', due: 'Prazo',
       cost: 'Custo', tokens: 'Tokens', rounds: 'Seus prompts', sessions: 'Sessões',
       attempts: 'Tentativas', comments: 'Comentários', subtasks: 'Subtarefas', progress: 'Progresso', harnesses: 'Harnesses',
-      delivered: 'Entregue em', start: 'Início',
+      delivered: 'Entregue em', started: 'Início',
     },
   },
 }
