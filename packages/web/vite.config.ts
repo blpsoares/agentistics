@@ -80,9 +80,9 @@ export default defineConfig({
         start_url: '/',
         display: 'standalone',
         background_color: '#0f0f12',
-        theme_color: '#D97706',
+        theme_color: '#FD8924',
         icons: [
-          // Transparent mark, no backdrop — what desktop taskbars/docks draw verbatim.
+          // The rounded plate with transparent corners — what desktop taskbars/docks draw verbatim.
           { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
           { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
           // Opaque plate, glyph confined to the safe-zone circle — for OSes (Android/ChromeOS)

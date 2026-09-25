@@ -936,3 +936,9 @@ button:focus-within .ag-row-pin,
     mask-image: none;
   }
 }
+
+/* Brand plate per theme — see the footer in App.tsx. */
+.ag-logo-dark { display: block; }
+.ag-logo-light { display: none; }
+[data-theme="light"] .ag-logo-dark { display: none; }
+[data-theme="light"] .ag-logo-light { display: block; }

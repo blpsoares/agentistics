@@ -19,7 +19,7 @@
  * the vector, not a hue-rotate of pixels, so it is exact at every size.
  */
 import { chromium } from 'playwright'
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 const ROOT = resolve(import.meta.dir, '..', '..', '..')
@@ -156,6 +156,13 @@ for (const central of [false, true]) {
 put(join(PUBLIC, 'minimalistLogo.png'), await png(bare(GLYPH), 512))
 put(join(PUBLIC, 'markMask.png'), await png(bare(GLYPH), 512))
 
+// ---- Logos that follow the place they are drawn in -------------------------------------------
+// The plate carries its own background, so it reads on any surface; the light one exists for the
+// places that are themselves light (light theme, PDF on white paper, README on GitHub light).
+put(join(PUBLIC, 'logo.png'), await png(plate(DARK), 512))
+put(join(PUBLIC, 'logo-light.png'), await png(plate(LIGHT), 512))
+put(join(ROOT, 'packages/desktop/ui/logo.png'), await png(bare(GLYPH), 256)) // dark window, bare glyph
+
 // ---- Exports for docs / README / store listings ----------------------------------------------
 for (const s of [1024, 512, 256]) {
   put(join(EXPORTS, `logo-dark-${s}.png`), await png(plate(DARK), s))
@@ -185,6 +192,23 @@ put(join(DESKTOP, 'icon.ico'), ico(await each([16, 24, 32, 48, 64, 128, 256], as
 put(join(DESKTOP, 'icon.icns'), icns(await each(
   ([['icp4', 16], ['icp5', 32], ['icp6', 64], ['ic07', 128], ['ic08', 256], ['ic09', 512], ['ic10', 1024]] as const),
   async ([t, s]) => [t, await appPlate(s)] as [string, Buffer])))
+
+// Windows installer (NSIS) artwork: 24-bit BMP, the only format the bundler accepts. Chromium has
+// no BMP encoder, so the PNG is converted with ImageMagick (`convert`), the one place it is needed.
+const bmp = (name: string, data: Buffer) => {
+  const tmp = join(EXPORTS, `.${name}.png`)
+  writeFileSync(tmp, data)
+  const out = join(DESKTOP, name)
+  const r = Bun.spawnSync(['convert', tmp, '-background', 'white', '-alpha', 'remove', '-alpha', 'off', `BMP3:${out}`])
+  if (r.exitCode !== 0) throw new Error(`convert failed for ${name}: ${r.stderr.toString()}`)
+  rmSync(tmp)
+  written.push(out.replace(ROOT + '/', ''))
+}
+const nsisSidebar = `<style>@font-face{font-family:I;font-weight:700;src:url(data:font/woff2;base64,${inter})}body{margin:0}
+.c{width:164px;height:314px;background:linear-gradient(180deg,#23273a 0%,${PLATE_DARK} 55%);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;font-family:I,sans-serif;color:#ECECEC}
+.l{width:96px;height:96px}.t{font-size:17px;letter-spacing:-.01em}</style><div class="c"><div class="l">${plate(DARK)}</div><div class="t">agentistics</div></div>`
+bmp('nsis-sidebar.bmp', await png(nsisSidebar, 164, 314))
+bmp('nsis-header.bmp', await png(`<div style="width:150px;height:57px;background:#fff;display:flex;align-items:center;justify-content:center"><div style="width:47px;height:47px">${plate(DARK)}</div></div>`, 150, 57))
 
 // iOS: every AppIcon-<w>x<w>@<n>x.png already in the folder keeps its name and gets its pixel size.
 for (const f of readdirSync(join(DESKTOP, 'ios'))) {
