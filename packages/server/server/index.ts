@@ -1598,6 +1598,45 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       }
     }
 
+    // USER SESSION GROUPS — the door the MCP tools use to organise sessions (see
+    // `sessions/session-groups-web.ts`). Matched before `/api/tasks`; it shares no path with it.
+    if (url.pathname === '/api/session-groups' && req.method === 'GET') {
+      const { listGroups } = await import('./sessions/session-groups-web')
+      return json(await listGroups())
+    }
+    if (url.pathname === '/api/session-groups' && req.method === 'POST') {
+      const body = await req.json().catch(() => ({})) as { name?: string; sessions?: unknown }
+      const { groupOp, groupStatus } = await import('./sessions/session-groups-web')
+      const out = await groupOp({
+        op: 'create', name: String(body.name ?? ''),
+        ...(Array.isArray(body.sessions) ? { sessions: body.sessions.map(String) } : {}),
+      })
+      return json(out, groupStatus(out))
+    }
+    if (url.pathname === '/api/session-groups/ungroup' && req.method === 'POST') {
+      const body = await req.json().catch(() => ({})) as { session?: string }
+      const { groupOp, groupStatus } = await import('./sessions/session-groups-web')
+      const out = await groupOp({ op: 'remove', session: String(body.session ?? '') })
+      return json(out, groupStatus(out))
+    }
+    if (url.pathname.startsWith('/api/session-groups/') && req.method === 'POST') {
+      const rest = url.pathname.slice('/api/session-groups/'.length).split('/')
+      const group = decodeURIComponent(rest[0] ?? '')
+      const body = await req.json().catch(() => ({})) as { name?: string; session?: string }
+      const { groupOp, groupStatus } = await import('./sessions/session-groups-web')
+      // `/:group/sessions` files a session into the group; `/:group` renames it.
+      const out = rest[1] === 'sessions'
+        ? await groupOp({ op: 'add', group, session: String(body.session ?? '') })
+        : await groupOp({ op: 'rename', group, name: String(body.name ?? '') })
+      return json(out, groupStatus(out))
+    }
+    if (url.pathname.startsWith('/api/session-groups/') && req.method === 'DELETE') {
+      const group = decodeURIComponent(url.pathname.slice('/api/session-groups/'.length))
+      const { groupOp, groupStatus } = await import('./sessions/session-groups-web')
+      const out = await groupOp({ op: 'delete', group })
+      return json(out, groupStatus(out))
+    }
+
     if (url.pathname === '/api/tasks' && req.method === 'GET') {
       const { listTasks } = await import('./sessions/task-web')
       return json(await listTasks(taskFilterOf(url)))

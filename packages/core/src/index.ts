@@ -54,3 +54,4 @@ export * from './stagedSession'
 // could disagree about what "sanitized" means.
 export * from './pasteSanitize'
 export * from './sessionShape'
+export * from './sessionGroups'
