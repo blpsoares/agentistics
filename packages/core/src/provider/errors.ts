@@ -156,7 +156,7 @@ function parseRetryAfterMs(header: string | undefined): number | undefined {
 /**
  * The ALLOWLIST made executable (spec §6.3.3): copies only the typed `ClassifierInput` fields out
  * of an arbitrary object, each checked against its declared primitive type. Everything else —
- * headers, the request/response body, `apiKey`, `message`, stack traces — is silently dropped.
+ * headers, the request/response body, the SDK's key option, `message`, stack traces — is silently dropped.
  * `classifyProviderError` runs every input through this first, even though its parameter is
  * already typed as `ClassifierInput`: a caller can hand it a wider object at runtime (an SDK error
  * cast to the interface), and this is the defense that makes what else it carries irrelevant.
