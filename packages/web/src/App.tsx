@@ -4126,7 +4126,8 @@ export default function AppLayout() {
             maxWidth: 1400, margin: '0 auto', padding: '0 16px', height: 48,
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           }}>
-            <img src='/minimalistLogo.png' alt="agentistics" style={{ height: 44, width: 'auto' }} />
+            {/* 60% of the 48px band, the same proportion the desktop strip uses. */}
+            <img src='/minimalistLogo.png' alt="agentistics" style={{ height: 28, width: 'auto' }} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <MagnifierButton ctx={appCtx} />
               <HideLensesButton ctx={appCtx} />
