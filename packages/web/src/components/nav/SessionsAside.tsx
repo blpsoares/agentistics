@@ -31,7 +31,7 @@ import {
 } from '../../lib/sessionsAsidePrefs'
 import { sessionCardStyle, STATE_COLOR } from '../../lib/sessionCardStyle'
 import { SessionsGroupMenu } from './SessionsGroupMenu'
-import { AttentionDot, attentionCount } from './AttentionDot'
+import { AttentionSlot, attentionCount, attentionIds, pruneDismissed } from './AttentionDot'
 import { rowSelected } from '../../lib/fleetSelection'
 import { filterFleet, ignoredDimensions } from '../../lib/fleetFilter'
 import { NewSessionModal } from '../sessions/NewSessionModal'
@@ -202,6 +202,13 @@ export function SessionsAside({
     writeAsideGroupPrefs({ order: next })
   }
   const [foldedGroups, setFoldedGroupsState] = useState<Set<string>>(new Set(storedGroupPrefs.collapsed))
+  // Sessions whose "waiting on you" dot the reader dismissed on a folded group. Deliberately MEMORY
+  // ONLY: a restart or a reload starts fresh, which is the point — it answers "I saw this", not
+  // "stop telling me". And it is pruned per session the moment that session stops waiting, so the
+  // next time it asks, the dot is back.
+  const [dismissedAttn, setDismissedAttn] = useState<ReadonlySet<string>>(new Set())
+  useEffect(() => { setDismissedAttn(prev => pruneDismissed(prev, rows)) }, [rows])
+  const dismissAttn = (ids: readonly string[]) => setDismissedAttn(prev => new Set([...prev, ...ids]))
   const toggleGroupFold = (key: string) => {
     const next = new Set(foldedGroups)
     next.has(key) ? next.delete(key) : next.add(key)
@@ -955,6 +962,12 @@ export function SessionsAside({
                       color: 'var(--text-tertiary)',
                     }}
                   >
+                    {/* Fixed slot at the left edge: the dot lines up from group to group. */}
+                    <AttentionSlot
+                      count={folded ? attentionCount(gRows, dismissedAttn) : 0}
+                      pt={pt}
+                      onDismiss={() => dismissAttn(attentionIds(gRows, dismissedAttn))}
+                    />
                     {folded ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
                     <Folder size={11} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
                     <span style={{
@@ -964,9 +977,6 @@ export function SessionsAside({
                       {group.name}
                     </span>
                     <span style={{ fontSize: 10.5, fontWeight: 600, opacity: 0.65 }}>{gRows.length}</span>
-                    {/* A folded group hides its rows, so the one thing a header must still say is
-                        that something inside is waiting on you. */}
-                    {folded && <AttentionDot count={attentionCount(gRows)} pt={pt} />}
                   </button>
                   <button
                     onClick={e => {
@@ -1081,6 +1091,8 @@ export function SessionsAside({
                 lang={lang}
                 foldedGroups={foldedGroups}
                 onToggleGroupFold={toggleGroupFold}
+                dismissedAttn={dismissedAttn}
+                onDismissAttn={dismissAttn}
                 cardColor={cardColor}
               />
             ))}
@@ -1425,7 +1437,7 @@ export function SessionsAside({
  *  band with a heading and no rows under it is a label pretending to be information. */
 function SessionBand({
   bandId, label, groups, groupBy, pinned, sessionId, tap, onPin, onOpen, rowsById, onOpenMenu,
-  onFile, lang, foldedGroups, onToggleGroupFold, cardColor,
+  onFile, lang, foldedGroups, onToggleGroupFold, dismissedAttn, onDismissAttn, cardColor,
 }: {
   bandId: AsideBandId
   label: string
@@ -1446,6 +1458,9 @@ function SessionBand({
   /** Collapse keys already toggled shut — see `collapseKey` in `sessionsAsidePrefs.ts`. */
   foldedGroups: ReadonlySet<string>
   onToggleGroupFold: (key: string) => void
+  /** Session ids whose waiting dot was dismissed, and how to dismiss more. */
+  dismissedAttn: ReadonlySet<string>
+  onDismissAttn: (ids: readonly string[]) => void
   cardColor: AsideCardColor
 }) {
   const count = groups.reduce((n, g) => n + g.sessions.length, 0)
@@ -1485,6 +1500,11 @@ function SessionBand({
                   minHeight: tap,
                 }}
               >
+                <AttentionSlot
+                  count={folded ? attentionCount(g.sessions, dismissedAttn) : 0}
+                  pt={lang === 'pt'}
+                  onDismiss={() => onDismissAttn(attentionIds(g.sessions, dismissedAttn))}
+                />
                 {folded ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
                 {dotColor && (
                   <span aria-hidden style={{
@@ -1495,7 +1515,6 @@ function SessionBand({
                   {g.label}
                 </span>
                 <span style={{ marginLeft: 'auto', opacity: 0.7 }}>{g.sessions.length}</span>
-                {folded && <AttentionDot count={attentionCount(g.sessions)} pt={lang === 'pt'} />}
               </button>
             )}
             {(!headings || !folded) && g.sessions.map(s => (
@@ -1659,16 +1678,6 @@ function SessionRow({ session, selected, pinned, tap, onPin, onOpen, onMoveBy, v
       aria-current={selected ? 'true' : undefined}
       title={session.model ? `${session.title}\n${session.model}` : session.title}
     >
-      {/* The dot marks a row that WANTS somebody. It never carries the message alone — the state
-          word is beside it — because a fact said only in colour is a fact some readers never get. */}
-      <span
-        aria-hidden
-        style={{
-          width: 6, height: 6, borderRadius: 3, flexShrink: 0,
-          background: wants ? 'var(--anthropic-orange)' : color,
-          opacity: wants ? 1 : 0.55,
-        }}
-      />
       <SessionFacts
         session={session}
         selected={selected}
