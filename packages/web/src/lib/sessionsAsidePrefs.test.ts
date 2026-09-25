@@ -51,6 +51,18 @@ describe('readAsideGroupPrefs', () => {
     }))
     expect(readAsideGroupPrefs().collapsed).toEqual(['active:project:agentistics'])
   })
+
+  test('collapsedUserGroups drops non-string entries', () => {
+    localStorage.setItem('agentistics-sessions-aside-v1', JSON.stringify({
+      collapsedUserGroups: ['g1', 42, null],
+    }))
+    expect(readAsideGroupPrefs().collapsedUserGroups).toEqual(['g1'])
+  })
+
+  test('missing collapsedUserGroups defaults to empty', () => {
+    localStorage.setItem('agentistics-sessions-aside-v1', JSON.stringify({ groupBy: 'task' }))
+    expect(readAsideGroupPrefs().collapsedUserGroups).toEqual([])
+  })
 })
 
 describe('writeAsideGroupPrefs', () => {
@@ -60,12 +72,14 @@ describe('writeAsideGroupPrefs', () => {
       order: { status: ['working', 'waiting'] },
       collapsed: ['active:status:working'],
       cardColor: 'neutral',
+      collapsedUserGroups: ['g1'],
     })
     expect(readAsideGroupPrefs()).toEqual({
       groupBy: 'status',
       order: { status: ['working', 'waiting'] },
       collapsed: ['active:status:working'],
       cardColor: 'neutral',
+      collapsedUserGroups: ['g1'],
     })
   })
 

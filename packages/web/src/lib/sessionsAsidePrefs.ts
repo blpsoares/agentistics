@@ -36,10 +36,16 @@ export interface AsideGroupPrefs {
   /** Collapsed groups, keyed `${band}:${groupBy}:${key}` — see `collapseKey`. */
   collapsed: string[]
   cardColor: AsideCardColor
+  /** Collapsed USER groups (`sessionUserGroups.ts`), keyed by the group's own id. Per-viewer, same
+   *  as `collapsed` above — a person's folded "Saved to later" band on their phone must not fold
+   *  it on their desktop too, the same reasoning `boardPrefs.ts` states for the board's columns.
+   *  Membership itself lives on the SERVER (`sessionUserGroups.ts`); only "is it folded right now
+   *  on THIS screen" lives here. */
+  collapsedUserGroups: string[]
 }
 
 export const DEFAULT_ASIDE_GROUP_PREFS: AsideGroupPrefs = {
-  groupBy: 'project', order: {}, collapsed: [], cardColor: 'wash',
+  groupBy: 'project', order: {}, collapsed: [], cardColor: 'wash', collapsedUserGroups: [],
 }
 
 /** The stable key one group's collapsed state is stored under. */
@@ -75,6 +81,9 @@ export function readAsideGroupPrefs(): AsideGroupPrefs {
         ? p.collapsed.filter((x): x is string => typeof x === 'string')
         : [],
       cardColor: isCardColor(p.cardColor) ? p.cardColor : DEFAULT_ASIDE_GROUP_PREFS.cardColor,
+      collapsedUserGroups: Array.isArray(p.collapsedUserGroups)
+        ? p.collapsedUserGroups.filter((x): x is string => typeof x === 'string')
+        : [],
     }
   } catch { return DEFAULT_ASIDE_GROUP_PREFS }
 }
