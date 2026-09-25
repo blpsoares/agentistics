@@ -194,6 +194,16 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          EXCLUDING (no `lastSeenMs` = not in the group, ever): a session wrongly
   │                          left out costs one keypress on its own Reopen verb, one wrongly let in
   │                          is invisible and makes the whole group untrustworthy.
+  │                          **USER SESSION GROUPS are organised by assistants too**, through
+  │                          `session-groups-web.ts` (`/api/session-groups`, the door behind the MCP tools
+  │                          `agentistics_session_groups` / `_group_create` / `_group_edit`). It holds NO rule:
+  │                          `planGroupOp` (`@agentistics/core`, `sessionGroups.ts`) is the one place they combine
+  │                          — exclusive membership, unpin on file — and the web's `sessionUserGroups.ts`
+  │                          re-exports the same planners. The route only resolves text (a title, an id prefix,
+  │                          a group NAME) to an identity key against the SAME fleet rows the aside draws, and
+  │                          REFUSES a reference that matches nothing or two things — a member no row can ever
+  │                          resolve would be a group nobody can empty. Writes go through `updatePreferences`
+  │                          (inside the write chain), never read-then-write: the browser writes the same key.
   │                          **What a session CALLS ITSELF** is `harness-session-file.ts` (pure) +
   │                          `harness-sessions.ts`: Claude Code writes `~/.claude/sessions/<pid>.json`
   │                          holding the name `/rename` set, the conversation id, the pid, and — for
