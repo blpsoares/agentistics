@@ -172,6 +172,13 @@ put(join(PUBLIC, 'markMask.png'), await png(bare(GLYPH), 512))
 // places that are themselves light (light theme, PDF on white paper, README on GitHub light).
 put(join(PUBLIC, 'logo.png'), await png(plate(DARK), 512))
 put(join(PUBLIC, 'logo-light.png'), await png(plate(LIGHT), 512))
+// The central's in-app marks: the same drawings in teal, picked at runtime by `brandAsset()`
+// (web/src/lib/brand.ts) — a central and a machine serve one bundle, so the choice cannot be made
+// at build time. Without these the central's sidebar, footer and login kept the amber mark while
+// its favicon and installed icon were already teal.
+put(join(PUBLIC, 'minimalistLogo-central.png'), await png(teal(bare(GLYPH)), 512))
+put(join(PUBLIC, 'logo-central.png'), await png(teal(plate(DARK)), 512))
+put(join(PUBLIC, 'logo-light-central.png'), await png(teal(plate(LIGHT)), 512))
 put(join(ROOT, 'packages/desktop/ui/logo.png'), await png(bare(GLYPH), 256)) // dark window, bare glyph
 
 // ---- Exports for docs / README / store listings ----------------------------------------------

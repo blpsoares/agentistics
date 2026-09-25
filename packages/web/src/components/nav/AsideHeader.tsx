@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from 'react'
 import { PanelLeft } from 'lucide-react'
+import { brandAsset } from '../../lib/brand'
 
 export interface AsideHeaderProps {
   lang: 'pt' | 'en'
@@ -63,12 +64,12 @@ export function AsideHeader({ lang, height, collapsed, onToggle }: AsideHeaderPr
         >
           {markHot
             ? <PanelLeft size={18} />
-            : <img src="/minimalistLogo.png" alt="agentistics" style={{ height: markH, width: 'auto', objectFit: 'contain' }} />}
+            : <img src={brandAsset('/minimalistLogo.png')} alt="agentistics" style={{ height: markH, width: 'auto', objectFit: 'contain' }} />}
         </button>
       ) : (
         <>
           <img
-            src="/minimalistLogo.png"
+            src={brandAsset('/minimalistLogo.png')}
             alt="agentistics"
             style={{ height: markH, width: 'auto', maxWidth: '100%', objectFit: 'contain', flexShrink: 0, minWidth: 0 }}
           />
