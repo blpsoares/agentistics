@@ -1019,6 +1019,8 @@ function MobileBottomNav({
 const TOPBAR_H = 44
 const SIDEBAR_W = 248
 const SIDEBAR_W_COLLAPSED = 64
+/** Room kept between the Filtros / stats tabs and the right-hand aside they hang beside. */
+const FILTROS_ASIDE_GAP = 12
 
 const FILTROS_PANEL_ID = 'sessions-filtros-panel'
 
@@ -2072,7 +2074,12 @@ export default function AppLayout() {
   // `sessionsFiltersPanel.ts`.
   const filtrosBounds = filtrosPanelBoundsRight(
     { left: 0, right: (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth) + PAGE_INSET },
-    rightAsideEdge === null ? null : { left: rightAsideEdge, right: viewportW },
+    // A small gap, not flush: the tabs read as part of the aside they touched, and the "Filtros"
+    // pill sat on its edge. The clamp takes the gap out of the WIDTH as well, so the panel never
+    // grows into the space the gap opened, and the metrics tab (derived from these bounds) moves
+    // with it. With the aside closed there is no edge to keep off: `VIEWPORT_EDGE_MARGIN` is
+    // already the breathing room from the window.
+    rightAsideEdge === null ? null : { left: rightAsideEdge - FILTROS_ASIDE_GAP, right: viewportW },
     viewportW,
   )
   /**

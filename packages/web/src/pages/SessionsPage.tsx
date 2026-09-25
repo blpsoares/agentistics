@@ -24,7 +24,7 @@ import {
 import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import {
   ChevronLeft, Eye, FileText, FolderTree, MessagesSquare, Plus, TerminalSquare,
-  X as XIcon,
+  X as XIcon, ArrowRight,
 } from 'lucide-react'
 import { StudioHost, type StudioHostProps } from '../components/sessions/StudioHost'
 import { ResizeGrip } from '../components/ResizeGrip'
@@ -887,6 +887,9 @@ export default function SessionsPage() {
     ran: pt ? 'rodando' : 'running',
     thought: pt ? 'pensando' : 'thinking',
     delegated: pt ? 'delegando' : 'delegating',
+    // An MCP or any other tool no rule above recognises. Without it the verb was blank and the label
+    // read `undefined · <tool>`; the references list already says "usando" for the same kind.
+    used: pt ? 'usando' : 'using',
   }
   const edgeMarker = hint === null || selected === undefined ? null : (
     <button
@@ -898,7 +901,9 @@ export default function SessionsPage() {
       // with no step behind it (reasoning carries its own text), and then this opens the feed
       // exactly as it did before.
       onClick={() => openArtifacts('live', hint.ref)}
-      title={`${HINT_VERB[hint.kind]} · ${hint.text}`}
+      className="ag-edge-hint"
+      title={`${HINT_VERB[hint.kind]} · ${hint.text} — ${pt ? 'acompanhar' : 'follow'}`}
+      aria-label={`${HINT_VERB[hint.kind]} ${hint.text}. ${pt ? 'Abrir o acompanhamento ao vivo' : 'Open the live view'}`}
       style={{
         // THIRD PLACE, and the first two were both wrong for the same reason: it FLOATED.
         // Hanging off the middle of the right edge it covered the conversation's text; sitting
@@ -926,14 +931,25 @@ export default function SessionsPage() {
       <span style={{ fontWeight: 700, color: 'var(--anthropic-orange)', flexShrink: 0 }}>
         {HINT_VERB[hint.kind]}
       </span>
-      {/* The THING, not a count: a path or a command says whether this is worth watching. */}
-      <span style={{
-        minWidth: 0, flex: 1, color: 'var(--text-tertiary)', fontSize: 11,
+      {/* The THING, not a count: a path or a command says whether this is worth watching. It takes
+          the room its text needs and no more, so the arrow can sit right after it instead of a
+          screen away at the far end. */}
+      <span className="ag-edge-hint-text" style={{
+        minWidth: 0, flex: '0 1 auto', color: 'var(--text-tertiary)', fontSize: 11,
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', direction: 'rtl',
       }}>{hint.text}</span>
-      <span style={{ flexShrink: 0, color: 'var(--anthropic-orange)', fontSize: 11 }}>
-        {pt ? 'acompanhar →' : 'follow →'}
-      </span>
+      {/* THE AFFORDANCE. The whole strip is the control, and a line of text with a dot in front of
+          it does not say so. The arrow is what says "this goes somewhere", it nudges on hover, and
+          the text underlines with it — the pair that says "clickable" on any link. The words
+          "acompanhar →" that used to close the bar are gone: they said it a screen away from the
+          thing they were about. */}
+      <ArrowRight
+        aria-hidden
+        className="ag-edge-hint-arrow"
+        size={13}
+        style={{ flexShrink: 0, color: 'var(--anthropic-orange)' }}
+      />
+      <span style={{ flex: 1 }} />
     </button>
   )
 
