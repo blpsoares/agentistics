@@ -2,6 +2,7 @@ import { MODEL_PRICING } from '@agentistics/core'
 import type { PriceEntry, RatesCache } from '@agentistics/core'
 import { fetchCommunityPricing, mergePricingLayers, type PriceOrigin } from './pricing-community'
 import { fetchOpenAiPricing, fetchGooglePricing } from './pricing-official'
+import { vetOfficialPricing } from './pricing-consensus'
 
 // Use MODEL_PRICING from src/lib/types.ts as the canonical fallback
 const FALLBACK_PRICING: Record<string, PriceEntry> = MODEL_PRICING
@@ -179,9 +180,21 @@ export async function getRates(): Promise<RatesCache> {
 
   // Each vendor page is independent: one failing its anchor drops only that vendor to the
   // community figures, never the others.
-  const official = (anthropic.source === 'live' || openai || google)
+  const scraped = (anthropic.source === 'live' || openai || google)
     ? { ...(anthropic.source === 'live' ? anthropic.pricing : {}), ...(openai ?? {}), ...(google ?? {}) }
     : null
+
+  // A scraped row must AGREE with the layers below it before it wins (pricing-consensus.ts). The
+  // prior is built-in + community, so a scrape bug falls back to a price that was already right.
+  let official: Record<string, PriceEntry> | null = null
+  if (scraped) {
+    const { accepted, rejected } = vetOfficialPricing(scraped, { ...FALLBACK_PRICING, ...(community ?? {}) })
+    if (rejected.length > 0) {
+      console.warn(`[rates] refused ${rejected.length} official price row(s) that disagree with the other sources: `
+        + rejected.map(r => r.reason === 'drift' ? `${r.id} (${r.field})` : `${r.id} (invalid row)`).join(', '))
+    }
+    official = Object.keys(accepted).length > 0 ? accepted : null
+  }
 
   // Trust order, lowest first. The built-in table is the floor and is always present, so a source
   // that fails or returns junk costs us freshness, never the ability to price anything.
