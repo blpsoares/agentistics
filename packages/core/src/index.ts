@@ -58,3 +58,5 @@ export * from './pasteSanitize'
 export * from './canonical/entities'
 export * from './canonical/event'
 export * from './canonical/projection'
+// A1.4: CapabilityState beside HARNESS_CAPABILITIES (derived, nothing reads it yet).
+export * from './canonical/capabilities'
