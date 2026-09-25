@@ -55,6 +55,12 @@ const wrap = (viewBox: string, body: string) =>
   `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="${viewBox}" width="100%" height="100%">${body}</svg>`
 
 /** The rounded plate as designed (transparent corners) — the "any" purpose icon. */
+/** The plate EXACTLY as designed: the whole 85-unit canvas, its own margin, border and shadow
+ *  intact. Used wherever the logo is shown as a picture (footer, PDF, README, exports). The
+ *  cropped `plate` below trims that margin for app icons, which must fill their square, and in
+ *  doing so clips the border and the shadow — fine for an icon, wrong for the logo itself. */
+const plateFull = (svg: string) => svg.replace(/<svg[^>]*>/, m => m.replace(/width="\d+" height="\d+"/, 'width="100%" height="100%"'))
+
 const plate = (svg: string) => svg.replace(/<svg[^>]*>/, m => m.replace(/width="\d+" height="\d+" viewBox="[^"]*"/, 'viewBox="1.5 1.5 82 82" width="100%" height="100%"'))
 
 /** Full-bleed square (no rounded corners, no transparency): the OS applies its own mask. */
@@ -170,14 +176,14 @@ put(join(PUBLIC, 'markMask.png'), await png(bare(GLYPH), 512))
 // ---- Logos that follow the place they are drawn in -------------------------------------------
 // The plate carries its own background, so it reads on any surface; the light one exists for the
 // places that are themselves light (light theme, PDF on white paper, README on GitHub light).
-put(join(PUBLIC, 'logo.png'), await png(plate(DARK), 512))
-put(join(PUBLIC, 'logo-light.png'), await png(plate(LIGHT), 512))
+put(join(PUBLIC, 'logo.png'), await png(plateFull(DARK), 512))
+put(join(PUBLIC, 'logo-light.png'), await png(plateFull(LIGHT), 512))
 put(join(ROOT, 'packages/desktop/ui/logo.png'), await png(bare(GLYPH), 256)) // dark window, bare glyph
 
 // ---- Exports for docs / README / store listings ----------------------------------------------
 for (const s of [1024, 512, 256]) {
-  put(join(EXPORTS, `logo-dark-${s}.png`), await png(plate(DARK), s))
-  put(join(EXPORTS, `logo-light-${s}.png`), await png(plate(LIGHT), s))
+  put(join(EXPORTS, `logo-dark-${s}.png`), await png(plateFull(DARK), s))
+  put(join(EXPORTS, `logo-light-${s}.png`), await png(plateFull(LIGHT), s))
   put(join(EXPORTS, `logo-mark-${s}.png`), await png(bare(GLYPH), s))
   put(join(EXPORTS, `logo-mark-teal-${s}.png`), await png(teal(bare(GLYPH)), s))
 }
