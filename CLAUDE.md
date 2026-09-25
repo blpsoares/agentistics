@@ -926,6 +926,17 @@ falls back, instead of yielding numbers that look right and are half wrong. Read
 never by counting dollar signs — OpenAI writes "-" for no cache-write charge, and counting amounts
 then reads output out of the wrong column.
 
+**A scraped row must AGREE before it wins** (`pricing-consensus.ts`, pure). Anthropic's page is
+read by its `<th>` labels, never by position, and anchored on `claude-sonnet-5` like the others;
+on top of that EVERY official row must pass the row invariants (all four positive, cache read <=
+input, cache write >= cache read) and, where built-in or community already price the model, sit
+within `MAX_OFFICIAL_DRIFT` (3x) of that figure on every field. A refused row keeps the prior price
+and is logged. This exists because on 2026-09-25 Anthropic moved Output from the last column to the
+second, the positional reader priced every cache read at the 1h cache-WRITE rate (20x), and the
+official layer overrode two sources that still held the right figure: every cost surface read ~16x
+(R$ 2M against a real ~US$ 25k). A model no other layer knows is adopted on the invariants alone —
+pricing a model the day it launches is what the scrape is for.
+
 Each model carries its origin (`official` / `community` / `builtin`), surfaced per row in
 **Settings → Pricing**, which lists **only models this machine has actually used** — a new one joins
 the list by itself the first time it appears in a session, with no code change. Group headings come
