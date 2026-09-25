@@ -942,3 +942,19 @@ button:focus-within .ag-row-pin,
 .ag-logo-light { display: none; }
 [data-theme="light"] .ag-logo-dark { display: none; }
 [data-theme="light"] .ag-logo-light { display: block; }
+
+/* "Something in this folded group is waiting on you" — see nav/AttentionDot.tsx. The ring that
+   pulses out of it is what says it is a signal and not a piece of the layout. */
+.ag-attn-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  background: var(--anthropic-orange);
+  animation: ag-attn-pulse 2.2s ease-out infinite;
+}
+@keyframes ag-attn-pulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--anthropic-orange) 60%, transparent); }
+  70%  { box-shadow: 0 0 0 7px transparent; }
+  100% { box-shadow: 0 0 0 7px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ag-attn-dot { animation: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--anthropic-orange) 30%, transparent); }
+}

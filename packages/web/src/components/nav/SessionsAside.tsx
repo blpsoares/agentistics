@@ -31,6 +31,7 @@ import {
 } from '../../lib/sessionsAsidePrefs'
 import { sessionCardStyle, STATE_COLOR } from '../../lib/sessionCardStyle'
 import { SessionsGroupMenu } from './SessionsGroupMenu'
+import { AttentionDot, attentionCount } from './AttentionDot'
 import { rowSelected } from '../../lib/fleetSelection'
 import { filterFleet, ignoredDimensions } from '../../lib/fleetFilter'
 import { NewSessionModal } from '../sessions/NewSessionModal'
@@ -963,6 +964,9 @@ export function SessionsAside({
                       {group.name}
                     </span>
                     <span style={{ fontSize: 10.5, fontWeight: 600, opacity: 0.65 }}>{gRows.length}</span>
+                    {/* A folded group hides its rows, so the one thing a header must still say is
+                        that something inside is waiting on you. */}
+                    {folded && <AttentionDot count={attentionCount(gRows)} pt={pt} />}
                   </button>
                   <button
                     onClick={e => {
@@ -1491,6 +1495,7 @@ function SessionBand({
                   {g.label}
                 </span>
                 <span style={{ marginLeft: 'auto', opacity: 0.7 }}>{g.sessions.length}</span>
+                {folded && <AttentionDot count={attentionCount(g.sessions)} pt={lang === 'pt'} />}
               </button>
             )}
             {(!headings || !folded) && g.sessions.map(s => (
