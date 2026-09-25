@@ -503,7 +503,33 @@ export function SessionsAside({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 10, paddingTop: 4 }}>
       {/*
-        * ONE ROW: the search, and the two standing verbs as icons beside it.
+        * "NEW SESSION" leads the column, directly under the workspace tabs and above the first
+        * session, the way a chat sidebar leads with "new chat". It was a `+` in the search row; a
+        * verb this central to the workspace is worth its own row and its own words, and the search
+        * row keeps its width. It is the one solid accent control here because it is the only one
+        * that CREATES something.
+        */}
+      {!hideNew && (
+        <button
+          onClick={() => setCreating(true)}
+          aria-label={pt ? 'Nova sessão' : 'New session'}
+          title={pt ? 'Nova sessão' : 'New session'}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            margin: '0 2px', minHeight: tap ?? 36, flexShrink: 0, padding: '0 12px',
+            borderRadius: 9, cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 700,
+            border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange)',
+            color: '#141414',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.filter = 'brightness(1.1)' }}
+          onMouseLeave={e => { e.currentTarget.style.filter = 'none' }}
+        >
+          <Plus size={16} />
+          {pt ? 'Nova sessão' : 'New session'}
+        </button>
+      )}
+      {/*
+        * ONE ROW: the search, and the standing verbs as icons beside it.
         *
         * Search is what the column is used for on every visit; starting a session and writing to
         * several are things somebody does occasionally. Two full-width dashed buttons stacked above
@@ -551,23 +577,6 @@ export function SessionsAside({
             </button>
           )}
         </div>
-        {!hideNew && (
-          <button
-            onClick={() => setCreating(true)}
-            aria-label={pt ? 'Nova sessão' : 'New session'}
-            title={pt ? 'Nova sessão' : 'New session'}
-            style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-              width: tap ?? 34, padding: 0, borderRadius: 9, cursor: 'pointer',
-              border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange)',
-              color: '#141414', fontFamily: 'inherit',
-            }}
-            onMouseEnter={e => { e.currentTarget.style.filter = 'brightness(1.1)' }}
-            onMouseLeave={e => { e.currentTarget.style.filter = 'none' }}
-          >
-            <Plus size={17} />
-          </button>
-        )}
         {showSend && (
           <button
             onClick={() => setPicking('send')}

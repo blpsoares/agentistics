@@ -78,6 +78,7 @@ import { shouldHandleGlobally } from './lib/studioShortcuts'
 import { runStudioShortcut } from './lib/studioSearchRequest'
 import { SessionsAside } from './components/nav/SessionsAside'
 import { SessionsRail } from './components/nav/SessionsRail'
+import { AsideHeader } from './components/nav/AsideHeader'
 import { getPinnedIds } from './lib/pinnedSessions'
 import { loadSharedPrefs } from './lib/sharedPref'
 import {
@@ -1021,8 +1022,8 @@ function MobileBottomNav({
 }
 
 /**
- * The fixed strip holding the mark, search and the sidebar toggle. The aside starts beneath it, so
- * those three controls never move when the sidebar changes width, changes body, or is collapsed.
+ * The fixed strip along the top of the page, to the right of the aside. The aside runs the full
+ * height and its header row (`AsideHeader`) has this same height, so the two bands stay level.
  */
 const TOPBAR_H = 44
 const SIDEBAR_W = 248
@@ -1167,10 +1168,10 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
   }
   return (
     <aside style={{
-      position: 'fixed', top: 'var(--ag-topbar-h)', left: 0, bottom: 0,
+      position: 'fixed', top: 0, left: 0, bottom: 0,
       width: collapsed ? SIDEBAR_W_COLLAPSED : width, zIndex: 200,
       background: 'var(--bg-surface)', borderRight: '1px solid var(--border)',
-      display: 'flex', flexDirection: 'column', padding: collapsed ? '12px 8px' : '14px 12px', boxSizing: 'border-box',
+      display: 'flex', flexDirection: 'column', padding: collapsed ? '0 8px 12px' : '0 12px 14px', boxSizing: 'border-box',
       // `fixed` is already a positioning context, so the resize handle on the edge places against
       // it. Visible overflow, because that handle straddles the border by design and clipping it
       // would leave half the hit area.
@@ -1179,6 +1180,8 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
       // a transition on it makes the edge lag behind the cursor and then catch up.
       transition: dragging ? 'none' : 'width 0.22s cubic-bezier(0.22, 1, 0.36, 1)',
     }}>
+      {/* The aside is the full height of the window, so it carries its own mark and fold control. */}
+      <AsideHeader lang={lang === 'pt' ? 'pt' : 'en'} height={TOPBAR_H} collapsed={collapsed} onToggle={onToggle} />
       {/* The workspace switch, PINNED above the scrolling body. */}
       <div style={{ padding: '0 2px 10px' }}>
         <ModeSwitch lang={lang} collapsed={collapsed} attention={attention} />
@@ -4059,11 +4062,8 @@ export default function AppLayout() {
       {/* The fixed strip above the aside — desktop only. */}
       {!isMobile && (
         <TopBar
-          lang={lang === 'pt' ? 'pt' : 'en'}
           height={TOPBAR_H}
           asideWidth={sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth}
-          collapsed={sidebarCollapsed}
-          onToggleSidebar={toggleSidebar}
           {...(stripTrailing ? { trailing: stripTrailing, trailingFlush: true } : {})}
         />
       )}
