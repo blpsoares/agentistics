@@ -32,7 +32,7 @@ import {
 import { sessionCardStyle, STATE_COLOR } from '../../lib/sessionCardStyle'
 import { SessionsGroupMenu } from './SessionsGroupMenu'
 import type { SessionOrder } from '@agentistics/tui/control/session-order'
-import { ATTN_BAR_CLASS, attentionCount, attentionIds, pruneDismissed } from './AttentionDot'
+import { ATTN_BAR_CLASS, ATTN_COUNT_CLASS, attentionCount, attentionIds, pruneDismissed } from './AttentionDot'
 import { rowSelected } from '../../lib/fleetSelection'
 import { filterFleet, ignoredDimensions } from '../../lib/fleetFilter'
 import { NewSessionModal } from '../sessions/NewSessionModal'
@@ -889,7 +889,8 @@ export function SessionsAside({
             return (
               <div
                 key={group.id}
-                {...(attn > 0 ? { className: ATTN_BAR_CLASS } : {})}
+                // Not while a drag is over it: those states draw their own edge with the same shadow.
+                {...(attn > 0 && !isDropTarget && !isReorderTarget ? { className: ATTN_BAR_CLASS } : {})}
                 // The drop target is the WHOLE group container now, not only the header line — an
                 // empty group's own "drag sessions here" hint sits below the header, and a hint
                 // that cannot itself be dropped on is not really a drop target. A member row's own
@@ -1506,9 +1507,8 @@ function SessionBand({
               // the two headings read as a hierarchy rather than as two lists. Clicking it folds
               // this group, per your instruction — the click target is the heading itself.
               <button
-                // A folded band with a session waiting on you pulses its left edge; opening it is
-                // how it is marked seen (it has no ⋮ menu of its own, unlike a user group).
-                {...(folded && attentionCount(g.sessions, dismissedAttn) > 0 ? { className: ATTN_BAR_CLASS } : {})}
+                // A folded band with a session waiting on you breathes its count; opening it is how
+                // it is marked seen (it has no ⋮ menu of its own, unlike a user group).
                 onClick={() => {
                   if (folded) onDismissAttn(attentionIds(g.sessions, dismissedAttn))
                   onToggleGroupFold(ck)
@@ -1529,7 +1529,10 @@ function SessionBand({
                 <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {g.label}
                 </span>
-                <span style={{ marginLeft: 'auto', opacity: 0.7 }}>{g.sessions.length}</span>
+                <span
+                  {...(folded && attentionCount(g.sessions, dismissedAttn) > 0 ? { className: ATTN_COUNT_CLASS } : {})}
+                  style={{ marginLeft: 'auto', opacity: 0.7 }}
+                >{g.sessions.length}</span>
               </button>
             )}
             {(!headings || !folded) && g.sessions.map(s => (
