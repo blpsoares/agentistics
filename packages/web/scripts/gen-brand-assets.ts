@@ -19,7 +19,7 @@
  * the vector, not a hue-rotate of pixels, so it is exact at every size.
  */
 import { chromium } from 'playwright'
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 const ROOT = resolve(import.meta.dir, '..', '..', '..')
@@ -42,6 +42,13 @@ const teal = (svg: string) => svg.split(AMBER).join(TEAL)
 const DARK = read('logo-dark.svg')
 const LIGHT = read('logo-light.svg')
 const GLYPH = read('logo-no-background.svg')
+/** The owner's own export of the light logo, when present. It is the final art (the SVG renders
+ *  a hairline seam on the left wing and a harder shadow), so where it exists it is used as-is and
+ *  only scaled. The teal central variant still comes from the SVG: a raster cannot be recoloured
+ *  without touching pixels. */
+const LIGHT_PNG = existsSync(join(SRC, 'logo-light.png'))
+  ? `data:image/png;base64,${readFileSync(join(SRC, 'logo-light.png')).toString('base64')}`
+  : null
 const VSC = read('logo-no-background-vscode.svg')
 
 /** The glyph without its plate, in the plate's 85-unit space (filters/defs dropped). */
@@ -60,6 +67,11 @@ const wrap = (viewBox: string, body: string) =>
  *  cropped `plate` below trims that margin for app icons, which must fill their square, and in
  *  doing so clips the border and the shadow — fine for an icon, wrong for the logo itself. */
 const plateFull = (svg: string) => svg.replace(/<svg[^>]*>/, m => m.replace(/width="\d+" height="\d+"/, 'width="100%" height="100%"'))
+
+/** The supplied PNG as a picture, or the SVG rendering when there is none. */
+const lightLogo = () => LIGHT_PNG
+  ? `<img src="${LIGHT_PNG}" style="display:block;width:100%;height:100%" alt="">`
+  : plateFull(LIGHT)
 
 const plate = (svg: string) => svg.replace(/<svg[^>]*>/, m => m.replace(/width="\d+" height="\d+" viewBox="[^"]*"/, 'viewBox="1.5 1.5 82 82" width="100%" height="100%"'))
 
@@ -177,7 +189,7 @@ put(join(PUBLIC, 'markMask.png'), await png(bare(GLYPH), 512))
 // The plate carries its own background, so it reads on any surface; the light one exists for the
 // places that are themselves light (light theme, PDF on white paper, README on GitHub light).
 put(join(PUBLIC, 'logo.png'), await png(plateFull(DARK), 512))
-put(join(PUBLIC, 'logo-light.png'), await png(plateFull(LIGHT), 512))
+put(join(PUBLIC, 'logo-light.png'), await png(lightLogo(), 512))
 // The central's in-app marks: the same drawings in teal, picked at runtime by `brandAsset()`
 // (web/src/lib/brand.ts) — a central and a machine serve one bundle, so the choice cannot be made
 // at build time. Without these the central's sidebar, footer and login kept the amber mark while
@@ -190,7 +202,7 @@ put(join(ROOT, 'packages/desktop/ui/logo.png'), await png(bare(GLYPH), 256)) // 
 // ---- Exports for docs / README / store listings ----------------------------------------------
 for (const s of [1024, 512, 256]) {
   put(join(EXPORTS, `logo-dark-${s}.png`), await png(plateFull(DARK), s))
-  put(join(EXPORTS, `logo-light-${s}.png`), await png(plateFull(LIGHT), s))
+  put(join(EXPORTS, `logo-light-${s}.png`), await png(lightLogo(), s))
   put(join(EXPORTS, `logo-mark-${s}.png`), await png(bare(GLYPH), s))
   put(join(EXPORTS, `logo-mark-teal-${s}.png`), await png(teal(bare(GLYPH)), s))
 }
