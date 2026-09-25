@@ -64,6 +64,14 @@ export const ARCHIVE_DIR = process.env.AGENTISTICS_ARCHIVE_DIR ?? join(AGENTISTI
 export const ARCHIVE_PROJECTS_DIR = join(ARCHIVE_DIR, 'projects')
 export const ARCHIVE_SESSION_META_DIR = join(ARCHIVE_DIR, 'usage-data', 'session-meta')
 export const ARCHIVE_STATS_DIR = join(ARCHIVE_DIR, 'stats-cache')
+// The durable event journal (decision D2: SQLite WAL, one per machine): <data dir>/journal.db.
+// `AGENTISTICS_JOURNAL_DIR` MOVES it — the escape hatch for a data dir that sits on a network
+// filesystem, where the journal refuses to open (WAL is not safe there). It never disables that
+// check: the override directory is classified exactly like the default one. Written as two literal
+// `join`s rather than one over a computed dir so `backup-coverage.lint.test.ts` can see the name.
+export const JOURNAL_PATH = process.env.AGENTISTICS_JOURNAL_DIR
+  ? join(process.env.AGENTISTICS_JOURNAL_DIR, 'journal.db')
+  : join(AGENTISTICS_DATA_DIR, 'journal.db')
 // Consolidated per-session metrics (mode 'consolidate'): <data dir>/sessions/<id>.json
 export const CONSOLIDATED_DIR = join(AGENTISTICS_DATA_DIR, 'sessions')
 // Persisted workflow runs (survive Claude's transcript cleanup): <data dir>/workflows/<runId>.json
