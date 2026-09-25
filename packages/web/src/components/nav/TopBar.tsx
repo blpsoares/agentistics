@@ -90,13 +90,17 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, t
           It used to be inset by 20px, which left the collapse toggle floating twenty pixels short
           of the edge it controls with nothing around it. Now it ends ON that edge. */}
       <div style={{
-        width: collapsed ? 'auto' : asideWidth, boxSizing: 'border-box', height: '100%',
+        // Collapsed, the column is still EXACTLY the rail's width and the mark sits in its middle:
+        // the rail below is centred in that width, and a mark that is off by two pixels reads as a
+        // misalignment on a column this narrow. (It used to be `auto`, back when a second button
+        // shared this column.)
+        width: asideWidth, boxSizing: 'border-box', height: '100%',
         // NO RIGHT BORDER. It continued the aside's own rule upward, which made the strip read as
         // two components stacked side by side rather than one bar — reported exactly that way.
         // The strip is one surface; the aside's edge starts below it.
-        padding: '0 12px',
+        padding: collapsed ? 0 : '0 12px',
         display: 'flex', alignItems: 'center', gap: 8, minWidth: 0,
-        justifyContent: 'flex-start',
+        justifyContent: collapsed ? 'center' : 'flex-start',
       }}>
         {/* The mark shows in BOTH states. A collapsed sidebar is still the product's left edge, and
             an earlier pass hid it there — leaving the app with no identity anywhere on screen. */}
