@@ -31,7 +31,8 @@ import {
 } from '../../lib/sessionsAsidePrefs'
 import { sessionCardStyle, STATE_COLOR } from '../../lib/sessionCardStyle'
 import { SessionsGroupMenu } from './SessionsGroupMenu'
-import { AttentionSlot, attentionCount, attentionIds, pruneDismissed } from './AttentionDot'
+import type { SessionOrder } from '@agentistics/tui/control/session-order'
+import { ATTN_BAR_CLASS, attentionCount, attentionIds, pruneDismissed } from './AttentionDot'
 import { rowSelected } from '../../lib/fleetSelection'
 import { filterFleet, ignoredDimensions } from '../../lib/fleetFilter'
 import { NewSessionModal } from '../sessions/NewSessionModal'
@@ -194,6 +195,9 @@ export function SessionsAside({
   const storedGroupPrefs = useMemo(readAsideGroupPrefs, [])
   const [groupBy, setGroupByState] = useState<AsideGroupBy>(storedGroupPrefs.groupBy)
   const setGroupBy = (v: AsideGroupBy) => { setGroupByState(v); writeAsideGroupPrefs({ groupBy: v }) }
+  // How the sessions INSIDE each group are ordered. Per-viewer, like the rest of the arrangement.
+  const [sortOrder, setSortOrderState] = useState<SessionOrder>(storedGroupPrefs.sort)
+  const setSortOrder = (v: SessionOrder) => { setSortOrderState(v); writeAsideGroupPrefs({ sort: v }) }
   const [groupOrder, setGroupOrderState] =
     useState<Partial<Record<AsideGroupBy, string[]>>>(storedGroupPrefs.order)
   const setGroupOrder = (by: AsideGroupBy, keys: string[]) => {
@@ -341,6 +345,11 @@ export function SessionsAside({
   const [deletingGroup, setDeletingGroup] = useState<SessionUserGroup | null>(null)
   /** The "⋮" menu on a group's own heading (rename/delete) — reuses `SessionRowMenu`. */
   const [groupMenu, setGroupMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  // What the open group menu could silence: only a FOLDED group signals, so only a folded one offers it.
+  const menuGroupAttnIds = groupMenu && foldedUserGroups.has(groupMenu.id)
+    ? attentionIds(groupRowsResolved.find(g => g.group.id === groupMenu.id)?.rows ?? [], dismissedAttn)
+    : []
+  const menuGroupAttn = menuGroupAttnIds.length
   /** The "Mover para grupo…" picker opened from a session row's own context menu — also
    *  `SessionRowMenu`, listing the existing groups plus "Novo grupo…". */
   const [groupPicker, setGroupPicker] = useState<{ id: string; x: number; y: number } | null>(null)
@@ -481,17 +490,17 @@ export function SessionsAside({
       {
         id: 'active',
         label: pt ? 'Ativas' : 'Active',
-        groups: asideGroups(rest.filter(r => active.has(r.state)), groupBy, lang, order),
+        groups: asideGroups(rest.filter(r => active.has(r.state)), groupBy, lang, order, sortOrder),
       },
       // Never computed while activeOnly is on — those rows are the ones the switch is withholding,
       // not a second list to render beside it.
       {
         id: 'inactive',
         label: pt ? 'Inativas' : 'Inactive',
-        groups: activeOnly ? [] : asideGroups(rest.filter(r => !active.has(r.state)), groupBy, lang, order),
+        groups: activeOnly ? [] : asideGroups(rest.filter(r => !active.has(r.state)), groupBy, lang, order, sortOrder),
       },
     ]
-  }, [matched, pinned, groupedKeys, active, activeOnly, pt, lang, groupBy, groupOrder])
+  }, [matched, pinned, groupedKeys, active, activeOnly, pt, lang, groupBy, groupOrder, sortOrder])
 
   /** The current dimension's groups, across both bands, deduped by key, in their effective
    *  order — what the popover's reorder list edits. */
@@ -615,6 +624,8 @@ export function SessionsAside({
           lang={lang}
           groupBy={groupBy}
           onGroupBy={setGroupBy}
+          sort={sortOrder}
+          onSort={setSortOrder}
           groups={groupOrderCandidates}
           onReorder={keys => setGroupOrder(groupBy, keys)}
           cardColor={cardColor}
@@ -873,9 +884,12 @@ export function SessionsAside({
             const folded = foldedUserGroups.has(group.id)
             const isDropTarget = dragOverGroupId === group.id
             const isReorderTarget = groupReorderOver === group.id
+            // A folded group hides its rows: its own left edge says when one of them is waiting.
+            const attn = folded ? attentionCount(gRows, dismissedAttn) : 0
             return (
               <div
                 key={group.id}
+                {...(attn > 0 ? { className: ATTN_BAR_CLASS } : {})}
                 // The drop target is the WHOLE group container now, not only the header line — an
                 // empty group's own "drag sessions here" hint sits below the header, and a hint
                 // that cannot itself be dropped on is not really a drop target. A member row's own
@@ -943,14 +957,13 @@ export function SessionsAside({
                   onDragEnd={() => setGroupReorderOver(null)}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 6, borderRadius: 7,
-                    padding: '4px 4px 4px 15px', minHeight: tap, cursor: 'grab',
+                    padding: '4px 4px 4px 9px', minHeight: tap, cursor: 'grab',
                   }}
                 >
                   <button
                     onClick={() => toggleUserGroupFold(group.id)}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0,
-                      position: 'relative',
                       background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
                       padding: 0, textAlign: 'left', minHeight: tap,
                       // A `<button>` with no `color` of its own falls back to the UA `buttontext`
@@ -963,14 +976,6 @@ export function SessionsAside({
                       color: 'var(--text-tertiary)',
                     }}
                   >
-                    {/* Drawn over the header's left padding: the same x in every group, and no
-                        gutter spent when there is no dot. */}
-                    <AttentionSlot
-                      count={folded ? attentionCount(gRows, dismissedAttn) : 0}
-                      pt={pt}
-                      left={-14}
-                      onDismiss={() => dismissAttn(attentionIds(gRows, dismissedAttn))}
-                    />
                     {folded ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
                     <Folder size={11} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
                     <span style={{
@@ -1182,6 +1187,11 @@ export function SessionsAside({
               action: 'move-down', label: pt ? 'Mover para baixo' : 'Move down',
               enabled: groupsValue.groups.findIndex(g => g.id === groupMenu.id) < groupsValue.groups.length - 1,
             },
+            ...(menuGroupAttn > 0
+              // Only offered while the group is actually signalling: a verb with nothing to act on
+              // is the dead control this product refuses everywhere.
+              ? [{ action: 'dismiss-attn', label: pt ? 'Marcar como visto (silenciar aviso)' : 'Mark as seen (silence alert)', enabled: true }]
+              : []),
             { action: 'delete', label: pt ? 'Excluir grupo…' : 'Delete group…', enabled: true },
           ]}
           onPick={action => {
@@ -1193,6 +1203,7 @@ export function SessionsAside({
             if (action === 'move-up') stepSessionGroup(groupMenu.id, -1)
             if (action === 'move-down') stepSessionGroup(groupMenu.id, 1)
             if (action === 'delete' && g) setDeletingGroup(g)
+            if (action === 'dismiss-attn') dismissAttn(menuGroupAttnIds)
             setGroupMenu(null)
           }}
           onClose={() => setGroupMenu(null)}
@@ -1495,21 +1506,20 @@ function SessionBand({
               // the two headings read as a hierarchy rather than as two lists. Clicking it folds
               // this group, per your instruction — the click target is the heading itself.
               <button
-                onClick={() => onToggleGroupFold(ck)}
+                // A folded band with a session waiting on you pulses its left edge; opening it is
+                // how it is marked seen (it has no ⋮ menu of its own, unlike a user group).
+                {...(folded && attentionCount(g.sessions, dismissedAttn) > 0 ? { className: ATTN_BAR_CLASS } : {})}
+                onClick={() => {
+                  if (folded) onDismissAttn(attentionIds(g.sessions, dismissedAttn))
+                  onToggleGroupFold(ck)
+                }}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 6, width: '100%', textAlign: 'left',
-                  position: 'relative',
                   background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-                  padding: '4px 9px 2px 15px', fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)',
+                  padding: '4px 9px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)',
                   minHeight: tap,
                 }}
               >
-                <AttentionSlot
-                  count={folded ? attentionCount(g.sessions, dismissedAttn) : 0}
-                  pt={lang === 'pt'}
-                  left={1}
-                  onDismiss={() => onDismissAttn(attentionIds(g.sessions, dismissedAttn))}
-                />
                 {folded ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
                 {dotColor && (
                   <span aria-hidden style={{

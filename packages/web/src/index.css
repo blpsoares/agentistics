@@ -943,29 +943,17 @@ button:focus-within .ag-row-pin,
 [data-theme="light"] .ag-logo-dark { display: none; }
 [data-theme="light"] .ag-logo-light { display: block; }
 
-/* "Something in this folded group is waiting on you" — see nav/AttentionDot.tsx. The ring that
-   pulses out of it is what says it is a signal and not a piece of the layout. */
-.ag-attn-dot {
-  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+/* "Something in this folded group is waiting on you" — see nav/AttentionDot.tsx. The group's own
+   left edge turns orange and breathes; it costs no layout, and the slow pulse is what says it is a
+   signal rather than the design. */
+.ag-attn-bar { position: relative; }
+.ag-attn-bar::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  border-radius: 8px 0 0 8px; pointer-events: none;
   background: var(--anthropic-orange);
-  animation: ag-attn-pulse 2.2s ease-out infinite;
+  animation: ag-attn-bar-pulse 2.8s ease-in-out infinite;
 }
-@keyframes ag-attn-pulse {
-  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--anthropic-orange) 60%, transparent); }
-  70%  { box-shadow: 0 0 0 7px transparent; }
-  100% { box-shadow: 0 0 0 7px transparent; }
-}
+@keyframes ag-attn-bar-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
-  .ag-attn-dot { animation: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--anthropic-orange) 30%, transparent); }
+  .ag-attn-bar::before { animation: none; opacity: 1; }
 }
-
-/* The live-action strip above a conversation (SessionsPage `edgeMarker`): the whole bar is one
-   control, so it must look like one. The arrow after the text nudges and the text underlines. */
-.ag-edge-hint { transition: background 0.15s; }
-.ag-edge-hint:hover { background: color-mix(in srgb, var(--anthropic-orange) 22%, transparent) !important; }
-.ag-edge-hint .ag-edge-hint-arrow { transition: transform 0.15s; }
-.ag-edge-hint:hover .ag-edge-hint-arrow,
-.ag-edge-hint:focus-visible .ag-edge-hint-arrow { transform: translateX(3px); }
-.ag-edge-hint:hover .ag-edge-hint-text,
-.ag-edge-hint:focus-visible .ag-edge-hint-text { text-decoration: underline; color: var(--text-secondary) !important; }
-@media (prefers-reduced-motion: reduce) { .ag-edge-hint .ag-edge-hint-arrow { transition: none; } .ag-edge-hint:hover .ag-edge-hint-arrow { transform: none; } }
