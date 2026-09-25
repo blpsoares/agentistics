@@ -7,9 +7,9 @@
  * does that with motion rather than colour alone — a slow ring pulses out of it, which no static
  * design element does — plus the words (`title` and `aria-label`) naming how many.
  *
- * It sits in a FIXED slot at the left edge of the header, whether or not there is a dot, so it lines
- * up vertically from one group to the next whatever the length of the names, and the chevron and
- * the folder never shift when a dot appears.
+ * It sits at a FIXED x at the left edge of the header, so it lines up vertically from one group to
+ * the next whatever the length of the names, and it is drawn over the header's padding so the
+ * chevron and the folder never shift when a dot appears and no gutter is spent when it is absent.
  *
  * Clicking it DISMISSES it. What counts is exactly what the rest of the product marks with the
  * orange dot: a session that is WAITING on a person (a finished turn, or a permission dialog), and
@@ -66,30 +66,41 @@ export function pruneDismissed(
   return changed ? next : dismissed
 }
 
-export function AttentionSlot({ count, pt, onDismiss }: { count: number; pt: boolean; onDismiss: () => void }) {
-  const words = count <= 0 ? '' : (pt
+/**
+ * The dot itself, DRAWN OVER the header's left padding rather than reserving a column in it.
+ *
+ * A reserved slot lined the dot up perfectly and cost every group a wide empty gutter while there
+ * was no dot to show, which is nearly always. So the header keeps a small fixed left padding, wide
+ * enough to hold the dot beside the chevron, and the dot is absolutely positioned inside it: same
+ * x in every group whatever the name's length, and no space spent when it is absent. `left` is
+ * relative to the header button the caller positions.
+ */
+export function AttentionSlot({ count, pt, onDismiss, left }: {
+  count: number; pt: boolean; onDismiss: () => void; left: number
+}) {
+  if (count <= 0) return null
+  const words = pt
     ? (count === 1 ? '1 sessão precisa de você' : `${count} sessões precisam de você`)
-    : (count === 1 ? '1 session needs you' : `${count} sessions need you`))
-  const hint = words && (pt ? `${words}. Clique para dispensar.` : `${words}. Click to dismiss.`)
+    : (count === 1 ? '1 session needs you' : `${count} sessions need you`)
+  const hint = pt ? `${words}. Clique para dispensar.` : `${words}. Click to dismiss.`
   return (
-    <span style={{ width: 16, height: 16, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      {count > 0 && (
-        <span
-          role="button"
-          tabIndex={0}
-          aria-label={hint}
-          title={hint}
-          // The header this sits in is itself a button that folds the group: a click here must
-          // dismiss and nothing else.
-          onClick={e => { e.preventDefault(); e.stopPropagation(); onDismiss() }}
-          onKeyDown={e => {
-            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onDismiss() }
-          }}
-          style={{ width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', borderRadius: 8 }}
-        >
-          <span className="ag-attn-dot" />
-        </span>
-      )}
+    <span
+      role="button"
+      tabIndex={0}
+      aria-label={hint}
+      title={hint}
+      // The header this sits in is itself a button that folds the group: a click here must
+      // dismiss and nothing else.
+      onClick={e => { e.preventDefault(); e.stopPropagation(); onDismiss() }}
+      onKeyDown={e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onDismiss() }
+      }}
+      style={{
+        position: 'absolute', left, top: '50%', marginTop: -7, width: 14, height: 14,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', borderRadius: 7,
+      }}
+    >
+      <span className="ag-attn-dot" />
     </span>
   )
 }

@@ -943,13 +943,14 @@ export function SessionsAside({
                   onDragEnd={() => setGroupReorderOver(null)}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 6, borderRadius: 7,
-                    padding: '4px 4px 4px 9px', minHeight: tap, cursor: 'grab',
+                    padding: '4px 4px 4px 15px', minHeight: tap, cursor: 'grab',
                   }}
                 >
                   <button
                     onClick={() => toggleUserGroupFold(group.id)}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0,
+                      position: 'relative',
                       background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
                       padding: 0, textAlign: 'left', minHeight: tap,
                       // A `<button>` with no `color` of its own falls back to the UA `buttontext`
@@ -962,10 +963,12 @@ export function SessionsAside({
                       color: 'var(--text-tertiary)',
                     }}
                   >
-                    {/* Fixed slot at the left edge: the dot lines up from group to group. */}
+                    {/* Drawn over the header's left padding: the same x in every group, and no
+                        gutter spent when there is no dot. */}
                     <AttentionSlot
                       count={folded ? attentionCount(gRows, dismissedAttn) : 0}
                       pt={pt}
+                      left={-14}
                       onDismiss={() => dismissAttn(attentionIds(gRows, dismissedAttn))}
                     />
                     {folded ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
@@ -1495,14 +1498,16 @@ function SessionBand({
                 onClick={() => onToggleGroupFold(ck)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 6, width: '100%', textAlign: 'left',
+                  position: 'relative',
                   background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-                  padding: '4px 9px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)',
+                  padding: '4px 9px 2px 15px', fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)',
                   minHeight: tap,
                 }}
               >
                 <AttentionSlot
                   count={folded ? attentionCount(g.sessions, dismissedAttn) : 0}
                   pt={lang === 'pt'}
+                  left={1}
                   onDismiss={() => onDismissAttn(attentionIds(g.sessions, dismissedAttn))}
                 />
                 {folded ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
@@ -1628,7 +1633,9 @@ function SessionRow({ session, selected, pinned, tap, onPin, onOpen, onMoveBy, v
       onClick={onOpen}
       style={{
         display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-        padding: '9px 9px', borderRadius: 9, border: 'none', textAlign: 'left', minHeight: tap,
+        // Left padding is deliberately wider than the right: a live row carries a state edge on its left
+        // and the text needs air beside it (the row's own dot used to provide it).
+        padding: '9px 9px 9px 18px', borderRadius: 9, border: 'none', textAlign: 'left', minHeight: tap,
         // SELECTED is NOT orange. Orange is already the state colour for a row that needs a person
         // (`STATE_COLOR.waiting`), so the selected row wore the same tint as the alarm and the two
         // became one signal: selecting a working session made it look like it was asking for you.
