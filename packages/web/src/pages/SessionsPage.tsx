@@ -56,6 +56,8 @@ import { SessionTitleFlag } from '../components/sessions/SessionTitleFlag'
 import { MagnifierButton } from '../components/a11y/MagnifierButton'
 import { HideLensesButton } from '../components/a11y/HideLensesButton'
 import { ArtifactsAside } from '../components/sessions/ArtifactsAside'
+import { RelayedAsideNote } from '../components/sessions/RelayedAsideNote'
+import { relayedTabAvailable } from '../lib/relayedAside'
 import { HardwarePanel } from '../components/sessions/HardwarePanel'
 import { UnsavedChangesGuard } from '../components/sessions/UnsavedChangesGuard'
 import { PanelFixedControls, PanelTileDropdown } from '../components/sessions/bandControls'
@@ -556,7 +558,9 @@ export default function SessionsPage() {
    * live feed both link to paths, and a link whose only outcome is a refusal is worse than no link.
    */
   useEffect(() => {
-    if (!selected) { setOnDisk(new Map()); setOutsideNote(undefined); return }
+    // A relayed session's files are on ANOTHER machine; `/api/fleet/artifacts` is refused on a
+    // central, and polling it every 15s only produced 403s. See `lib/relayedAside.ts`.
+    if (!selected || relayed) { setOnDisk(new Map()); setOutsideNote(undefined); return }
     let alive = true
     // The sentence holds a count about ONE session, so it is cleared the moment the session changes
     // — unlike `onDisk`, which is deliberately kept so the list is never empty for the length of a
@@ -579,7 +583,7 @@ export default function SessionsPage() {
     // conversation does, and this one stats every recorded path.
     const t = setInterval(read, 15000)
     return () => { alive = false; clearInterval(t) }
-  }, [selected?.id, pt])
+  }, [selected?.id, pt, relayed])
 
   /**
    * The panel's width, dragged and remembered — the right aside was fixed while the left one has
@@ -1037,7 +1041,19 @@ export default function SessionsPage() {
    */
   const tabPane = (
     id: TabPanelId, opts?: { hideCloseButton?: boolean; headerControls?: ReactNode },
-  ): ReactNode => selected === undefined ? null : (
+  ): ReactNode => selected === undefined ? null : relayed && !relayedTabAvailable(id) ? (
+    // ANOTHER MACHINE's session, on a central: this tab reads that machine's own disk or
+    // conversation, which the central cannot reach — say so instead of mounting a panel whose
+    // first request is refused. See `lib/relayedAside.ts`.
+    <RelayedAsideNote
+      key={selected.id}
+      id={id}
+      lang={pt ? 'pt' : 'en'}
+      onClose={() => closeSlotPanel(id)}
+      {...(opts?.hideCloseButton ? { hideCloseButton: true } : {})}
+      {...(opts?.headerControls ? { headerControls: opts.headerControls } : {})}
+    />
+  ) : (
     <ArtifactsAside
       key={selected.id}
       {...(opts?.hideCloseButton ? { hideCloseButton: true } : {})}
