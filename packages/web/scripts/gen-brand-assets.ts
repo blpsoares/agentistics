@@ -72,15 +72,16 @@ const circle = (svg: string) =>
 
 const bare = (svg: string) => svg.replace(/<svg[^>]*>/, '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="1 1 54 54" width="100%" height="100%">')
 
-// The Windows taskbar draws an icon at ~26 px on a dark bar: a dark plate vanishes into it and
-// the thin strokes blur. So the icons Windows shows there are the BARE glyph, big and heavy
-// (chosen in the icon lab: no plate, 145% size, 190% stroke). Everything else keeps the plate.
+// THE LOGO'S GEOMETRY IS NEVER TOUCHED. The SVGs are the design: stroke widths, shapes and
+// proportions between the parts are the owner's, and a script may only change SCALE (how big the
+// drawing sits in its canvas) and COLOUR (the teal central set). Thickening a stroke "for
+// legibility" was tried once and rejected outright: it is a different drawing.
+//
+// The Windows taskbar draws an icon at ~26 px on a dark bar, where a dark plate vanishes into it.
+// So the icons Windows shows there are the BARE glyph (no plate), scaled up to fill the canvas.
+// Everything else keeps the plate.
 const BOLD_SCALE = 1.45
-const BOLD_WEIGHT = 1.9
-const BOLD85 = GLYPH85
-  .replace(/stroke-width="([\d.]+)"/g, (_, n) => `stroke-width="${+n * BOLD_WEIGHT}"`)
-  .replace(/(fill="#FD8924")\/>/g, `$1 stroke="#FD8924" stroke-width="${(BOLD_WEIGHT - 1) * 1.6}"/>`)
-const boldGlyph = () => floating(BOLD85, BOLD_SCALE).replace('fill="none"', 'fill="none" stroke-linejoin="round" stroke-linecap="round"')
+const boldGlyph = () => floating(GLYPH85, BOLD_SCALE)
 
 const MASKABLE_SCALE = 0.85 // glyph radius must stay inside the 80% safe circle
 const BLEED_SCALE = 1.0
