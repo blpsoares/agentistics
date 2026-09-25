@@ -11,6 +11,22 @@
  * rotation): the logo's geometry and colours are the owner's design.
  */
 
+/**
+ * `path` with a content tag: `/logo.png` -> `/logo.png?v=3f9a1c02`.
+ *
+ * The server keeps these images unhashed under stable URLs, and a browser holds whichever version it
+ * fetched first — a rebranded logo went on showing the old one, and an installed PWA kept an icon
+ * that had already been corrected. The tag is the hash of the file's own bytes (computed by
+ * `vite.config.ts` and injected as `__BRAND_TAGS__`), so the URL changes exactly when the artwork
+ * does. Where no tag is known (a unit test, an unlisted file) the path is returned untouched.
+ */
+declare const __BRAND_TAGS__: Record<string, string> | undefined
+export function versionedAsset(path: string): string {
+  const tags = typeof __BRAND_TAGS__ === 'undefined' ? undefined : __BRAND_TAGS__
+  const tag = tags?.[path]
+  return tag ? `${path}?v=${tag}` : path
+}
+
 /** The in-app marks that have a teal central variant. */
 export type BrandAsset = '/minimalistLogo.png' | '/logo.png' | '/logo-light.png'
 
@@ -28,5 +44,5 @@ export function isCentralShell(root: { dataset?: DOMStringMap } | null | undefin
 
 /** The path of `asset` in this page's identity. */
 export function brandAsset(asset: BrandAsset, central: boolean = isCentralShell()): string {
-  return central ? CENTRAL_VARIANT[asset] : asset
+  return versionedAsset(central ? CENTRAL_VARIANT[asset] : asset)
 }
