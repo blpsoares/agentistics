@@ -25,7 +25,8 @@
  * this feature depends on uniqueness — groups are addressed by id everywhere, never by name.
  */
 
-import { reorderByDrag } from './dragReorder'
+import { reorderByDrag, stepOrder } from './dragReorder'
+import { unpinSession } from './pinnedSessions'
 import { createSharedPref } from './sharedPref'
 
 const KEY = 'agentistics-session-groups'
@@ -123,6 +124,27 @@ export function planRemoveFromGroup(current: SessionUserGroupsValue, key: string
     : g)) }
 }
 
+/**
+ * PURE: drop a session into a group — the one gesture allowed to downgrade a PIN. A pinned row
+ * wears the stronger "always in sight, outside every arrangement" promise; the owner's own ask
+ * was "eu devo poder arrastar sessões fixadas também … daí elas são desfixadas mas passam a ser
+ * salvas no grupo" — one gesture, both writes, not "unpin it yourself first, then drag it again".
+ * A key that was never pinned leaves `pins` untouched (`filter` of an absent value is a no-op),
+ * and moving a key that is already in some OTHER group is exactly `planAddToGroup`'s existing
+ * exclusive-membership rule — this only adds the pin half on top of it.
+ */
+export function planMoveToGroup(
+  pins: readonly string[],
+  current: SessionUserGroupsValue,
+  key: string,
+  groupId: string,
+): { pins: string[]; groups: SessionUserGroupsValue } {
+  return {
+    groups: planAddToGroup(current, groupId, key),
+    pins: pins.filter(p => p !== key),
+  }
+}
+
 /** PURE: reorder the sessions WITHIN one group — by key, never index (see `dragReorder.ts`'s own
  *  header for why an index into a list that can hold unresolvable entries is unsafe). */
 export function planReorderInGroup(
@@ -136,6 +158,40 @@ export function planReorderInGroup(
       ? { ...g, sessionKeys: reorderByDrag(g.sessionKeys, dragKey, dropKey) }
       : g)),
   }
+}
+
+/** Rebuilds `groups` in the order `ids` names, dropping nothing (every id in `ids` is assumed to
+ *  already be one of `current.groups`' own — both `reorderByDrag` and `stepOrder` only ever
+ *  reorder their input, never add or remove a key, so this never actually loses one; the filter
+ *  exists only so the function stays TOTAL rather than trusting that invariant blindly). */
+function groupsInOrder(current: SessionUserGroupsValue, ids: readonly string[]): SessionUserGroupsValue {
+  const byId = new Map(current.groups.map(g => [g.id, g] as const))
+  return { groups: ids.map(id => byId.get(id)).filter((g): g is SessionUserGroup => g !== undefined) }
+}
+
+/**
+ * PURE: reorder the GROUPS themselves — by id, never index (§F.1, same reasoning as every other
+ * reorder in this file and in `pinnedSessions.ts`'s `planPinMoveTo`: a picker only ever holds a
+ * key, not a raw array position). Dropping a group onto itself, or a `dropId` this value does not
+ * hold, is a no-op via `reorderByDrag`'s own rule.
+ */
+export function planReorderGroups(
+  current: SessionUserGroupsValue,
+  dragId: string,
+  dropId: string,
+): SessionUserGroupsValue {
+  return groupsInOrder(current, reorderByDrag(current.groups.map(g => g.id), dragId, dropId))
+}
+
+/** PURE: step one group one place earlier/later — the "Mover para cima"/"Mover para baixo" menu
+ *  entries, for a phone or a keyboard, which cannot drag a header onto another header. A step past
+ *  either end is a no-op, exactly like `stepOrder` itself. */
+export function planStepGroup(
+  current: SessionUserGroupsValue,
+  id: string,
+  by: 1 | -1,
+): SessionUserGroupsValue {
+  return groupsInOrder(current, stepOrder(current.groups.map(g => g.id), id, by))
 }
 
 /**
@@ -206,10 +262,38 @@ export function addSessionToGroup(id: string, key: string): void {
   store.set(planAddToGroup(store.get(), id, key))
 }
 
+/**
+ * Move a session into a group, unpinning it if it was pinned — pinning and grouping are two
+ * independent stores, and this is the one place both are written for a single gesture.
+ *
+ * The GROUP write lands first and the PIN write second. If the tab dies (or a write throws)
+ * between them, the session is left PINNED — visible, exactly where it was — and already carries
+ * its group membership, so the very next time it is unpinned (through the ordinary pin toggle,
+ * whenever that happens) it surfaces in the group with no further action: the same "unpinning
+ * brings it back here on its own" guarantee `groupRowsResolved` already gives a session that is
+ * both pinned and grouped. The reverse order has no such recovery: an unpin that lands without a
+ * matching group write drops the session into the plain Active/Inactive bands with no trace it
+ * was ever meant for a group, and nothing left to retry.
+ */
+export function moveSessionToGroup(id: string, key: string): void {
+  store.set(planAddToGroup(store.get(), id, key))
+  unpinSession(key)
+}
+
 export function removeSessionFromGroup(key: string): void {
   store.set(planRemoveFromGroup(store.get(), key))
 }
 
 export function reorderSessionInGroup(id: string, dragKey: string, dropKey: string): void {
   store.set(planReorderInGroup(store.get(), id, dragKey, dropKey))
+}
+
+/** Reorder the groups themselves (drag one group's header onto another's). */
+export function reorderSessionGroups(dragId: string, dropId: string): void {
+  store.set(planReorderGroups(store.get(), dragId, dropId))
+}
+
+/** Step one group up/down — the menu's "Mover para cima"/"Mover para baixo". */
+export function stepSessionGroup(id: string, by: 1 | -1): void {
+  store.set(planStepGroup(store.get(), id, by))
 }
