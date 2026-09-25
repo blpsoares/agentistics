@@ -72,6 +72,16 @@ const circle = (svg: string) =>
 
 const bare = (svg: string) => svg.replace(/<svg[^>]*>/, '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="1 1 54 54" width="100%" height="100%">')
 
+// The Windows taskbar draws an icon at ~26 px on a dark bar: a dark plate vanishes into it and
+// the thin strokes blur. So the icons Windows shows there are the BARE glyph, big and heavy
+// (chosen in the icon lab: no plate, 145% size, 190% stroke). Everything else keeps the plate.
+const BOLD_SCALE = 1.45
+const BOLD_WEIGHT = 1.9
+const BOLD85 = GLYPH85
+  .replace(/stroke-width="([\d.]+)"/g, (_, n) => `stroke-width="${+n * BOLD_WEIGHT}"`)
+  .replace(/(fill="#FD8924")\/>/g, `$1 stroke="#FD8924" stroke-width="${(BOLD_WEIGHT - 1) * 1.6}"/>`)
+const boldGlyph = () => floating(BOLD85, BOLD_SCALE).replace('fill="none"', 'fill="none" stroke-linejoin="round" stroke-linecap="round"')
+
 const MASKABLE_SCALE = 0.85 // glyph radius must stay inside the 80% safe circle
 const BLEED_SCALE = 1.0
 const ANDROID_FG_SCALE = 0.7 // 108dp canvas, 66dp safe circle
@@ -141,7 +151,7 @@ for (const central of [false, true]) {
 
   // ---- Web / PWA -------------------------------------------------------------------------
   for (const s of [192, 512]) {
-    put(join(ICONS, `icon${tag}-${s}.png`), await png(c(plate(DARK)), s))
+    put(join(ICONS, `icon${tag}-${s}.png`), await png(c(boldGlyph()), s)) // 'any': what Windows draws on the taskbar
     put(join(ICONS, `icon${tag}-${s}-maskable.png`), await png(c(bleed(c(GLYPH85), MASKABLE_SCALE)), s))
   }
   // iOS home screen: opaque, square, the OS rounds it.
@@ -182,13 +192,14 @@ put(join(EXPORTS, 'og-image-1200x630.png'), await png(social(1200, 630), 1200, 6
 
 // ---- Tauri (desktop: Windows / macOS / Linux) ---------------------------------------------------
 const appPlate = (s: number) => png(plate(DARK), s)
+const winIcon = (s: number) => png(boldGlyph(), s) // Windows-only surfaces: taskbar, Start, Store
 const tauriSquare = (s: number) => png(bleed(GLYPH85, BLEED_SCALE), s)
 for (const [name, s] of [['32x32', 32], ['64x64', 64], ['128x128', 128], ['128x128@2x', 256], ['icon', 512]] as const) {
   put(join(DESKTOP, `${name}.png`), await appPlate(s))
 }
-for (const s of [30, 44, 71, 89, 107, 142, 150, 284, 310]) put(join(DESKTOP, `Square${s}x${s}Logo.png`), await appPlate(s))
-put(join(DESKTOP, 'StoreLogo.png'), await appPlate(50))
-put(join(DESKTOP, 'icon.ico'), ico(await each([16, 24, 32, 48, 64, 128, 256], async size => ({ size, data: await appPlate(size) }))))
+for (const s of [30, 44, 71, 89, 107, 142, 150, 284, 310]) put(join(DESKTOP, `Square${s}x${s}Logo.png`), await winIcon(s))
+put(join(DESKTOP, 'StoreLogo.png'), await winIcon(50))
+put(join(DESKTOP, 'icon.ico'), ico(await each([16, 24, 32, 48, 64, 128, 256], async size => ({ size, data: await winIcon(size) }))))
 put(join(DESKTOP, 'icon.icns'), icns(await each(
   ([['icp4', 16], ['icp5', 32], ['icp6', 64], ['ic07', 128], ['ic08', 256], ['ic09', 512], ['ic10', 1024]] as const),
   async ([t, s]) => [t, await appPlate(s)] as [string, Buffer])))
