@@ -52,12 +52,19 @@ import { endDispatch, tryBeginDispatch } from '../../lib/dispatchGuard'
 import { sessionIdentityKey } from '../../lib/sessionIdentity'
 import {
   type SessionUserGroup,
-  addSessionToGroup, createSessionGroup, deleteSessionGroup, getSessionGroups, removeSessionFromGroup,
-  renameSessionGroup, reorderSessionInGroup, resolveGroupRows, sessionGroupsServerSnapshot,
-  subscribeSessionGroups,
+  createSessionGroup, deleteSessionGroup, getSessionGroups, moveSessionToGroup, removeSessionFromGroup,
+  renameSessionGroup, reorderSessionGroups, reorderSessionInGroup, resolveGroupRows,
+  sessionGroupsServerSnapshot, stepSessionGroup, subscribeSessionGroups,
 } from '../../lib/sessionUserGroups'
-import { hasDragPayload, readDragPayload, setDragPayload } from '../../lib/dragReorder'
+import {
+  hasDragPayload, hasGroupDragPayload, readDragPayload, readGroupDragPayload, setDragPayload,
+  setGroupDragPayload,
+} from '../../lib/dragReorder'
 import { ConfirmModal } from '../../pages/settings/primitives'
+// The SAME visual language the subtask board already uses for a group and its members reading as
+// one unit (continuous left accent bar + shared tint, header down through the last row) — reused
+// rather than invented a second time for user session groups.
+import { CLUSTER_ACCENT, CLUSTER_TINT } from '../tasks/subtaskGroups'
 
 export interface SessionsAsideProps {
   lang: 'pt' | 'en'
@@ -335,6 +342,10 @@ export function SessionsAside({
    *  group's row: three different subtrees that share no React state of their own. */
   const [dragOverGroupId, setDragOverGroupId] = useState<string | null>(null)
   const [groupRowDragOver, setGroupRowDragOver] = useState<string | null>(null)
+  /** Which group heading is a live drop target for REORDERING THE GROUPS THEMSELVES — a distinct
+   *  payload (`GROUP_DRAG_KEY_TYPE`, see `dragReorder.ts`'s own header) from a session being
+   *  dropped into a group, so the two never get read as one another. */
+  const [groupReorderOver, setGroupReorderOver] = useState<string | null>(null)
   /** Which pinned row is being dragged, and which one it is hovering over — by the row's own pin
    *  KEY, never its position in this (filtered) list. See `pinnedSessions.ts`'s `planPinMoveTo` for
    *  why a filtered-list index was the actual §6 bug: `pinnedRows` is the RESOLVED, filtered view,
@@ -841,29 +852,78 @@ export function SessionsAside({
           {groupRowsResolved.map(({ group, rows: gRows }) => {
             const folded = foldedUserGroups.has(group.id)
             const isDropTarget = dragOverGroupId === group.id
+            const isReorderTarget = groupReorderOver === group.id
             return (
-              <div key={group.id} style={{ marginBottom: 8 }}>
+              <div
+                key={group.id}
+                // The drop target is the WHOLE group container now, not only the header line — an
+                // empty group's own "drag sessions here" hint sits below the header, and a hint
+                // that cannot itself be dropped on is not really a drop target. A member row's own
+                // onDragOver/onDrop (below) still `stopPropagation`, so hovering a specific row for
+                // reordering does not also light up this outer highlight.
+                //
+                // TWO DISTINCT PAYLOADS can land here: a SESSION key (add it to this group) and a
+                // GROUP id (reorder — drag another group's header onto this one). They are checked
+                // in that order (`hasGroupDragPayload` first) because the two are DIFFERENT MIME
+                // types on the same native event (see `dragReorder.ts`'s header) — never confusable,
+                // but a drop handler still has to ask "which one is this" before acting.
+                onDragOver={e => {
+                  if (hasGroupDragPayload(e)) {
+                    e.preventDefault()
+                    if (groupReorderOver !== group.id) setGroupReorderOver(group.id)
+                    return
+                  }
+                  if (!hasDragPayload(e)) return
+                  e.preventDefault()
+                  if (dragOverGroupId !== group.id) setDragOverGroupId(group.id)
+                }}
+                onDragLeave={() => {
+                  setDragOverGroupId(cur => (cur === group.id ? null : cur))
+                  setGroupReorderOver(cur => (cur === group.id ? null : cur))
+                }}
+                onDrop={e => {
+                  e.preventDefault()
+                  // Stops here, or the automatic-bands wrapper below would ALSO see this drop
+                  // bubble past it and read it as "un-group me" the instant it is filed.
+                  e.stopPropagation()
+                  if (hasGroupDragPayload(e)) {
+                    const dragId = readGroupDragPayload(e)
+                    if (dragId) reorderSessionGroups(dragId, group.id)
+                    setGroupReorderOver(null)
+                    return
+                  }
+                  const key = readDragPayload(e)
+                  // A pinned row is a valid drop source here too — the drop UNPINS it into the
+                  // group in one gesture (see `moveSessionToGroup`'s own header for the write
+                  // order and why).
+                  if (key) moveSessionToGroup(group.id, key)
+                  setDragOverGroupId(null)
+                }}
+                style={{
+                  marginBottom: 8, borderRadius: 8, paddingBottom: 4,
+                  // A group and its members read as ONE container, header down through the last
+                  // row — the same continuous left bar + shared tint the subtask board's own
+                  // clustered groups use (`CLUSTER_ACCENT`/`CLUSTER_TINT`), so an EMPTY group still
+                  // reads as a container (its quiet hint below) rather than as a heading floating
+                  // with nothing under it. Dragging a SESSION over it swaps both for the orange
+                  // "this is about to receive it" state; dragging ANOTHER GROUP over it instead
+                  // draws a top edge (the same edge indicator the pinned band's own drag uses) —
+                  // a different gesture landing in the same place gets a visibly different answer.
+                  background: isDropTarget ? 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)' : CLUSTER_TINT,
+                  boxShadow: isDropTarget
+                    ? `inset 3px 0 0 0 var(--anthropic-orange), inset 0 0 0 1px var(--anthropic-orange)`
+                    : isReorderTarget
+                      ? `inset 3px 0 0 0 ${CLUSTER_ACCENT}, inset 0 2px 0 0 var(--anthropic-orange)`
+                      : `inset 3px 0 0 0 ${CLUSTER_ACCENT}`,
+                }}
+              >
                 <div
-                  onDragOver={e => {
-                    if (!hasDragPayload(e)) return
-                    e.preventDefault()
-                    if (dragOverGroupId !== group.id) setDragOverGroupId(group.id)
-                  }}
-                  onDragLeave={() => setDragOverGroupId(cur => (cur === group.id ? null : cur))}
-                  onDrop={e => {
-                    e.preventDefault()
-                    // Stops here, or the automatic-bands wrapper below would ALSO see this drop
-                    // bubble past it and read it as "un-group me" the instant it is filed.
-                    e.stopPropagation()
-                    const key = readDragPayload(e)
-                    if (key) addSessionToGroup(group.id, key)
-                    setDragOverGroupId(null)
-                  }}
+                  draggable
+                  onDragStart={e => setGroupDragPayload(e, group.id)}
+                  onDragEnd={() => setGroupReorderOver(null)}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 6, borderRadius: 7,
-                    padding: '4px 4px 4px 9px', minHeight: tap,
-                    background: isDropTarget ? 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)' : undefined,
-                    boxShadow: isDropTarget ? 'inset 0 0 0 1px var(--anthropic-orange)' : undefined,
+                    padding: '4px 4px 4px 9px', minHeight: tap, cursor: 'grab',
                   }}
                 >
                   <button
@@ -872,6 +932,14 @@ export function SessionsAside({
                       display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0,
                       background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
                       padding: 0, textAlign: 'left', minHeight: tap,
+                      // A `<button>` with no `color` of its own falls back to the UA `buttontext`
+                      // default, which `index.html`'s `color-scheme: dark` pins to WHITE regardless
+                      // of this app's own light/dark toggle — so the chevron (bare `currentColor`,
+                      // no style of its own) and the count span below (same) rendered invisible on
+                      // the light theme's white background. Same tertiary tone the automatic
+                      // section sub-headings use (`SessionBand`'s own folding button, a few hundred
+                      // lines below) so a user group's heading reads like every other one.
+                      color: 'var(--text-tertiary)',
                     }}
                   >
                     {folded ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
@@ -902,13 +970,15 @@ export function SessionsAside({
                 </div>
                 {!folded && (
                   gRows.length === 0 ? (
-                    <p style={{ margin: '2px 9px 2px 26px', fontSize: 10.5, lineHeight: 1.4, color: 'var(--text-tertiary)' }}>
+                    <p style={{ margin: '2px 9px 4px 21px', fontSize: 10.5, lineHeight: 1.4, color: 'var(--text-tertiary)' }}>
                       {pt
                         ? 'Arraste uma sessão até aqui, ou use "Mover para grupo" no menu dela.'
                         : 'Drag a session here, or use "Move to group" on its menu.'}
                     </p>
                   ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    // Indented under the header — a MEMBER, not another top-level row — the same
+                    // modest offset the empty-group hint above already lines up with.
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 12, paddingRight: 4, minWidth: 0 }}>
                       {gRows.map(s => {
                         const key = pinKeyOf(s)
                         return (
@@ -929,7 +999,7 @@ export function SessionsAside({
                               const dragKey = readDragPayload(e)
                               if (dragKey && dragKey !== key) {
                                 if (groupOfKey.get(dragKey) === group.id) reorderSessionInGroup(group.id, dragKey, key)
-                                else addSessionToGroup(group.id, dragKey)
+                                else moveSessionToGroup(group.id, dragKey)
                               }
                               setGroupRowDragOver(null)
                             }}
@@ -1052,7 +1122,9 @@ export function SessionsAside({
                 setNewGroupName('')
                 setCreatingGroup({ forKey: key })
               } else {
-                addSessionToGroup(action, key)
+                // The menu path (mandatory on a phone, which cannot drag): "Move to group…" on a
+                // pinned row must also unpin it — same gesture as the drag, without a mouse.
+                moveSessionToGroup(action, key)
               }
             }
             setGroupPicker(null)
@@ -1061,13 +1133,24 @@ export function SessionsAside({
         />
       )}
 
-      {/* A group's own "⋮" — rename / delete. Reuses `SessionRowMenu`, anchored under the button
-          rather than at a pointer position (there is no right-click gesture on a heading). */}
+      {/* A group's own "⋮" — rename / delete / reorder. Reuses `SessionRowMenu`, anchored under the
+          button rather than at a pointer position (there is no right-click gesture on a heading).
+          "Mover para cima"/"Mover para baixo" are the non-drag path for a phone or a keyboard,
+          which cannot drag one header onto another — disabled at either end, same as the pinned
+          band's own up/down chevrons refuse past their ends. */}
       {groupMenu && (
         <SessionRowMenu
           x={groupMenu.x} y={groupMenu.y}
           entries={[
             { action: 'rename', label: pt ? 'Renomear' : 'Rename', enabled: true },
+            {
+              action: 'move-up', label: pt ? 'Mover para cima' : 'Move up',
+              enabled: groupsValue.groups.findIndex(g => g.id === groupMenu.id) > 0,
+            },
+            {
+              action: 'move-down', label: pt ? 'Mover para baixo' : 'Move down',
+              enabled: groupsValue.groups.findIndex(g => g.id === groupMenu.id) < groupsValue.groups.length - 1,
+            },
             { action: 'delete', label: pt ? 'Excluir grupo…' : 'Delete group…', enabled: true },
           ]}
           onPick={action => {
@@ -1076,6 +1159,8 @@ export function SessionsAside({
               setRenameGroupDraft(g?.name ?? '')
               setRenamingGroup({ id: groupMenu.id })
             }
+            if (action === 'move-up') stepSessionGroup(groupMenu.id, -1)
+            if (action === 'move-down') stepSessionGroup(groupMenu.id, 1)
             if (action === 'delete' && g) setDeletingGroup(g)
             setGroupMenu(null)
           }}
@@ -1172,7 +1257,7 @@ export function SessionsAside({
             onSubmit={e => {
               e.preventDefault()
               const id = createSessionGroup(newGroupName)
-              if (id && creatingGroup.forKey) addSessionToGroup(id, creatingGroup.forKey)
+              if (id && creatingGroup.forKey) moveSessionToGroup(id, creatingGroup.forKey)
               setNewGroupName('')
               setCreatingGroup(null)
             }}
