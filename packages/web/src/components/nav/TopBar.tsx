@@ -1,7 +1,7 @@
 /**
  * TopBar — the fixed strip above everything, holding the three controls that must never move.
  *
- * The mark, the search button and the sidebar toggle live here rather than inside the aside, and
+ * The mark and the sidebar toggle live here rather than inside the aside, and
  * that is the whole point: the aside changes width, changes body between workspaces, and disappears
  * on mobile, so anything mounted in it moves when it does. An earlier pass put the toggle in the
  * aside and it jumped from beside the mark to beneath it every time the sidebar collapsed — the
@@ -19,7 +19,8 @@
  * about sessions.
  */
 
-import { Search, PanelLeft } from 'lucide-react'
+import { useState } from 'react'
+import { PanelLeft } from 'lucide-react'
 
 export interface TopBarProps {
   lang: 'pt' | 'en'
@@ -28,11 +29,6 @@ export interface TopBarProps {
   asideWidth: number
   collapsed: boolean
   onToggleSidebar: () => void
-  /**
-   * Open search. Absent where there is nothing to search, and the button is then ABSENT rather than
-   * disabled — a control that does nothing is indistinguishable from one that is broken.
-   */
-  onSearch?: () => void
   /**
    * Whatever the current screen wants in the empty half of this strip. Absent on most screens, and
    * absent is the normal case — this is a place to put something, not a slot that must be filled.
@@ -56,8 +52,15 @@ const iconBtn: React.CSSProperties = {
   transition: 'background 0.15s, color 0.15s',
 }
 
-export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, onSearch, trailing, trailingFlush = false }: TopBarProps) {
+export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, trailing, trailingFlush = false }: TopBarProps) {
   const pt = lang === 'pt'
+  // Collapsed, the mark IS the control that reopens the sidebar: hovering (or focusing) it swaps it
+  // for the sidebar icon, so there is no second button beside it and the strip stays one mark wide.
+  const [markHot, setMarkHot] = useState(false)
+  const showLabel = pt ? 'Mostrar barra lateral' : 'Show sidebar'
+  const hideLabel = pt ? 'Ocultar barra lateral' : 'Hide sidebar'
+  // Deliberately smaller than the band: the mark is a signature, not a banner.
+  const markH = Math.max(0, Math.round((height - 8) * 0.6))
 
   const hover = (on: boolean) => (e: React.MouseEvent<HTMLButtonElement>) => {
     const t = e.currentTarget
@@ -93,50 +96,40 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, o
       }}>
         {/* The mark shows in BOTH states. A collapsed sidebar is still the product's left edge, and
             an earlier pass hid it there — leaving the app with no identity anywhere on screen. */}
-        <img
-          src='/minimalistLogo.png'
-          alt="agentistics"
-          /* The mark FILLS the band rather than sitting in the middle of it, less 8px so it keeps
-             air above and below. It never DECIDES the height — the `height` prop does, and this is
-             derived from it. Collapsed, this column is 64px wide and shared with the toggle, so the
-             mark stays small there: one that fills the height and pushes the toggle out of its own
-             rail has traded one misplacement for another. */
-          /* FULL HEIGHT IN BOTH STATES. Collapsed it used to shrink to 24px, because this column
-             was pinned to the rail's 64px and had to share it with the toggle — so folding the
-             sidebar cost the product its mark. The column is no longer pinned when collapsed
-             (`width: auto`), so the mark keeps its size and the toggle simply sits beside it, which
-             is where the user asked for it: to the right of the logo, still in the fixed strip. */
-          style={{
-            height: Math.max(0, height - 8), width: 'auto',
-            maxWidth: '100%', objectFit: 'contain',
-            flexShrink: 0, minWidth: 0,
-          }}
-        />
-        {/* Collapsed, the rail holds the mark and the toggle and nothing else: three controls in
-            64px is three cramped controls. Search is one keystroke away (Ctrl+K) and one click away
-            once the sidebar is open. */}
-        {/* Kept in BOTH states now: the column is no longer pinned to the 64px rail, so there is
-            room for it, and hiding a control on one of two layouts is a control people stop
-            looking for. */}
-        {onSearch && (
+        {collapsed ? (
           <button
-            onClick={onSearch}
-            aria-label={pt ? 'Buscar' : 'Search'}
-            title={`${pt ? 'Buscar' : 'Search'}  ·  Ctrl+K`}
-            style={iconBtn} onMouseEnter={hover(true)} onMouseLeave={hover(false)}
+            onClick={onToggleSidebar}
+            onMouseEnter={() => setMarkHot(true)} onMouseLeave={() => setMarkHot(false)}
+            onFocus={() => setMarkHot(true)} onBlur={() => setMarkHot(false)}
+            aria-label={showLabel}
+            title={`${showLabel}  ·  Ctrl+B`}
+            style={{
+              ...iconBtn, width: 36, height: 36, color: 'var(--text-primary)',
+              background: markHot ? 'var(--bg-elevated)' : 'transparent',
+            }}
           >
-            <Search size={16} />
+            {markHot
+              ? <PanelLeft size={18} />
+              : <img src="/minimalistLogo.png" alt="agentistics" style={{ height: markH, width: 'auto', objectFit: 'contain' }} />}
           </button>
+        ) : (
+          <>
+            <img
+              src='/minimalistLogo.png'
+              alt="agentistics"
+              style={{ height: markH, width: 'auto', maxWidth: '100%', objectFit: 'contain', flexShrink: 0, minWidth: 0 }}
+            />
+            <button
+              onClick={onToggleSidebar}
+              aria-label={hideLabel}
+              title={`${hideLabel}  ·  Ctrl+B`}
+              style={{ ...iconBtn, width: 30, height: 30 }}
+              onMouseEnter={hover(true)} onMouseLeave={hover(false)}
+            >
+              <PanelLeft size={16} />
+            </button>
+          </>
         )}
-        <button
-          onClick={onToggleSidebar}
-          aria-label={collapsed ? (pt ? 'Mostrar barra lateral' : 'Show sidebar') : (pt ? 'Ocultar barra lateral' : 'Hide sidebar')}
-          title={`${collapsed ? (pt ? 'Mostrar barra lateral' : 'Show sidebar') : (pt ? 'Ocultar barra lateral' : 'Hide sidebar')}  ·  Ctrl+B`}
-          style={{ ...iconBtn, width: 30, height: 30 }}
-          onMouseEnter={hover(true)} onMouseLeave={hover(false)}
-        >
-          <PanelLeft size={16} />
-        </button>
       </div>
 
       {/* The remainder. `minWidth: 0` so a long session title truncates instead of pushing the

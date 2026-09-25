@@ -4064,9 +4064,6 @@ export default function AppLayout() {
           asideWidth={sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth}
           collapsed={sidebarCollapsed}
           onToggleSidebar={toggleSidebar}
-          {...(modeOfPath(location.pathname) === 'sessions'
-            ? { onSearch: () => window.dispatchEvent(new CustomEvent('agentistics:focus-session-search')) }
-            : {})}
           {...(stripTrailing ? { trailing: stripTrailing, trailingFlush: true } : {})}
         />
       )}
