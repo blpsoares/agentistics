@@ -65,4 +65,4 @@ export function orderedSubtasks(
 
 /** Columns a subtask list can be ordered by, in the order the grids draw them. */
 export const SUBTASK_SORT_KEYS: readonly SubtaskSortKey[] =
-  ['title', 'status', 'assignee', 'start', 'due', 'sessions', 'cost', 'tokens']
+  ['title', 'status', 'started', 'completed', 'sessions', 'cost', 'tokens']

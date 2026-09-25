@@ -29,7 +29,7 @@ import {
 } from 'lucide-react'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import {
-  NA, PRIORITY, button, claimLeft, field, fmtInt, fmtTokens, harnessColor, liveStatusMap,
+  NA, PRIORITY, button, claimLeft, field, fmtInt, fmtStamp, fmtTokens, harnessColor, liveStatusMap,
   liveStatusOrder, microLabel, numeric, pill, statusStyle, surface, type BoardStatus, type ColumnId,
 } from './board'
 import { useMoney, type Money } from './money'
@@ -47,7 +47,6 @@ import {
 import { orderedSubtasks } from './subtaskSortView'
 import { ConfirmModal } from '../../pages/settings/primitives'
 import { SessionPicker } from './SessionPicker'
-import { DatePicker } from '../DatePicker'
 import { ChipSelect, statusOptions } from './ChipSelect'
 import { StatusChip } from './StatusChip'
 import { boardCopy, statusLabel, type Lang } from './copy'
@@ -69,7 +68,7 @@ import type {
 /** The words the "sorted by" note uses. Kept beside `COLUMNS`, whose labels they mirror. */
 const SORT_LABEL: Record<string, string> = {
   manual: 'the board order', priority: 'priority', title: 'title', status: 'status',
-  created: 'created', updated: 'updated', due: 'due date', assignee: 'owner', cost: 'cost',
+  created: 'created', updated: 'updated', due: 'due date', started: 'started', cost: 'cost',
   tokens: 'tokens', rounds: 'rounds', sessions: 'sessions', attempts: 'attempts',
   comments: 'comments', subtasks: 'subtasks', progress: 'progress', harnesses: 'harnesses',
   delivered: 'delivered',
@@ -102,7 +101,6 @@ export const COLUMNS: ColumnDef[] = [
   // looks like it works and does not. The order of the bands themselves is the Groups picker's.
   { id: 'status', label: 'Status', width: 116 },
   { id: 'priority', label: 'Priority', width: 96, sort: 'priority' },
-  { id: 'assignee', label: 'Owner', width: 110, sort: 'assignee' },
   { id: 'claim', label: 'Working on it', width: 132 },
   { id: 'progress', label: 'Progress', width: 132, sort: 'progress' },
   { id: 'due', label: 'Due', width: 96, sort: 'due' },
@@ -220,9 +218,6 @@ function cellFor(
         onPick={v => onPriority(v as TaskPriorityId)}
       />
     )
-    case 'assignee': return row.task.assignee
-      ? <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{row.task.assignee}</span>
-      : <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>—</span>
     case 'due': return row.task.dueDate
       ? <DueCell date={row.task.dueDate} closed={row.task.status === 'done' || row.task.status === 'abandoned'} nowMs={nowMs} />
       : <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>—</span>
@@ -293,8 +288,8 @@ export const subtaskColumns = (lang: Lang): Array<{ label: string; key: SubtaskS
   const c = boardCopy(lang)
   return [
     { label: c.subtasks, key: 'title' }, { label: 'Status', key: 'status' },
-    { label: c.owner, key: 'assignee' }, { label: c.start, key: 'start' },
-    { label: c.due, key: 'due' }, { label: c.sessions, key: 'sessions' },
+    { label: c.started, key: 'started' }, { label: c.completed, key: 'completed' },
+    { label: c.sessions, key: 'sessions' },
   ]
 }
 
@@ -349,10 +344,10 @@ function SubtaskRows({
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0,
     flexShrink: 0, minWidth: 18, minHeight: 18,
   }
-  // 1 (leading) + 6 named cells + filler must equal cols + 2 — the task row above is
+  // 1 (leading) + 5 named cells + filler must equal cols + 2 — the task row above is
   // [leading][title][cols…], and the leading column is there in BOTH modes (Select only adds the
   // checkbox INSIDE it), so this arithmetic does not depend on whether rows are being picked.
-  const filler = Math.max(0, cols - 5)
+  const filler = Math.max(0, cols - 4)
   // See `SubtaskTable`'s own doc comment for the full §F.1 clustering reasoning — this mirrors it
   // exactly, over the same `subtasks` pool (already scoped to one delivery): a member renders
   // directly under its group regardless of creation order, connected by an inset bar plus a shared
@@ -457,26 +452,20 @@ function SubtaskRows({
               onPick={v => void onPatch(t.id, { status: v as TaskStatus })}
             />
           </td>
+          {/* `startedAt`/`deliveredAt` are SYSTEM facts, never a date somebody typed — see
+              `Subtask.startedAt`'s own note. Read-only: no picker, no owner column, mirroring
+              `SubtaskTable`'s own inline row exactly. */}
           <td style={{ padding: cellPad, ...tint }}>
-            <input
-              value={t.assignee ?? ''} placeholder="—"
-              onChange={e => void onPatch(t.id, { assignee: e.target.value })}
-              style={bare}
-            />
-          </td>
-          {/* See `SubtaskTable`: one date picker in this app, and it fits its column. */}
-          <td style={{ padding: cellPad, ...tint }}>
-            <DatePicker
-              value={t.startDate ?? ''} label="" placeholder="—" lang="en"
-              onChange={v => void onPatch(t.id, { startDate: v })}
-            />
+            <span style={{
+              fontSize: 12,
+              color: t.startedAt ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+            }}>{fmtStamp(t.startedAt, lang)}</span>
           </td>
           <td style={{ padding: cellPad, ...tint }}>
-            <DatePicker
-              value={t.dueDate ?? ''} label="" placeholder="—" lang="en"
-              min={t.startDate || undefined}
-              onChange={v => void onPatch(t.id, { dueDate: v })}
-            />
+            <span style={{
+              fontSize: 12,
+              color: t.deliveredAt ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+            }}>{fmtStamp(t.deliveredAt, lang)}</span>
           </td>
           <td style={{ padding: cellPad, ...tint }}>
             {/* A MEMBER can never hold a session (§F.1, refused server-side) — no filing control,
@@ -952,7 +941,7 @@ export function TaskTable(p: TaskTableProps) {
                                     style={{ ...microLabel, fontWeight: 600, textAlign: 'left', padding: '5px 10px', paddingLeft: i === 0 ? 34 : 10 }}
                                   />
                                 ))}
-                                {cols.length > 5 && <td colSpan={cols.length - 5} />}
+                                {cols.length > 4 && <td colSpan={cols.length - 4} />}
                               </tr>
                               <SubtaskRows
                                 subtasks={orderedSubtasks(subs, subSort[row.task.id] ?? null, {
