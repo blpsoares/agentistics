@@ -4536,11 +4536,10 @@ export default function AppLayout() {
 
             {/* Logo only — no text */}
             <div style={{ flexShrink: 0 }}>
-              <img
-                src='/logo.png'
-                alt="agentistics"
-                style={{ height: 180, width: 'auto', display: 'block' }}
-              />
+              {/* Two plates, one visible: the theme is an attribute on <html>, so CSS picks the one
+                  that suits the surface (index.css `.ag-logo-*`). */}
+              <img className="ag-logo-dark" src='/logo.png' alt="agentistics" style={{ height: 180, width: 'auto' }} />
+              <img className="ag-logo-light" src='/logo-light.png' alt="agentistics" style={{ height: 180, width: 'auto' }} />
             </div>
 
             {/* Description + stats + version — middle */}

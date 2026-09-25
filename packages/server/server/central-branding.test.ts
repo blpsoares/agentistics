@@ -23,7 +23,7 @@ const HTML = `<!DOCTYPE html>
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <meta name="apple-mobile-web-app-title" content="Agentistics" />
     <meta name="theme-color" content="#D97706" />
-    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>Agentistics</title>
     <script type="module" crossorigin src="/assets/index-a1b2c3.js"></script>
     <link rel="manifest" href="/manifest.webmanifest">
@@ -52,11 +52,11 @@ test('centralHtml rewrites title, iOS name, touch icon, favicon and theme colour
   expect(html).toContain(`<title>${CENTRAL_APP_NAME}</title>`)
   expect(html).toContain(`<meta name="apple-mobile-web-app-title" content="${CENTRAL_APP_NAME}" />`)
   expect(html).toContain(`<meta name="theme-color" content="${CENTRAL_THEME_COLOR}" />`)
-  expect(html).toContain('href="/icons/icon-central-192.png"')
+  expect(html).toContain('href="/apple-touch-icon-central.png"')
   expect(html).toContain('href="/favicon-central.ico"')
   // No machine-branded reference may survive, or the dock shows the amber icon anyway.
   expect(html).not.toContain('"/favicon.ico"')
-  expect(html).not.toContain('"/icons/icon-192.png"')
+  expect(html).not.toContain('"/apple-touch-icon.png"')
   expect(html).not.toContain('#D97706')
 })
 
