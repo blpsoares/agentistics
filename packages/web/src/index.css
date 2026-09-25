@@ -943,17 +943,23 @@ button:focus-within .ag-row-pin,
 [data-theme="light"] .ag-logo-dark { display: none; }
 [data-theme="light"] .ag-logo-light { display: block; }
 
-/* "Something in this folded group is waiting on you" — see nav/AttentionDot.tsx. The group's own
-   left edge turns orange and breathes; it costs no layout, and the slow pulse is what says it is a
-   signal rather than the design. */
-.ag-attn-bar { position: relative; }
-.ag-attn-bar::before {
-  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
-  border-radius: 8px 0 0 8px; pointer-events: none;
-  background: var(--anthropic-orange);
-  animation: ag-attn-bar-pulse 2.8s ease-in-out infinite;
+/* "Something in this folded group is waiting on you" — see nav/AttentionDot.tsx.
+   It draws NOTHING new: the group already has a 3px left edge (an inset shadow in the tertiary
+   colour), and that same edge breathes from its own colour to the orange. A CSS animation beats the
+   inline `box-shadow` it replaces while it runs. */
+.ag-attn-bar { animation: ag-attn-edge 2.8s ease-in-out infinite; }
+@keyframes ag-attn-edge {
+  0%, 100% { box-shadow: inset 3px 0 0 0 var(--text-tertiary); }
+  50%      { box-shadow: inset 3px 0 0 0 var(--anthropic-orange); }
 }
-@keyframes ag-attn-bar-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+/* The automatic bands have no edge of their own, so the number that already sits at the end of the
+   heading breathes instead. */
+.ag-attn-count { animation: ag-attn-count 2.8s ease-in-out infinite; }
+@keyframes ag-attn-count {
+  0%, 100% { color: var(--text-tertiary); }
+  50%      { color: var(--anthropic-orange); }
+}
 @media (prefers-reduced-motion: reduce) {
-  .ag-attn-bar::before { animation: none; opacity: 1; }
+  .ag-attn-bar { animation: none; box-shadow: inset 3px 0 0 0 var(--anthropic-orange) !important; }
+  .ag-attn-count { animation: none; color: var(--anthropic-orange) !important; }
 }

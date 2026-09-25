@@ -4,9 +4,11 @@
  * A folded group shows only a name and a count, so a session inside it that has stopped to ask
  * something is invisible, and every header looks the same — somebody seeing the list for the first
  * time reads an orange row as decoration. The signal is the group's own LEFT EDGE turning orange
- * and pulsing, softly (`.ag-attn-bar` in `index.css`): the edge is already a piece of the group's
- * chrome, so this costs no space and moves nothing, and the slow pulse is what says it is a signal
- * and not the layout. (A dot beside the chevron was tried and it crowded the header.)
+ * and pulsing, softly (`.ag-attn-bar` in `index.css`). It is the group's EXISTING edge that changes
+ * colour, never a second element laid over it — an added strip beside the original read as a tab
+ * that did not belong to the design. The edge costs no space and moves nothing, and the slow pulse
+ * is what says it is a signal and not the layout. (A dot beside the chevron was tried first and it
+ * crowded the header.)
  *
  * What counts is exactly what the rest of the product marks as needing a person: a session that is
  * WAITING (a finished turn, or a permission dialog), and never one that is working.
@@ -66,5 +68,7 @@ export function pruneDismissed(
   return changed ? next : dismissed
 }
 
-/** The class that draws a folded group's pulsing left edge (see `index.css`, `.ag-attn-bar`). */
+/** Makes a folded group's OWN left edge breathe to orange (see `index.css`, `.ag-attn-bar`). */
 export const ATTN_BAR_CLASS = 'ag-attn-bar'
+/** The same signal on an automatic band's heading, which has no edge: its count breathes instead. */
+export const ATTN_COUNT_CLASS = 'ag-attn-count'
