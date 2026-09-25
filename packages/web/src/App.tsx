@@ -4538,8 +4538,8 @@ export default function AppLayout() {
             <div style={{ flexShrink: 0 }}>
               {/* Two plates, one visible: the theme is an attribute on <html>, so CSS picks the one
                   that suits the surface (index.css `.ag-logo-*`). */}
-              <img className="ag-logo-dark" src='/logo.png' alt="agentistics" style={{ height: 180, width: 'auto' }} />
-              <img className="ag-logo-light" src='/logo-light.png' alt="agentistics" style={{ height: 180, width: 'auto' }} />
+              <img className="ag-logo-dark" src='/logo.png' alt="agentistics" style={{ height: 88, width: 'auto' }} />
+              <img className="ag-logo-light" src='/logo-light.png' alt="agentistics" style={{ height: 88, width: 'auto' }} />
             </div>
 
             {/* Description + stats + version — middle */}
@@ -4659,9 +4659,6 @@ export default function AppLayout() {
               >
                 Bryan Soares
               </a>
-            </span>
-            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-              {lang === 'pt' ? 'Não afiliado à Anthropic' : 'Not affiliated with Anthropic'}
             </span>
           </div>
         </div>
