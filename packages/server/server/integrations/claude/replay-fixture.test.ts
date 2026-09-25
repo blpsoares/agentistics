@@ -15,7 +15,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentisticsEvent } from '@agentistics/core'
-import { emptyClaudeParse, foldClaudeParse, iterLines } from '../../jsonl'
+import { emptyClaudeParse, finishCompacts, foldClaudeParse, iterLines } from '../../jsonl'
 import { emptyClaudeReplay, finishClaudeReplay, foldClaudeReplay, foldClaudeReplayEntry } from './replay'
 import { CLAUDE_ADAPTER_VERSION, mainContext } from './replay-core'
 import { createClaudeReplay } from './index'
@@ -166,5 +166,41 @@ describe('the IO half over the fixture directory', () => {
     const second = await replay.replay(source!, first.cursor)
     const seen = new Set(first.events.map(e => e.eventId))
     expect(second.events.filter(e => !seen.has(e.eventId))).toEqual([])
+  })
+})
+
+describe('Claude replay over a redacted excerpt with five compactions', () => {
+  // Every compact_boundary of a real five-compaction conversation plus twelve lines either side,
+  // redacted like the fixture above; `compactMetadata` keeps only trigger / durationMs /
+  // cumulativeDroppedTokens / preTokens / postTokens.
+  const CONV2 = '00000000-0000-4000-8000-000000000002'
+  const lines2 = [...iterLines(readFileSync(
+    join(import.meta.dir, '../../../test/fixtures/claude-replay-compact/proj', `${CONV2}.jsonl`), 'utf-8'))]
+  const run2 = (chunks: string[][]) => {
+    const out: AgentisticsEvent[] = []
+    const s = emptyClaudeReplay(mainContext(CONV2, RECORDED_AT))
+    for (const c of chunks) foldClaudeReplay(s, c, e => out.push(e))
+    finishClaudeReplay(s, { final: true }, e => out.push(e))
+    return out
+  }
+  const all = run2([lines2])
+  const compacted = all.filter((e): e is AgentisticsEvent<'context.compacted'> => e.type === 'context.compacted')
+
+  test('one context.compacted per compaction, and the projection of them equals the legacy compact stats', () => {
+    const legacy = emptyClaudeParse()
+    foldClaudeParse(legacy, lines2)
+    const stats = finishCompacts(legacy.compact)
+    expect(compacted).toHaveLength(5)
+    expect(compacted.length).toBe(stats.count)
+    expect(compacted.reduce((a, e) => a + (e.data.durationMs ?? 0), 0)).toBe(stats.ms)
+    expect(compacted.reduce((a, e) => a + (e.data.droppedTokens ?? 0), 0)).toBe(stats.droppedTokens!)
+    expect(compacted.every(e => e.data.trigger === 'auto' && e.provenance.confidence === 'exact')).toBe(true)
+  })
+
+  test('chunk independence at every line boundary', () => {
+    const whole = all.map(essence)
+    for (let i = 1; i < lines2.length; i++) {
+      expect(run2([lines2.slice(0, i), lines2.slice(i)]).map(essence)).toEqual(whole)
+    }
   })
 })

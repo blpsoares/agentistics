@@ -7,7 +7,7 @@
  * byte offset instead of re-reading it (CLAUDE.md, "A LIVE transcript is read by what it has
  * WRITTEN SINCE LAST TIME"). The IO half is `./index.ts`.
  *
- * Three sub-folds, one per concern, each in its own module:
+ * Four sub-folds, one per concern, each in its own module:
  * - `replay-agents.ts` — the session, the run and the agents: when each started and ended, and the
  *   subagents the `subagents/` directory says existed (`subagent-join.ts`).
  * - `replay-model.ts` — one `model.invoked` + `model.completed` per billed response, keyed on
@@ -15,6 +15,7 @@
  *   row per id, so an early partial would be the one kept).
  * - `replay-tools.ts` — one `tool.requested` per `tool_use` block, one `tool.completed` /
  *   `tool.failed` per result.
+ * - `replay-context.ts` — one `context.compacted` per `compact_boundary` record.
  *
  * The fold never collects events: it hands each one to `emit` as it is made, so the caller decides
  * how many to hold (P1 §9 — no unbounded accumulation). `lineNo` is 1-based and counts EVERY raw
@@ -23,6 +24,7 @@
  */
 import type { ClaudeReplayContext, EmitEvent } from './replay-core'
 import { emptyLifecycleFold, finishLifecycleFold, foldLifecycleEntry, type LifecycleFoldState } from './replay-agents'
+import { emptyContextFold, foldContextEntry, type ContextFoldState } from './replay-context'
 import { emptyModelFold, finishModelFold, foldModelEntry, type ModelFoldState } from './replay-model'
 import { emptyToolFold, finishToolFold, foldToolEntry, type ToolFoldState } from './replay-tools'
 
@@ -41,10 +43,12 @@ export interface ClaudeReplayState {
   lifecycle: LifecycleFoldState
   model: ModelFoldState
   tools: ToolFoldState
+  context: ContextFoldState
 }
 
 export function emptyClaudeReplay(ctx: ClaudeReplayContext, role: ClaudeTranscriptRole = 'main'): ClaudeReplayState {
-  return { ctx, role, lineNo: 0, lifecycle: emptyLifecycleFold(), model: emptyModelFold(), tools: emptyToolFold() }
+  return { ctx, role, lineNo: 0, lifecycle: emptyLifecycleFold(), model: emptyModelFold(), tools: emptyToolFold(),
+    context: emptyContextFold() }
 }
 
 /**
@@ -58,6 +62,7 @@ export function foldClaudeReplayEntry(
   foldLifecycleEntry(state.lifecycle, state.ctx, state.role, entry, lineNo, emit)
   foldModelEntry(state.model, state.ctx, entry, lineNo, emit)
   foldToolEntry(state.tools, state.ctx, entry, lineNo, emit)
+  foldContextEntry(state.context, state.ctx, entry, lineNo, emit)
 }
 
 /** Advance over raw lines. Numbering, blank-line and bad-JSON handling mirror `foldClaudeParse`. */

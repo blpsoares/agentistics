@@ -34,8 +34,12 @@ import {
 /**
  * The `adapterVersion` on every event this integration emits. Bump it whenever what an event SAYS
  * about the same transcript changes, so a projection can tell which events predate a parser fix.
+ *
+ * - 1.0.0 — session/run/agent lifecycle, model invocations, tool executions.
+ * - 1.1.0 — adds `context.compacted`. A transcript replayed at 1.0.0 carries no compaction events,
+ *   which a projection must read as "not recorded by this version", never as "never compacted".
  */
-export const CLAUDE_ADAPTER_VERSION = '1.0.0'
+export const CLAUDE_ADAPTER_VERSION = '1.1.0'
 
 /** `source.id` on every event. */
 export const CLAUDE_SOURCE_ID = 'claude'
