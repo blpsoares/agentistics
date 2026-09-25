@@ -53,3 +53,13 @@ describe('parseAnthropicPricing', () => {
     expect(parseAnthropicPricing(lying)).toBeNull()
   })
 })
+
+describe('parseAnthropicPricing — localized page', () => {
+  test('reads the Portuguese headers the page serves to a pt browser', () => {
+    const pt = CURRENT
+      .replace('<th>Input</th>', '<th>Entrada</th>').replace('<th>Output</th>', '<th>Saída</th>')
+      .replace('<th>5m writes</th>', '<th>Gravações de 5 min</th>').replace('<th>1h writes</th>', '<th>Gravações de 1h</th>')
+      .replace('<th>Hits and refreshes</th>', '<th>Hits e atualizações</th>')
+    expect(parseAnthropicPricing(pt)!['claude-opus-5']).toEqual({ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 })
+  })
+})

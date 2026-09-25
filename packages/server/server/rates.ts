@@ -48,8 +48,8 @@ function columnOf(label: string): PriceColumn | null {
   if (/\b1h\b|1 ?hour/.test(l)) return null
   if (/\b5m\b|5 ?min/.test(l)) return 'cacheWrite'
   if (/hit|cache read/.test(l)) return 'cacheRead'
-  if (/output/.test(l)) return 'output'
-  if (/input/.test(l)) return 'input'
+  if (/output|saída|saida/.test(l)) return 'output'
+  if (/input|entrada/.test(l)) return 'input'
   return null
 }
 
