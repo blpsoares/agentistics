@@ -72,7 +72,7 @@ export default defineConfig({
       // making code changes appear not to take effect. Still enabled for prod builds.
       devOptions: { enabled: false, suppressWarnings: true, type: 'module' },
       // `icons/*.png` covers the central variants too; the central favicon needs naming.
-      includeAssets: ['favicon.ico', 'favicon-central.ico', 'minimalistLogo.png', 'icons/*.png'],
+      includeAssets: ['favicon.ico', 'favicon-central.ico', 'apple-touch-icon.png', 'apple-touch-icon-central.png', 'minimalistLogo.png', 'icons/*.png'],
       manifest: {
         name: 'Agentistics',
         short_name: 'Agentistics',

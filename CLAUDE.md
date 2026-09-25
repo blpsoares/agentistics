@@ -2971,8 +2971,9 @@ harness must not break.
   files are SERVED, not at build time (`TEAM_CENTRAL` is a runtime mode). `serveStatic` runs
   `centralManifest()` / `centralHtml()` from `central-branding.ts` (pure, total — bad input is
   returned untouched) over `/manifest.webmanifest` and `/index.html`, swapping in the **teal**
-  icon set, the name "Agentistics Central" and the teal `theme_color`. Regenerate the teal assets
-  with `packages/web/scripts/gen-central-icons.py` if the artwork changes — hue, not a badge: at
+  icon set, the name "Agentistics Central" and the teal `theme_color`. Regenerate every icon (teal ones included)
+  with `bun packages/web/scripts/gen-brand-assets.ts` from the four SVGs in `packages/web/branding/` —
+  the teal is a colour swap on the vector, not a badge: at
   32px in a dock a corner badge is invisible. Both files are served `no-store`; **the app shell
   must never get the year-long immutable cache** the hashed assets get, or a rebuild is pinned to
   its old bundle. Anything the server rewrites must also be embedded as TEXT — `.webmanifest` was
