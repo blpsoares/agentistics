@@ -31,6 +31,7 @@ import {
   bottomPanels, resolveForViewport, useRailWidth, usePanelSlots, type PanelDropTarget, type PanelId,
 } from '../../lib/panelSlots'
 import { panelTitle } from '../../lib/panelMeta'
+import { hasDragPayload } from '../../lib/dragReorder'
 import { useLeftAsideEdge } from '../../lib/leftAsideEdge'
 import { fullscreenInsetRight, useRightAsideEdge } from '../../lib/rightAsideEdge'
 import {
@@ -253,10 +254,6 @@ export function SessionPanel({
     : slotLayout.bottom === 'studio' ? (editorEnabled === true ? 'studio' : null)
     : slotLayout.bottom
 
-  /** WHICH BAND RENDERS AT THE FOOT OF THE PANEL — `lib/panelBar.ts`'s own `bottomBandFor`. Kept
-   *  here as one small pure call rather than as a JSX ternary so the decision can be planted and
-   *  tested without mounting anything; see that function's own doc comment for the rule itself. */
-  const bottomBand = bottomBandFor({ bottomOccupant: bottomDesktopPanel, relayed, isMobile })
 
   /**
    * THE BOTTOM BAND'S OWN TAB STRIP (`lib/panelBar.ts`) — computed here, where `slotLayout`/
@@ -277,6 +274,16 @@ export function SessionPanel({
   // `target` is clamped the same way independently). See `gatedBottomOccupant`'s own doc comment.
   const bottomOccupant = gatedBottomOccupant(slotLayout.bottom, panelBarGates.shellEnabled)
   const barEntries = panelBarEntries(bottomIds, bottomOccupant, panelBarGates)
+
+  /** WHICH BAND RENDERS AT THE FOOT OF THE PANEL — `lib/panelBar.ts`'s own `bottomBandFor`. Kept
+   *  here as one small pure call rather than as a JSX ternary so the decision can be planted and
+   *  tested without mounting anything; see that function's own doc comment for the rule itself.
+   *  Computed AFTER `barEntries` on purpose: whether the band is EMPTY (nothing placed there) or
+   *  merely COLLAPSED (panels placed, none open) is the count of those gated entries, and reading
+   *  the open occupant instead is the mistake that function's header records. */
+  const bottomBand = bottomBandFor({
+    bottomOccupant: bottomDesktopPanel, relayed, isMobile, bottomHasPanels: barEntries.length > 0,
+  })
   /**
    * A TAB CLICK SELECTS, IT NEVER TOGGLES — `lib/panelBar.ts`'s own `resolvePanelBarPick`. This bar
    * only ever lists bottom-placed panels now, so there is exactly one destination for a pick that is
@@ -544,6 +551,63 @@ export function SessionPanel({
           reason="relayed"
         />
       )}
+      {/* NOTHING DOCKED, ON A DESKTOP: no band at all (`bottomBandFor`'s own header). What that must
+          not cost is the way back — a panel dragged off the rail needs somewhere to land. So a drop
+          zone exists only while a panel drag is in flight, and is absent the rest of the time: an
+          empty region that is always there is exactly the strip this replaced. The right-click
+          "Mover X para baixo" is the route that does not need a drag at all. */}
+      {bottomBand === 'none' && !isMobile && !relayed && (
+        <EmptyBandDropZone lang={lang} onDrop={dropSlotPanel} />
+      )}
+    </div>
+  )
+}
+
+/**
+ * THE BOTTOM BAND'S LANDING STRIP WHILE THE BAND DOES NOT EXIST. Present only while a panel drag
+ * carrying the shared payload is in flight (`hasDragPayload`), because the band itself renders
+ * nothing when nothing is docked and there is otherwise no target for a rail icon to land on.
+ * `dragstart`/`dragend`/`drop` are read on the WINDOW in the capture phase: the drag starts on the
+ * rail, a different subtree, and this component has to know about it before the pointer arrives.
+ */
+function EmptyBandDropZone({ lang, onDrop }: {
+  lang: 'pt' | 'en'
+  onDrop: (dragPanel: PanelBarId, target: PanelDropTarget) => void
+}) {
+  const [dragging, setDragging] = useState(false)
+  useEffect(() => {
+    const start = (e: DragEvent) => { if (hasDragPayload(e)) setDragging(true) }
+    const stop = () => setDragging(false)
+    window.addEventListener('dragstart', start, true)
+    window.addEventListener('dragend', stop, true)
+    window.addEventListener('drop', stop, true)
+    return () => {
+      window.removeEventListener('dragstart', start, true)
+      window.removeEventListener('dragend', stop, true)
+      window.removeEventListener('drop', stop, true)
+    }
+  }, [])
+  const drop = useBandDropTarget(onDrop)
+  if (!dragging) return null
+  return (
+    <div
+      ref={drop.ref}
+      data-empty-band-drop
+      style={{
+        flexShrink: 0,
+        height: 44,
+        margin: '0 8px 8px',
+        borderRadius: 8,
+        border: `1px dashed ${drop.dropHighlight ? 'var(--anthropic-orange)' : 'var(--border)'}`,
+        background: drop.dropHighlight ? 'var(--bg-elevated)' : 'transparent',
+        color: 'var(--text-tertiary)',
+        fontSize: 12,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      {lang === 'pt' ? 'Solte aqui para mover para baixo' : 'Drop here to move it to the bottom'}
     </div>
   )
 }
