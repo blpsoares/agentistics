@@ -91,20 +91,45 @@ export interface BottomBandInput {
   relayed: boolean
   /** Phone viewport — the relayed fallback (`bar-only`) is desktop-only. */
   isMobile: boolean
+  /** Is ANY panel PLACED at the bottom — whether or not one is open there? This is what separates
+   *  COLLAPSED from EMPTY, and `bottomOccupant` cannot answer it: that is the panel currently SHOWN,
+   *  `null` both when nothing is placed at the bottom and when panels are placed there but the band
+   *  is collapsed. `SessionPanel` passes its own gated bar entries' count, so a panel a gate hides
+   *  counts as absent, exactly as the bar would draw it. */
+  bottomHasPanels: boolean
 }
 
 /**
  * WHICH BAND RENDERS AT THE FOOT OF THE PANEL.
  *
- * `bottomOccupant` wins whenever it names anything — whatever panel it is, gated or not. A LOCAL
- * session with NOTHING placed at the bottom (every default occupant moved away) still gets
- * `'shell'`: `ShellBand` is the one band that always has something to offer a local session (its own
- * `cli`/`shell` toggle), so it is the floor rather than an empty region. A RELAYED session with
+ * `bottomOccupant` wins whenever it names anything — whatever panel it is, gated or not.
+ *
+ * EMPTY IS EMPTY, ON A DESKTOP. A local session with nothing placed at the bottom used to fall back
+ * to `'shell'`, on the reading that `ShellBand` always has its own `cli`/`shell` toggle to offer and
+ * so is a floor rather than an empty region. That reading predates PLACEMENT: once every panel can
+ * be moved to the rail, `cli` and `shell` included, the floor draws a bar with no tabs in it — a
+ * thin strip holding one orange `−` and nothing else, reported twice ("o - ainda aparece na barra
+ * mesmo com ela fechada"). An earlier fix guarded `SimpleDockedBand` and `PanelBarBand` and missed
+ * this one, because the strip comes from the band that is SELECTED here rather than from a band
+ * rendering its own emptiness.
+ *
+ * COLLAPSED IS NOT EMPTY, and the two must not be confused: panels placed at the bottom with the
+ * band collapsed keep their band — its tabs and the chevron that reopens it — and that is
+ * `bottomHasPanels`, NOT `bottomOccupant !== null`. The first draft of this fix read the occupant,
+ * which is `null` for a collapsed band too, and took the whole band away with Claude Code and Shell
+ * still parked in it: caught on a live preview before it shipped. Nothing placed at all is the
+ * empty case, and it renders NOTHING.
+ *
+ * A PHONE KEEPS THE FLOOR. There is no rail there, and `ShellBand`'s own segment at the foot of the
+ * chat is how a phone reaches the session's terminal at all; taking it away because a placement
+ * decided on a desktop says `rail` would leave a phone with no route to it. A RELAYED session with
  * nothing docked keeps the narrow `'bar-only'` fallback on desktop, `'none'` on a phone.
  */
-export function bottomBandFor({ bottomOccupant, relayed, isMobile }: BottomBandInput): BottomBandKind {
+export function bottomBandFor(
+  { bottomOccupant, relayed, isMobile, bottomHasPanels }: BottomBandInput,
+): BottomBandKind {
   if (bottomOccupant !== null) return bottomOccupant
-  if (!relayed) return 'shell'
+  if (!relayed) return isMobile || bottomHasPanels ? 'shell' : 'none'
   return isMobile ? 'none' : 'bar-only'
 }
 
