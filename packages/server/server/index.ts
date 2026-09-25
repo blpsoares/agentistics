@@ -176,9 +176,11 @@ const serverProcStatsMap = new Map<number, ProcStatSample>()
     )
     process.exit(1)
   }
-  // Best-effort release. A lock left behind by a hard kill is reclaimed as stale by the next
-  // start, so an unreleased lock costs nothing.
-  const release = () => { void lock.release() }
+  // SYNCHRONOUS release: both signal handlers call `process.exit` on the next line, and an async
+  // release never got past its first `await`, so every clean stop left the lock on disk. A lock left
+  // behind by a hard kill (or a reboot) is still reclaimed as stale by the next start —
+  // `claimInstanceLock` checks that the holder is the process that WROTE it, not merely a live pid.
+  const release = () => { lock.releaseSync() }
   process.on('exit', release)
   process.on('SIGINT', () => { release(); process.exit(130) })
   process.on('SIGTERM', () => { release(); process.exit(143) })
