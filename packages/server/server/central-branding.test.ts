@@ -113,3 +113,16 @@ test('centralHtml marks the shell as a central and recolours the preboot mark on
   // Idempotent: re-branding an already-branded shell adds no second attribute.
   expect(centralHtml(html).match(new RegExp(CENTRAL_HTML_ATTR, 'g'))!.length).toBe(1)
 })
+
+test('centralManifest swaps an icon whose URL carries a version query, and keeps the query', () => {
+  const m = JSON.parse(centralManifest(JSON.stringify({
+    icons: [{ src: '/icons/icon-192.png?v=abc12345', sizes: '192x192', type: 'image/png' }],
+  })))
+  expect(m.icons[0].src).toBe('/icons/icon-central-192.png?v=abc12345')
+})
+
+test('centralHtml swaps a favicon and touch icon that carry a version query', () => {
+  const html = centralHtml('<link rel="icon" href="/favicon.ico?v=1"><link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2">')
+  expect(html).toContain('href="/favicon-central.ico?v=1"')
+  expect(html).toContain('href="/apple-touch-icon-central.png?v=2"')
+})

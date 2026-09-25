@@ -55,8 +55,12 @@ export function centralManifest(json: string): string {
       if (!icon || typeof icon !== 'object') return icon
       const src = (icon as { src?: unknown }).src
       if (typeof src !== 'string') return icon
-      const swap = ICON_SWAPS.find(([from]) => src === from)
-      return swap ? { ...icon, src: swap[1] } : icon
+      // The icon URL carries a `?v=<hash>` so a browser that cached an older drawing fetches the new
+      // one; the swap is decided on the PATH and the query rides along.
+      const q = src.indexOf('?')
+      const path = q === -1 ? src : src.slice(0, q)
+      const swap = ICON_SWAPS.find(([from]) => path === from)
+      return swap ? { ...icon, src: swap[1] + (q === -1 ? '' : src.slice(q)) } : icon
     })
   }
   return JSON.stringify(m)

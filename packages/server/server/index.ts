@@ -4090,7 +4090,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
 
     // Serve embedded frontend assets (binary mode only)
     if (!url.pathname.startsWith('/api')) {
-      const asset = serveStatic(url.pathname)
+      const asset = serveStatic(url.pathname, req.headers.get('if-none-match'))
       if (asset) return asset
       // SPA fallback — any unknown path gets index.html
       const fallback = serveStatic('/index.html')
