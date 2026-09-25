@@ -30,7 +30,7 @@
  * returns belong to the connection THIS process just opened, which is why they still cannot answer
  * "since the server booted" (rule 2 above) and are folded into the same `sinceBoot: null` sentence.
  */
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { JOURNAL_PATH } from './config'
 import { openJournal, type OpenJournalOptions } from './journal/journal'
@@ -92,6 +92,35 @@ export interface JournalCliDeps {
   open?: typeof openJournal
   /** Default `process.env`. */
   env?: Record<string, string | undefined>
+  /** The shadow writer's status file (journal/shadow.ts): default `<journal path>.status.json` (config's `JOURNAL_STATUS_PATH` for the real one). */
+  statusPath?: string
+  /** Default `process.kill(pid, 0)`. Injected so a test can decide who is alive. */
+  alive?: (pid: number) => boolean
+}
+
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch (e) { return (e as { code?: string }).code === 'EPERM' }
+}
+
+/**
+ * The writing process's own since-boot counters, from the file `journal/shadow.ts` keeps beside the
+ * journal. `null` unless the file parses AND the process that wrote it is still alive: the numbers of
+ * a process that has exited are not "since the writing process booted" of anything running now, and
+ * printing them as such would be the confident answer this verb refuses to give.
+ */
+export function readSinceBoot(path: string, alive: (pid: number) => boolean): JournalSinceBoot | null {
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as {
+      v?: unknown; pid?: unknown; sinceBoot?: { counters?: JournalCounters; rejectedByReason?: Partial<Record<RejectionReason, number>> }
+    }
+    if (raw.v !== 1 || typeof raw.pid !== 'number' || !raw.sinceBoot?.counters) return null
+    if (!alive(raw.pid)) return null
+    const out: JournalSinceBoot = { counters: raw.sinceBoot.counters }
+    if (raw.sinceBoot.rejectedByReason) out.rejectedByReason = raw.sinceBoot.rejectedByReason
+    return out
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -138,6 +167,7 @@ export async function collectJournalReport(deps: JournalCliDeps = {}): Promise<J
     present = false
   }
   report.present = present
+  report.sinceBoot = readSinceBoot(deps.statusPath ?? `${path}.status.json`, deps.alive ?? pidAlive)
   if (!present) return report
 
   // The file exists: open it to read status + stats (no event is ever appended), and always close
@@ -236,7 +266,7 @@ export function renderJournalStatus(r: JournalReport): string {
   if (r.sinceBoot === null) {
     lines.push(
       '  Not available from here. These counters live in the process that WRITES the journal (the ' +
-        'server), and no process in this build exposes them yet — a connection opened by this CLI ' +
+        'server), and no writing process is reporting them (the shadow writer is off, or has exited) — a connection opened by this CLI ' +
         'call would only have its own fresh zeros, which are not the server\'s numbers, so none are ' +
         'printed.',
     )

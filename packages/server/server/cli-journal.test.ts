@@ -10,10 +10,10 @@
  * filesystem layout.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { collectJournalReport, renderJournalStatus, runJournal } from './cli-journal'
+import { collectJournalReport, readSinceBoot, renderJournalStatus, runJournal } from './cli-journal'
 import { openJournal, type OpenJournalOptions } from './journal/journal'
 import type { PathProbe } from './journal/schema'
 
@@ -141,5 +141,41 @@ describe('a machine that HAS had the journal on', () => {
       const text = renderJournalStatus(report).toLowerCase()
       expect(text).toMatch(/disabled|no-sqlite|not available|unavailable/)
     }
+  })
+})
+
+describe('since-boot counters from the shadow writer\'s status file', () => {
+  const counters = { written: 12, duplicates: 3, rejected: 1, dropped: 0, failedAppends: 0, failedReads: 0 }
+  function statusFile(over: Record<string, unknown> = {}): string {
+    const dir = join(root, `status-${++seq}`)
+    mkdirSync(dir, { recursive: true })
+    const p = join(dir, 'journal.db.status.json')
+    writeFileSync(p, JSON.stringify({ v: 1, pid: 4242, sinceBoot: { counters, rejectedByReason: { 'bad-timestamp': 1 } }, ...over }))
+    return p
+  }
+
+  test('a live writer\'s numbers are reported, with the per-reason breakdown', () => {
+    expect(readSinceBoot(statusFile(), () => true)).toEqual({ counters, rejectedByReason: { 'bad-timestamp': 1 } })
+  })
+
+  test('a writer that has exited reports NOTHING — its numbers are not the running server\'s', () => {
+    expect(readSinceBoot(statusFile(), () => false)).toBeNull()
+  })
+
+  test('absent, unparseable or foreign-version files answer null, never a zero', () => {
+    expect(readSinceBoot(join(root, 'nope.json'), () => true)).toBeNull()
+    const bad = statusFile()
+    writeFileSync(bad, '{not json')
+    expect(readSinceBoot(bad, () => true)).toBeNull()
+    expect(readSinceBoot(statusFile({ v: 2 }), () => true)).toBeNull()
+  })
+
+  test('collectJournalReport fills sinceBoot from the file beside the journal, and renders it', async () => {
+    const path = freshMissingPath()
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(`${path}.status.json`, JSON.stringify({ v: 1, pid: 4242, sinceBoot: { counters } }))
+    const report = await collectJournalReport({ path, alive: () => true })
+    expect(report.sinceBoot?.counters.written).toBe(12)
+    expect(renderJournalStatus(report)).toContain('Written: 12')
   })
 })
