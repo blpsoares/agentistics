@@ -46,6 +46,8 @@ export interface SessionsGroupMenuProps {
   onReorder: (next: string[]) => void
   cardColor: AsideCardColor
   onCardColor: (v: AsideCardColor) => void
+  /** Stretch the trigger to share a row equally with its siblings instead of a fixed square. */
+  fill?: boolean
 }
 
 export function SessionsGroupMenu(p: SessionsGroupMenuProps) {
@@ -112,8 +114,9 @@ export function SessionsGroupMenu(p: SessionsGroupMenuProps) {
         aria-label={pt ? 'Organizar lista' : 'Arrange list'}
         title={pt ? 'Organizar lista' : 'Arrange list'}
         style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-          width: tap ?? 34, padding: 0, borderRadius: 9, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          ...(p.fill ? { flex: 1, minWidth: 0, minHeight: tap ?? 36 } : { flexShrink: 0, width: tap ?? 34 }),
+          padding: 0, borderRadius: 9, cursor: 'pointer',
           border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
           color: open ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', fontFamily: 'inherit',
         }}
