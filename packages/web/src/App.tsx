@@ -1556,7 +1556,20 @@ export default function AppLayout() {
       body: JSON.stringify({ theme: t }),
     }).catch(() => { /* the local copy still holds for this browser */ })
   }, [])
-  const setCurrency = useCallback((c: 'USD' | 'BRL') => setCurrencyState(c), [])
+  /**
+   * Set the currency AND remember it — the same defect `setTheme` above had. It only set state, so
+   * Home's USD/BRL button (and the language switch, which flips currency with it) held for as long
+   * as the tab lived: a reload, a PWA reopen or opening `/tasks` directly came back in whatever
+   * `preferences.json` said, and the board read as "the currency does not switch". Reported.
+   */
+  const setCurrency = useCallback((c: 'USD' | 'BRL') => {
+    setCurrencyState(c)
+    fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currency: c }),
+    }).catch(() => { /* this tab still holds it */ })
+  }, [])
 
   // How this machine is actually billed. Local only — it never travels to a central.
   const [billing, setBilling] = useState<BillingSettings>({ profiles: {} })

@@ -1,19 +1,19 @@
 /**
- * AttentionDot — "something in here is waiting on you", on a group header that hides its rows.
+ * Attention on a FOLDED group: "something in here is waiting on you".
  *
  * A folded group shows only a name and a count, so a session inside it that has stopped to ask
- * something is invisible: every group header looks the same, and somebody seeing the list for the
- * first time reads an orange row as decoration. The dot exists to be UNMISTAKABLY a signal, and it
- * does that with motion rather than colour alone — a slow ring pulses out of it, which no static
- * design element does — plus the words (`title` and `aria-label`) naming how many.
+ * something is invisible, and every header looks the same — somebody seeing the list for the first
+ * time reads an orange row as decoration. The signal is the group's own LEFT EDGE turning orange
+ * and pulsing, softly (`.ag-attn-bar` in `index.css`): the edge is already a piece of the group's
+ * chrome, so this costs no space and moves nothing, and the slow pulse is what says it is a signal
+ * and not the layout. (A dot beside the chevron was tried and it crowded the header.)
  *
- * It sits at a FIXED x at the left edge of the header, so it lines up vertically from one group to
- * the next whatever the length of the names, and it is drawn over the header's padding so the
- * chevron and the folder never shift when a dot appears and no gutter is spent when it is absent.
+ * What counts is exactly what the rest of the product marks as needing a person: a session that is
+ * WAITING (a finished turn, or a permission dialog), and never one that is working.
  *
- * Clicking it DISMISSES it. What counts is exactly what the rest of the product marks with the
- * orange dot: a session that is WAITING on a person (a finished turn, or a permission dialog), and
- * never one that is working.
+ * DISMISSING it — from the group's own ⋮ menu — answers "I saw this turn". It is held in memory
+ * only, so a restart brings it back, and it is forgotten per session the moment that session stops
+ * waiting (see `pruneDismissed`), so the NEXT turn that ends waiting counts again.
  */
 
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
@@ -66,41 +66,5 @@ export function pruneDismissed(
   return changed ? next : dismissed
 }
 
-/**
- * The dot itself, DRAWN OVER the header's left padding rather than reserving a column in it.
- *
- * A reserved slot lined the dot up perfectly and cost every group a wide empty gutter while there
- * was no dot to show, which is nearly always. So the header keeps a small fixed left padding, wide
- * enough to hold the dot beside the chevron, and the dot is absolutely positioned inside it: same
- * x in every group whatever the name's length, and no space spent when it is absent. `left` is
- * relative to the header button the caller positions.
- */
-export function AttentionSlot({ count, pt, onDismiss, left }: {
-  count: number; pt: boolean; onDismiss: () => void; left: number
-}) {
-  if (count <= 0) return null
-  const words = pt
-    ? (count === 1 ? '1 sessão precisa de você' : `${count} sessões precisam de você`)
-    : (count === 1 ? '1 session needs you' : `${count} sessions need you`)
-  const hint = pt ? `${words}. Clique para dispensar.` : `${words}. Click to dismiss.`
-  return (
-    <span
-      role="button"
-      tabIndex={0}
-      aria-label={hint}
-      title={hint}
-      // The header this sits in is itself a button that folds the group: a click here must
-      // dismiss and nothing else.
-      onClick={e => { e.preventDefault(); e.stopPropagation(); onDismiss() }}
-      onKeyDown={e => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onDismiss() }
-      }}
-      style={{
-        position: 'absolute', left, top: '50%', marginTop: -7, width: 14, height: 14,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', borderRadius: 7,
-      }}
-    >
-      <span className="ag-attn-dot" />
-    </span>
-  )
-}
+/** The class that draws a folded group's pulsing left edge (see `index.css`, `.ag-attn-bar`). */
+export const ATTN_BAR_CLASS = 'ag-attn-bar'
