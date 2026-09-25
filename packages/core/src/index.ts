@@ -53,3 +53,4 @@ export * from './stagedSession'
 // same rule as a courtesy, before the text ever leaves the browser. One implementation, or the two
 // could disagree about what "sanitized" means.
 export * from './pasteSanitize'
+export * from './sessionShape'

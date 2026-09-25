@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { centralManifest, centralHtml, CENTRAL_APP_NAME, CENTRAL_THEME_COLOR } from './central-branding'
+import { centralManifest, centralHtml, CENTRAL_APP_NAME, CENTRAL_THEME_COLOR, CENTRAL_HTML_ATTR } from './central-branding'
 
 // The manifest vite-plugin-pwa emits, and the built shell (source index.html + the tags Vite
 // injects). Kept verbatim so a change to either is caught here rather than in the dock.
@@ -80,4 +80,36 @@ test('a cosmetic rewrite can never break the shell or the manifest', () => {
 test('centralManifest is idempotent — re-serving an already-branded manifest is stable', () => {
   const once = centralManifest(MANIFEST)
   expect(centralManifest(once)).toBe(once)
+})
+
+test('centralManifest swaps the MASKABLE icons too (what Android puts on the home screen)', () => {
+  const m = JSON.parse(centralManifest(JSON.stringify({
+    icons: [
+      { src: '/icons/icon-192.png', purpose: 'any' },
+      { src: '/icons/icon-192-maskable.png', purpose: 'maskable' },
+      { src: '/icons/icon-512-maskable.png', purpose: 'maskable' },
+    ],
+  })))
+  expect(m.icons.map((i: { src: string }) => i.src)).toEqual([
+    '/icons/icon-central-192.png',
+    '/icons/icon-central-192-maskable.png',
+    '/icons/icon-central-512-maskable.png',
+  ])
+})
+
+test('centralHtml marks the shell as a central and recolours the preboot mark only', () => {
+  const shell = `<!DOCTYPE html>
+<html lang="en">
+  <head><meta name="theme-color" content="#FD8924" /><style>.x{color:#FD8924}</style></head>
+  <body><div id="root"></div><div id="ag-preboot"><svg class="ag-preboot-mark" viewBox="1 1 54 54"><path stroke="#FD8924"/><path fill="#FD8924"/></svg></div></body>
+</html>`
+  const html = centralHtml(shell)
+  expect(html).toContain(`<html ${CENTRAL_HTML_ATTR}="1" lang="en">`)
+  const mark = html.match(/<svg class="ag-preboot-mark"[\s\S]*?<\/svg>/)![0]
+  expect(mark).not.toContain('#FD8924')
+  expect(mark).toContain(CENTRAL_THEME_COLOR)
+  // Only the mark: an unrelated rule that happens to use the amber is not the logo.
+  expect(html).toContain('.x{color:#FD8924}')
+  // Idempotent: re-branding an already-branded shell adds no second attribute.
+  expect(centralHtml(html).match(new RegExp(CENTRAL_HTML_ATTR, 'g'))!.length).toBe(1)
 })

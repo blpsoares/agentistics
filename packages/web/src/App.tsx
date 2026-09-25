@@ -116,6 +116,7 @@ import { setFleetSourceCentral } from './lib/fleet'
 import { reopenedSessionRoute, sessionPath } from './lib/sessionRoute'
 import { SessionStatsMenu } from './components/sessions/SessionStatsMenu'
 import { SessionTitleFlag } from './components/sessions/SessionTitleFlag'
+import { brandAsset } from './lib/brand'
 
 /**
  * What the SESSIONS filter bar may filter by — narrower than the dashboard's on purpose: a fleet
@@ -227,23 +228,13 @@ function LoadingScreen({ lang, loadProgress }: { lang: string; loadProgress: Loa
           from{opacity:0;transform:translateY(10px)}
           to{opacity:1;transform:translateY(0)}
         }
-        @keyframes loadIconGlow {
-          0%,100%{box-shadow:0 0 0 0 rgba(217,119,6,0),0 0 10px 2px rgba(217,119,6,0.2)}
-          50%{box-shadow:0 0 0 6px rgba(217,119,6,0),0 0 20px 5px rgba(217,119,6,0.35)}
-        }
       `}</style>
 
       {/* Icon */}
       <div style={{ animation: 'loadFadeUp 0.35s ease-out both' }}>
-        <div style={{
-          width: 48, height: 48,
-          background: 'var(--anthropic-orange-dim)',
-          borderRadius: 14,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          animation: 'loadIconGlow 2.2s ease-in-out infinite',
-        }}>
-          <BarChart2 size={22} color="var(--anthropic-orange)" />
-        </div>
+        {/* The product's own mark (teal on a central), not a generic chart icon. */}
+        <img src={brandAsset('/minimalistLogo.png')} alt="" aria-hidden="true"
+          style={{ width: 48, height: 48, objectFit: 'contain', display: 'block' }} />
       </div>
 
       {/* Title + subtitle */}
@@ -4127,7 +4118,7 @@ export default function AppLayout() {
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           }}>
             {/* 60% of the 48px band, the same proportion the desktop strip uses. */}
-            <img src='/minimalistLogo.png' alt="agentistics" style={{ height: 28, width: 'auto' }} />
+            <img src={brandAsset('/minimalistLogo.png')} alt="agentistics" style={{ height: 28, width: 'auto' }} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <MagnifierButton ctx={appCtx} />
               <HideLensesButton ctx={appCtx} />
@@ -4536,8 +4527,8 @@ export default function AppLayout() {
             <div style={{ flexShrink: 0 }}>
               {/* Two plates, one visible: the theme is an attribute on <html>, so CSS picks the one
                   that suits the surface (index.css `.ag-logo-*`). */}
-              <img className="ag-logo-dark" src='/logo.png' alt="agentistics" style={{ height: 88, width: 'auto' }} />
-              <img className="ag-logo-light" src='/logo-light.png' alt="agentistics" style={{ height: 88, width: 'auto' }} />
+              <img className="ag-logo-dark" src={brandAsset('/logo.png')} alt="agentistics" style={{ height: 88, width: 'auto' }} />
+              <img className="ag-logo-light" src={brandAsset('/logo-light.png')} alt="agentistics" style={{ height: 88, width: 'auto' }} />
             </div>
 
             {/* Description + stats + version — middle */}
