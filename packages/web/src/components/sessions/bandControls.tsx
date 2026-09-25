@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  ArrowDown, ArrowRight, EyeOff, Maximize2, Minimize2, Minus, MoreHorizontal, Pin, Settings, X,
+  ArrowDown, ArrowRight, ChevronUp, EyeOff, Maximize2, Minimize2, Minus, MoreHorizontal, Pin, Settings, X,
 } from 'lucide-react'
 import type { PanelBarEntry, PanelBarId } from '../../lib/panelBar'
 import { hasDragPayload, readDragPayload, setDragPayload } from '../../lib/dragReorder'
@@ -777,9 +777,13 @@ export function BandOverflowMenu({ label, entries, isMobile = false, icon }: {
  * genuinely has nowhere to send it (never present and refusing) — see `fullscreenModeFor` in
  * `lib/panelMenu.ts` for which panels can and cannot.
  *
- * MINIMIZE IS ALWAYS THE SAME LITERAL `−` (addendum item 4: "o minimizar laranja vira um `−`
- * literal" — replacing the ChevronDown/ChevronUp pair this used to alternate by `collapsed`, the OS
- * window-control convention where minimize never itself signals current state), ALWAYS THE ACCENT
+ * MINIMIZE IS THE LITERAL `−` WHILE THE PANEL IS OPEN, AND AN UP CHEVRON WHILE IT IS COLLAPSED.
+ * The `−` came from the owner ("o minimizar laranja vira um `−` literal"), and for one release it was
+ * drawn in BOTH states on the window-control reading that minimize never signals current state. On
+ * a collapsed bottom band that meant a minimize button on a bar that was already minimized, which
+ * the owner reported twice ("o - ainda aparece na barra mesmo com ela fechada"). The callers already
+ * switched the LABEL to "Expandir" while collapsed; the glyph now agrees with its own label, and
+ * matches what the owner asked for before the `−` existed: "setinha pra cima pra abrir". ALWAYS THE ACCENT
  * ORANGE — never the neutral secondary-text colour every other icon in this file uses, and never
  * buried in the gear. `collapsed` is kept as a prop (some callers still read it for their OWN
  * layout) but no longer changes this glyph. It does NOT decide whether the control is
@@ -852,7 +856,7 @@ export function PanelFixedControls({
           title={minimizeLabel}
           aria-label={minimizeLabel}
           style={{ ...iconBtn, color: 'var(--anthropic-orange)' }}
-        ><Minus size={14} /></button>
+        >{collapsed ? <ChevronUp size={14} /> : <Minus size={14} />}</button>
       )}
       {pinned && (
         <button

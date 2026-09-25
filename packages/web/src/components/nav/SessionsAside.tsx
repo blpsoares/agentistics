@@ -15,7 +15,10 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ChevronDown, ChevronRight, Clock, Pin, PinOff, Plus, RotateCcw, Search, Send, X } from 'lucide-react'
+import {
+  ChevronDown, ChevronRight, Clock, Folder, FolderPlus, MoreVertical, Pin, PinOff, Plus, RotateCcw,
+  Search, Send, X,
+} from 'lucide-react'
 import type { Filters } from '@agentistics/core'
 import {
   ACTIVE_STATES, filterSessions, sessionNotify,
@@ -33,7 +36,7 @@ import { filterFleet, ignoredDimensions } from '../../lib/fleetFilter'
 import { NewSessionModal } from '../sessions/NewSessionModal'
 import { SessionPickModal } from '../sessions/SessionPickModal'
 import { buildPickRows } from '../../lib/sessionPick'
-import { rowMenuEntries, type RowVerb } from '../../lib/rowMenu'
+import { rowMenuEntries, type MenuEntry, type RowVerb } from '../../lib/rowMenu'
 import { SessionRowMenu } from '../sessions/SessionRowMenu'
 import { SessionFiling } from '../tasks/SessionFiling'
 import { boardCopy } from '../tasks/copy'
@@ -46,6 +49,15 @@ import {
 } from '../../lib/pinnedSessions'
 import { fellGroupDismissed, readDismissedFell, writeDismissedFell } from '../../lib/fellDismissal'
 import { endDispatch, tryBeginDispatch } from '../../lib/dispatchGuard'
+import { sessionIdentityKey } from '../../lib/sessionIdentity'
+import {
+  type SessionUserGroup,
+  addSessionToGroup, createSessionGroup, deleteSessionGroup, getSessionGroups, removeSessionFromGroup,
+  renameSessionGroup, reorderSessionInGroup, resolveGroupRows, sessionGroupsServerSnapshot,
+  subscribeSessionGroups,
+} from '../../lib/sessionUserGroups'
+import { hasDragPayload, readDragPayload, setDragPayload } from '../../lib/dragReorder'
+import { ConfirmModal } from '../../pages/settings/primitives'
 
 export interface SessionsAsideProps {
   lang: 'pt' | 'en'
@@ -121,15 +133,36 @@ export interface SessionsAsideProps {
 }
 
 /**
- * What a pin is stored under.
+ * What a pin — and a user group (`sessionUserGroups.ts`) — are stored under.
  *
- * The CONVERSATION where the harness reports one, because a managed row's id is its tmux session
- * name and is minted fresh on every reopen — keying by that would unpin a conversation at exactly
- * the moment somebody who pinned it wants it back. Where no conversation link can ever exist
- * (codex, kimi, gemini, agy — see `conversationBlind`) the row id is the only key there is.
+ * `sessionIdentityKey`: the CONVERSATION where the harness reports one, because a managed row's id
+ * is its tmux session name and is minted fresh on every reopen — keying by that would unpin (or
+ * un-group) a conversation at exactly the moment somebody who filed it wants it back. Where no
+ * conversation link can ever exist (codex, kimi, gemini, agy — see `conversationBlind`) the row id
+ * is the only key there is, and a reopen of one of THOSE sessions genuinely orphans the record —
+ * see `sessionIdentity.ts`'s own header.
  */
-function pinKeyOf(row: ControlSession): string {
-  return row.conversationId ?? row.id
+const pinKeyOf = sessionIdentityKey
+
+/**
+ * The row menu's group-related entries — CLIENT-SIDE, like `link-task`: they open a picker or act
+ * locally rather than resolving a server verb, so there is nothing for `rowMenuEntries` to have
+ * composed. `undefined` when the row itself cannot be found (a stale menu over a row that just
+ * disappeared from the fleet).
+ */
+function groupMenuExtras(
+  row: ControlSession | undefined,
+  groupOfKey: ReadonlyMap<string, string>,
+  pt: boolean,
+): MenuEntry[] {
+  if (!row) return []
+  const extras: MenuEntry[] = [
+    { action: 'move-to-group', label: pt ? 'Mover para grupo…' : 'Move to group…', enabled: true },
+  ]
+  if (groupOfKey.has(pinKeyOf(row))) {
+    extras.push({ action: 'remove-from-group', label: pt ? 'Remover do grupo' : 'Remove from group', enabled: true })
+  }
+  return extras
 }
 
 export function SessionsAside({
@@ -241,6 +274,67 @@ export function SessionsAside({
   }
   /** No longer only about pins — the row menu's action results land here too. */
   const [notice, setNotice] = useState<string | null>(null)
+
+  /**
+   * USER GROUPS ("Saved to later", …) — same server-side store as pins, for the same reason.
+   * See `sessionUserGroups.ts`.
+   */
+  const groupsValue = useSyncExternalStore(subscribeSessionGroups, getSessionGroups, sessionGroupsServerSnapshot)
+  /** Session identity key -> the group id holding it. A session is in at most one. */
+  const groupOfKey = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const g of groupsValue.groups) for (const k of g.sessionKeys) m.set(k, g.id)
+    return m
+  }, [groupsValue])
+  const groupedKeys = useMemo(() => new Set(groupOfKey.keys()), [groupOfKey])
+  /**
+   * Each group's rows, resolved against the RAW fleet (never `matched`/`searched` — same rule as
+   * `pinnedRows`: a group must survive a filter, a search and any session state).
+   *
+   * A session that is BOTH pinned and grouped shows ONCE, in the Pinned band — pinning is the
+   * stronger "always in sight, always first" promise, and showing it twice would leave two bands
+   * each claiming to be where it lives. It stays stored in the group; unpinning it brings it back
+   * here on its own, with no action needed on the group.
+   */
+  const groupRowsResolved = useMemo(
+    () => groupsValue.groups.map(g => ({
+      group: g,
+      rows: resolveGroupRows(g, rows, pinKeyOf).filter(r => !pinned.has(pinKeyOf(r))),
+    })),
+    [groupsValue, rows, pinned],
+  )
+  const groupedVisibleCount = useMemo(
+    () => groupRowsResolved.reduce((n, g) => n + g.rows.length, 0),
+    [groupRowsResolved],
+  )
+  /** Which user-group bands are folded on THIS screen — per viewer, alongside the aside's other
+   *  arrangement prefs (see `sessionsAsidePrefs.ts`). Membership itself is shared/server-side. */
+  const [foldedUserGroups, setFoldedUserGroupsState] =
+    useState<Set<string>>(new Set(storedGroupPrefs.collapsedUserGroups))
+  const toggleUserGroupFold = (id: string) => {
+    const next = new Set(foldedUserGroups)
+    next.has(id) ? next.delete(id) : next.add(id)
+    setFoldedUserGroupsState(next)
+    writeAsideGroupPrefs({ collapsedUserGroups: [...next] })
+  }
+  /** The create-group dialog. `forKey` carries a session identity when opened from that row's
+   *  "Novo grupo…" path, so submitting both creates the group AND files the session in one step. */
+  const [creatingGroup, setCreatingGroup] = useState<{ forKey?: string } | null>(null)
+  const [newGroupName, setNewGroupName] = useState('')
+  const [renamingGroup, setRenamingGroup] = useState<{ id: string } | null>(null)
+  const [renameGroupDraft, setRenameGroupDraft] = useState('')
+  const [deletingGroup, setDeletingGroup] = useState<SessionUserGroup | null>(null)
+  /** The "⋮" menu on a group's own heading (rename/delete) — reuses `SessionRowMenu`. */
+  const [groupMenu, setGroupMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  /** The "Mover para grupo…" picker opened from a session row's own context menu — also
+   *  `SessionRowMenu`, listing the existing groups plus "Novo grupo…". */
+  const [groupPicker, setGroupPicker] = useState<{ id: string; x: number; y: number } | null>(null)
+  /** Which group heading is a live drop target, and which grouped row (for reordering within a
+   *  group) — read from the native drag payload (`dragReorder.ts`), not from a dragged row's own
+   *  component state, because the source can be a pinned row, an automatic-section row or another
+   *  group's row: three different subtrees that share no React state of their own. */
+  const [dragOverGroupId, setDragOverGroupId] = useState<string | null>(null)
+  const [groupRowDragOver, setGroupRowDragOver] = useState<string | null>(null)
   /** Which pinned row is being dragged, and which one it is hovering over — by the row's own pin
    *  KEY, never its position in this (filtered) list. See `pinnedSessions.ts`'s `planPinMoveTo` for
    *  why a filtered-list index was the actual §6 bug: `pinnedRows` is the RESOLVED, filtered view,
@@ -273,6 +367,18 @@ export function SessionsAside({
       const target = rows.find(r => r.id === id)
       setRenaming({ id, title: target?.title ?? '' })
       setRenameDraft(target?.title ?? '')
+      return
+    }
+    if (action === 'move-to-group') {
+      // Anchored where the menu was, same as `link-task` — the gesture stays in one place.
+      setGroupPicker({ id, x: menu.x, y: menu.y })
+      setMenu(null)
+      return
+    }
+    if (action === 'remove-from-group') {
+      const target = rows.find(r => r.id === id)
+      if (target) removeSessionFromGroup(pinKeyOf(target))
+      setMenu(null)
       return
     }
     if (!act) return
@@ -348,7 +454,9 @@ export function SessionsAside({
    * therefore looks exactly as it did.
    */
   const bands = useMemo((): { id: AsideBandId; label: string; groups: SessionGroup[] }[] => {
-    const rest = matched.filter(r => !pinned.has(pinKeyOf(r)))
+    // A session in a USER GROUP is shown there and not repeated here — same exclusion pinning
+    // already gets, and for the same reason: one row, one home.
+    const rest = matched.filter(r => !pinned.has(pinKeyOf(r)) && !groupedKeys.has(pinKeyOf(r)))
     const order = groupOrder[groupBy] ?? []
     return [
       {
@@ -364,7 +472,7 @@ export function SessionsAside({
         groups: activeOnly ? [] : asideGroups(rest.filter(r => !active.has(r.state)), groupBy, lang, order),
       },
     ]
-  }, [matched, pinned, active, activeOnly, pt, lang, groupBy, groupOrder])
+  }, [matched, pinned, groupedKeys, active, activeOnly, pt, lang, groupBy, groupOrder])
 
   /** The current dimension's groups, across both bands, deduped by key, in their effective
    *  order — what the popover's reorder list edits. */
@@ -377,7 +485,7 @@ export function SessionsAside({
   const total = bands.reduce(
     (n, b) => n + b.groups.reduce((m, g) => m + g.sessions.length, 0),
     0,
-  ) + pinnedRows.length
+  ) + pinnedRows.length + groupedVisibleCount
   const filterCount = (filters.harnesses?.length ?? 0) + filters.projects.length
     + (filters.repos?.length ?? 0) + filters.models.length
 
@@ -639,11 +747,21 @@ export function SessionsAside({
                 <div
                   key={`pin-${s.id}`}
                   draggable
-                  onDragStart={e => { setDragFrom(key); e.dataTransfer.effectAllowed = 'move' }}
+                  onDragStart={e => {
+                    setDragFrom(key)
+                    // ALSO published on the cross-component channel (`dragReorder.ts`'s shared
+                    // payload), so a pinned row can be dropped onto a user group's heading exactly
+                    // like a row from anywhere else in this aside — see the group bands below.
+                    setDragPayload(e, key)
+                  }}
                   onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOver(key) }}
                   onDragEnd={() => { setDragFrom(null); setDragOver(null) }}
                   onDrop={e => {
                     e.preventDefault()
+                    // Never lets a group's own drop handler ALSO see this drop bubble past it — not
+                    // load-bearing here (the pinned band is a sibling of the groups block, not a
+                    // descendant), kept for the same reason every internal reorder drop stops here.
+                    e.stopPropagation()
                     if (dragFrom !== null) movePinnedSession(dragFrom, key)
                     setDragFrom(null); setDragOver(null)
                   }}
@@ -682,6 +800,167 @@ export function SessionsAside({
             </div>
           </div>
         )}
+
+        {/*
+          * USER GROUPS — named, manually curated sets ("Saved to later", …), below Pinned and above
+          * the automatic Active/Inactive sections. The header (with "+ Novo grupo") always renders,
+          * even with zero groups, so the control is discoverable rather than appearing only once
+          * something has already been filed.
+          */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 2px 6px 9px', minHeight: tap }}>
+            <span style={{
+              fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase',
+              letterSpacing: '0.06em', color: 'var(--text-tertiary)',
+            }}>
+              {pt ? 'Grupos' : 'Groups'}
+            </span>
+            <button
+              onClick={() => { setNewGroupName(''); setCreatingGroup({}) }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto',
+                padding: tap ? '0 8px' : '3px 7px', minHeight: tap, borderRadius: 7, cursor: 'pointer',
+                border: '1px dashed var(--border-subtle)', background: 'transparent',
+                color: 'var(--text-tertiary)', fontFamily: 'inherit', fontSize: 10.5, fontWeight: 600,
+                whiteSpace: 'nowrap',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.borderColor = 'var(--anthropic-orange)'
+                e.currentTarget.style.color = 'var(--anthropic-orange)'
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.borderColor = 'var(--border-subtle)'
+                e.currentTarget.style.color = 'var(--text-tertiary)'
+              }}
+            >
+              <FolderPlus size={12} />
+              {pt ? 'Novo grupo' : 'New group'}
+            </button>
+          </div>
+
+          {groupRowsResolved.map(({ group, rows: gRows }) => {
+            const folded = foldedUserGroups.has(group.id)
+            const isDropTarget = dragOverGroupId === group.id
+            return (
+              <div key={group.id} style={{ marginBottom: 8 }}>
+                <div
+                  onDragOver={e => {
+                    if (!hasDragPayload(e)) return
+                    e.preventDefault()
+                    if (dragOverGroupId !== group.id) setDragOverGroupId(group.id)
+                  }}
+                  onDragLeave={() => setDragOverGroupId(cur => (cur === group.id ? null : cur))}
+                  onDrop={e => {
+                    e.preventDefault()
+                    // Stops here, or the automatic-bands wrapper below would ALSO see this drop
+                    // bubble past it and read it as "un-group me" the instant it is filed.
+                    e.stopPropagation()
+                    const key = readDragPayload(e)
+                    if (key) addSessionToGroup(group.id, key)
+                    setDragOverGroupId(null)
+                  }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6, borderRadius: 7,
+                    padding: '4px 4px 4px 9px', minHeight: tap,
+                    background: isDropTarget ? 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)' : undefined,
+                    boxShadow: isDropTarget ? 'inset 0 0 0 1px var(--anthropic-orange)' : undefined,
+                  }}
+                >
+                  <button
+                    onClick={() => toggleUserGroupFold(group.id)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0,
+                      background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                      padding: 0, textAlign: 'left', minHeight: tap,
+                    }}
+                  >
+                    {folded ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+                    <Folder size={11} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
+                    <span style={{
+                      fontSize: 12, fontWeight: 700, color: 'var(--text-primary)',
+                      minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {group.name}
+                    </span>
+                    <span style={{ fontSize: 10.5, fontWeight: 600, opacity: 0.65 }}>{gRows.length}</span>
+                  </button>
+                  <button
+                    onClick={e => {
+                      const r = e.currentTarget.getBoundingClientRect()
+                      setGroupMenu({ id: group.id, x: r.left, y: r.bottom + 4 })
+                    }}
+                    aria-label={pt ? 'Opções do grupo' : 'Group options'}
+                    title={pt ? 'Opções do grupo' : 'Group options'}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      width: tap ?? 24, height: tap ?? 24, flexShrink: 0, borderRadius: 6,
+                      border: 'none', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer',
+                    }}
+                  >
+                    <MoreVertical size={13} />
+                  </button>
+                </div>
+                {!folded && (
+                  gRows.length === 0 ? (
+                    <p style={{ margin: '2px 9px 2px 26px', fontSize: 10.5, lineHeight: 1.4, color: 'var(--text-tertiary)' }}>
+                      {pt
+                        ? 'Arraste uma sessão até aqui, ou use "Mover para grupo" no menu dela.'
+                        : 'Drag a session here, or use "Move to group" on its menu.'}
+                    </p>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {gRows.map(s => {
+                        const key = pinKeyOf(s)
+                        return (
+                          <div
+                            key={`grp-${group.id}-${s.id}`}
+                            draggable
+                            onDragStart={e => setDragPayload(e, key)}
+                            onDragOver={e => {
+                              if (!hasDragPayload(e)) return
+                              e.preventDefault()
+                              e.stopPropagation()
+                              if (groupRowDragOver !== key) setGroupRowDragOver(key)
+                            }}
+                            onDragEnd={() => setGroupRowDragOver(null)}
+                            onDrop={e => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              const dragKey = readDragPayload(e)
+                              if (dragKey && dragKey !== key) {
+                                if (groupOfKey.get(dragKey) === group.id) reorderSessionInGroup(group.id, dragKey, key)
+                                else addSessionToGroup(group.id, dragKey)
+                              }
+                              setGroupRowDragOver(null)
+                            }}
+                            style={{
+                              boxShadow: groupRowDragOver === key ? 'inset 0 2px 0 var(--anthropic-orange)' : undefined,
+                              ...(tap ? { touchAction: 'none' as const } : {}),
+                            }}
+                          >
+                            <SessionRow
+                              session={s}
+                              selected={rowSelected(s, sessionId)}
+                              {...(tap ? { tap } : {})}
+                              onPin={() => flip(s)}
+                              onOpen={() => (onOpenRow ? onOpenRow(s) : navigate(sessionPath(s.id)))}
+                              {...(rowsById?.get(s.id) ? { verbs: rowsById.get(s.id)!.verbs } : {})}
+                              onOpenMenu={(x, y, verbs) => openMenu(s, x, y, verbs)}
+                              onFile={(x, y) => setLinking({ id: s.id, x, y })}
+                              lang={lang}
+                              cardColor={cardColor}
+                            />
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                )}
+              </div>
+            )
+          })}
+        </div>
+
         {total === 0 ? (
           <EmptyReason
             pt={pt} loading={loading} unsupported={unsupported}
@@ -690,7 +969,17 @@ export function SessionsAside({
             filterNarrowed={filterCount > 0 && valueFiltered.length < rows.length}
           />
         ) : (
-          <>
+          <div
+            // Dropping a GROUPED row anywhere in the automatic sections takes it out of its group —
+            // the drag-out half of moving a session, alongside the row menu's own "Remover do
+            // grupo". A row that was never grouped is unaffected: removing a key from no group is a
+            // no-op (`planRemoveFromGroup`).
+            onDragOver={e => { if (hasDragPayload(e)) e.preventDefault() }}
+            onDrop={e => {
+              const key = readDragPayload(e)
+              if (key) removeSessionFromGroup(key)
+            }}
+          >
             {bands.map((b, i) => (
               <SessionBand
                 // The label is not unique — two dimensions can legitimately produce one word, and
@@ -709,7 +998,7 @@ export function SessionsAside({
                 cardColor={cardColor}
               />
             ))}
-          </>
+          </div>
         )}
       </div>
 
@@ -731,13 +1020,66 @@ export function SessionsAside({
         />
       )}
 
-      {/* The row's context menu (Task 6) — rename / stop / reopen, exactly the row's own verbs. */}
+      {/* The row's context menu (Task 6) — rename / stop / reopen, plus the group entries
+          ("Mover para grupo…" / "Remover do grupo"), exactly the row's own verbs plus the two
+          client-side ones `rowMenuEntries` accepts as `extra` — see `groupMenuExtras`. */}
       {menu && (
         <SessionRowMenu
           x={menu.x} y={menu.y}
-          entries={rowMenuEntries(menu.verbs, menu.state)}
+          entries={rowMenuEntries(
+            menu.verbs, menu.state,
+            groupMenuExtras(rows.find(r => r.id === menu.id), groupOfKey, pt),
+          )}
           onPick={pickMenuAction}
           onClose={() => setMenu(null)}
+        />
+      )}
+
+      {/* "Mover para grupo…" — opened from the row menu above. Lists the existing groups plus
+          "Novo grupo…", anchored where the menu was, same gesture as `link-task`'s picker. */}
+      {groupPicker && (
+        <SessionRowMenu
+          x={groupPicker.x} y={groupPicker.y}
+          entries={[
+            ...groupsValue.groups.map(g => ({ action: g.id, label: g.name, enabled: true })),
+            { action: '__new_group__', label: pt ? 'Novo grupo…' : 'New group…', enabled: true },
+          ]}
+          onPick={action => {
+            const target = rows.find(r => r.id === groupPicker.id)
+            if (target) {
+              const key = pinKeyOf(target)
+              if (action === '__new_group__') {
+                setNewGroupName('')
+                setCreatingGroup({ forKey: key })
+              } else {
+                addSessionToGroup(action, key)
+              }
+            }
+            setGroupPicker(null)
+          }}
+          onClose={() => setGroupPicker(null)}
+        />
+      )}
+
+      {/* A group's own "⋮" — rename / delete. Reuses `SessionRowMenu`, anchored under the button
+          rather than at a pointer position (there is no right-click gesture on a heading). */}
+      {groupMenu && (
+        <SessionRowMenu
+          x={groupMenu.x} y={groupMenu.y}
+          entries={[
+            { action: 'rename', label: pt ? 'Renomear' : 'Rename', enabled: true },
+            { action: 'delete', label: pt ? 'Excluir grupo…' : 'Delete group…', enabled: true },
+          ]}
+          onPick={action => {
+            const g = groupsValue.groups.find(x => x.id === groupMenu.id)
+            if (action === 'rename') {
+              setRenameGroupDraft(g?.name ?? '')
+              setRenamingGroup({ id: groupMenu.id })
+            }
+            if (action === 'delete' && g) setDeletingGroup(g)
+            setGroupMenu(null)
+          }}
+          onClose={() => setGroupMenu(null)}
         />
       )}
 
@@ -813,6 +1155,167 @@ export function SessionsAside({
           </form>
         </div>
       )}
+
+      {/* Create a group — from the "+ Novo grupo" control, or from a row menu's "Novo grupo…", in
+          which case `forKey` files that session into it the moment it is created. */}
+      {creatingGroup && (
+        <div
+          role="dialog"
+          aria-label={pt ? 'Novo grupo' : 'New group'}
+          style={{ position: 'fixed', inset: 0, zIndex: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <div
+            onClick={() => setCreatingGroup(null)}
+            style={{ position: 'absolute', inset: 0, background: 'var(--ag-scrim, rgba(0,0,0,0.4))' }}
+          />
+          <form
+            onSubmit={e => {
+              e.preventDefault()
+              const id = createSessionGroup(newGroupName)
+              if (id && creatingGroup.forKey) addSessionToGroup(id, creatingGroup.forKey)
+              setNewGroupName('')
+              setCreatingGroup(null)
+            }}
+            style={{
+              position: 'relative', zIndex: 1, minWidth: 260, maxWidth: 340,
+              background: 'var(--bg-surface)', border: '1px solid var(--border)',
+              borderRadius: 12, padding: 14, display: 'flex', flexDirection: 'column', gap: 10,
+              boxShadow: 'var(--ag-shadow-menu)',
+            }}
+          >
+            <label style={{
+              fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase',
+              letterSpacing: '0.05em', color: 'var(--text-tertiary)',
+            }}>
+              {pt ? 'Nome do grupo' : 'Group name'}
+            </label>
+            <input
+              autoFocus
+              value={newGroupName}
+              onChange={e => setNewGroupName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Escape') setCreatingGroup(null) }}
+              placeholder={pt ? 'ex.: Saved to later' : 'e.g. Saved to later'}
+              style={{
+                width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 8,
+                border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+                color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: 13, outline: 'none',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+              <button
+                type="button" onClick={() => setCreatingGroup(null)}
+                style={{
+                  padding: '6px 11px', borderRadius: 8, cursor: 'pointer',
+                  border: '1px solid var(--border-subtle)', background: 'transparent',
+                  color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 12,
+                }}
+              >
+                {pt ? 'Cancelar' : 'Cancel'}
+              </button>
+              <button
+                type="submit"
+                disabled={newGroupName.trim() === ''}
+                style={{
+                  padding: '6px 12px', borderRadius: 8, border: 'none',
+                  background: 'var(--anthropic-orange)', color: '#fff',
+                  fontFamily: 'inherit', fontSize: 12, fontWeight: 650,
+                  cursor: newGroupName.trim() === '' ? 'not-allowed' : 'pointer',
+                  opacity: newGroupName.trim() === '' ? 0.5 : 1,
+                }}
+              >
+                {pt ? 'Criar' : 'Create'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Rename a group — same shape as the session rename dialog above. */}
+      {renamingGroup && (
+        <div
+          role="dialog"
+          aria-label={pt ? 'Renomear grupo' : 'Rename group'}
+          style={{ position: 'fixed', inset: 0, zIndex: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <div
+            onClick={() => setRenamingGroup(null)}
+            style={{ position: 'absolute', inset: 0, background: 'var(--ag-scrim, rgba(0,0,0,0.4))' }}
+          />
+          <form
+            onSubmit={e => {
+              e.preventDefault()
+              renameSessionGroup(renamingGroup.id, renameGroupDraft)
+              setRenamingGroup(null)
+            }}
+            style={{
+              position: 'relative', zIndex: 1, minWidth: 260, maxWidth: 340,
+              background: 'var(--bg-surface)', border: '1px solid var(--border)',
+              borderRadius: 12, padding: 14, display: 'flex', flexDirection: 'column', gap: 10,
+              boxShadow: 'var(--ag-shadow-menu)',
+            }}
+          >
+            <label style={{
+              fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase',
+              letterSpacing: '0.05em', color: 'var(--text-tertiary)',
+            }}>
+              {pt ? 'Novo nome do grupo' : 'New group name'}
+            </label>
+            <input
+              autoFocus
+              value={renameGroupDraft}
+              onChange={e => setRenameGroupDraft(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Escape') setRenamingGroup(null) }}
+              style={{
+                width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 8,
+                border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+                color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: 13, outline: 'none',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+              <button
+                type="button" onClick={() => setRenamingGroup(null)}
+                style={{
+                  padding: '6px 11px', borderRadius: 8, cursor: 'pointer',
+                  border: '1px solid var(--border-subtle)', background: 'transparent',
+                  color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 12,
+                }}
+              >
+                {pt ? 'Cancelar' : 'Cancel'}
+              </button>
+              <button
+                type="submit"
+                disabled={renameGroupDraft.trim() === ''}
+                style={{
+                  padding: '6px 12px', borderRadius: 8, border: 'none',
+                  background: 'var(--anthropic-orange)', color: '#fff',
+                  fontFamily: 'inherit', fontSize: 12, fontWeight: 650,
+                  cursor: renameGroupDraft.trim() === '' ? 'not-allowed' : 'pointer',
+                  opacity: renameGroupDraft.trim() === '' ? 0.5 : 1,
+                }}
+              >
+                {pt ? 'Salvar' : 'Save'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Deleting a group is ALWAYS behind a confirmation — it never deletes a session, only the
+          grouping, and the message says so explicitly. */}
+      <ConfirmModal
+        open={deletingGroup !== null}
+        title={pt ? 'Excluir grupo' : 'Delete group'}
+        message={pt
+          ? `Excluir o grupo "${deletingGroup?.name ?? ''}"? As sessões não são apagadas, só saem do grupo.`
+          : `Delete the group "${deletingGroup?.name ?? ''}"? Sessions are not deleted, they only leave the group.`}
+        confirmLabel={pt ? 'Excluir' : 'Delete'}
+        cancelLabel={pt ? 'Cancelar' : 'Cancel'}
+        onConfirm={() => {
+          if (deletingGroup) deleteSessionGroup(deletingGroup.id)
+          setDeletingGroup(null)
+        }}
+        onCancel={() => setDeletingGroup(null)}
+      />
     </div>
   )
 }
@@ -894,20 +1397,24 @@ function SessionBand({
               </button>
             )}
             {(!headings || !folded) && g.sessions.map(s => (
-              <SessionRow
-                key={s.id}
-                session={s}
-                selected={rowSelected(s, sessionId)}
-                pinned={pinned.has(pinKeyOf(s))}
-                {...(tap ? { tap } : {})}
-                onPin={() => onPin(s)}
-                onOpen={() => onOpen(s)}
-                {...(rowsById?.get(s.id) ? { verbs: rowsById.get(s.id)!.verbs } : {})}
-                onOpenMenu={(x, y, verbs) => onOpenMenu(s, x, y, verbs)}
-                onFile={(x, y) => onFile(s, x, y)}
-                lang={lang}
-                cardColor={cardColor}
-              />
+              // Draggable so a row here can be filed INTO a user group (see the group bands in
+              // `SessionsAside`, which read this via the shared `dragReorder.ts` payload — never by
+              // component state, since a group band and this band share no state of their own).
+              <div key={s.id} draggable onDragStart={e => setDragPayload(e, pinKeyOf(s))}>
+                <SessionRow
+                  session={s}
+                  selected={rowSelected(s, sessionId)}
+                  pinned={pinned.has(pinKeyOf(s))}
+                  {...(tap ? { tap } : {})}
+                  onPin={() => onPin(s)}
+                  onOpen={() => onOpen(s)}
+                  {...(rowsById?.get(s.id) ? { verbs: rowsById.get(s.id)!.verbs } : {})}
+                  onOpenMenu={(x, y, verbs) => onOpenMenu(s, x, y, verbs)}
+                  onFile={(x, y) => onFile(s, x, y)}
+                  lang={lang}
+                  cardColor={cardColor}
+                />
+              </div>
             ))}
           </div>
         )

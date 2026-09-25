@@ -114,6 +114,17 @@ export interface Preferences {
    *  showed three different pinned bands — one application, three answers. The browser copy stays
    *  as the first paint (see `pinnedSessions.ts`); this is the one that is true. */
   pinnedSessions?: string[]
+  /**
+   * User-made session groups ("Saved to later", …) — see `web/src/lib/sessionUserGroups.ts` for
+   * the rules (create/rename/delete, exclusive membership, survives any session state). SERVER-SIDE
+   * for the same reason `pinnedSessions` is: a group is a fact about the WORK, not the screen it
+   * was made on, so it must read the same on a phone and the desktop. This server never reads or
+   * writes it — it is opaque, merged like every other preference key by `writePreferencesTo`'s
+   * shallow merge.
+   */
+  sessionGroups?: {
+    groups: { id: string; name: string; sessionKeys: string[] }[]
+  }
   /** Health warnings this person waved away. Shared for the same reason: the warnings are about
    *  THIS machine, which is the same machine from every device. */
   dismissedHealth?: string[]

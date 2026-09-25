@@ -545,3 +545,33 @@ describe('PanelFixedControls — pin, between minimize and the gear', () => {
     expect(html).toContain('Pin Contents')
   })
 })
+
+// A COLLAPSED BAND DRAWS THE WAY BACK, NOT A SECOND MINIMIZE. For one release the `−` was drawn in
+// both states, and the owner reported it twice on a bar that was already closed ("o - ainda aparece
+// na barra mesmo com ela fechada"). The label already said "Expandir"; the glyph now agrees.
+describe('the minimize control follows the collapsed state', () => {
+  const render = (collapsed: boolean) => renderToStaticMarkup(
+    <PanelFixedControls
+      lang="pt"
+      panelName="Claude Code"
+      collapsed={collapsed}
+      onMinimize={() => {}}
+      minimizeLabel={collapsed ? 'Expandir Claude Code' : 'Recolher Claude Code'}
+      gearLabel="Opções"
+      gearEntries={[]}
+    />,
+  )
+
+  test('an OPEN band shows the literal minus', () => {
+    const html = render(false)
+    expect(html).toContain('lucide-minus')
+    expect(html).not.toContain('lucide-chevron-up')
+  })
+
+  test('a COLLAPSED band shows the up chevron that reopens it, and no minus', () => {
+    const html = render(true)
+    expect(html).toContain('lucide-chevron-up')
+    expect(html).not.toContain('lucide-minus')
+    expect(html).toContain('aria-label="Expandir Claude Code"')
+  })
+})
