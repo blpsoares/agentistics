@@ -757,7 +757,8 @@ export function PDFDirectExporter({ data, range, currentFilters, lang, currency,
   const triggered = useRef(false)
 
   useEffect(() => {
-    fetch('/logo.png')
+    // The plate that suits the paper: light plate on the light theme, dark on the dark one.
+    fetch(pdfTheme === 'light' ? '/logo-light.png' : '/logo.png')
       .then(r => r.blob())
       .then(blob => new Promise<string>(resolve => {
         const reader = new FileReader()
@@ -766,7 +767,7 @@ export function PDFDirectExporter({ data, range, currentFilters, lang, currency,
       }))
       .then(setLogoDataUri)
       .catch(() => {})
-  }, [])
+  }, [pdfTheme])
 
   useEffect(() => {
     if (!contentRef.current || !derived || triggered.current) return
