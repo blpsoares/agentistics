@@ -758,8 +758,17 @@ export function BandOverflowMenu({ label, entries, isMobile = false, icon }: {
  * the Studio's own toolbar in the right slot (`Studio.tsx`) — renders THIS, in THIS fixed order,
  * so a reader never has to relearn where a control lives from one panel to the next:
  *
- *   [full screen, only where offered] → [minimize, ALWAYS] → [pin, right-slot panels only]
- *   → [gear, only with something to say]
+ *   [gear, only with something to say] → [pin, right-slot panels only]
+ *   → [full screen, only where offered] → [minimize, ALWAYS, and ALWAYS LAST]
+ *
+ * MINIMIZE IS THE RIGHTMOST CONTROL, ALWAYS (owner, 2026-09-25: "quando eu subo a barra, o botao de
+ * minimizar vai pra esquerda ... o usuario instintivamente vai subir reto pra minimizar, ele deve se
+ * manter a direita no mesmo local"). A collapsed band shows only its reopen chevron, at the far
+ * right; the open band used to put the gear to the RIGHT of the minus, so opening the band moved
+ * the control the pointer had just used one slot to the left. With minimize last it occupies the
+ * same pixel collapsed and open, and the pointer that opened the band can close it without moving.
+ * The owner's own order is "config, maximizar, minimizar"; pin, which only a right-slot header
+ * draws, sits beside the gear so it never comes between the pointer and minimize either.
  *
  * PIN (narrow-overlay pass, 2026-09-22, spec §11) — "quero em todos um botao de pin que fica ativo
  * e salvo como preferencia". `pinned` is `undefined` wherever this cluster is NOT drawing a
@@ -834,6 +843,22 @@ export function PanelFixedControls({
   }
   return (
     <>
+      <BandOverflowMenu label={gearLabel} icon={<Settings size={14} />} entries={gearEntries} isMobile={isMobile} />
+      {pinned && (
+        <button
+          className="ag-tap-icon"
+          type="button"
+          aria-pressed={pinned.active}
+          onClick={e => { e.stopPropagation(); pinned.onToggle() }}
+          title={pinned.active
+            ? (pt ? `Desafixar ${panelName}` : `Unpin ${panelName}`)
+            : (pt ? `Fixar ${panelName}` : `Pin ${panelName}`)}
+          aria-label={pinned.active
+            ? (pt ? `Desafixar ${panelName}` : `Unpin ${panelName}`)
+            : (pt ? `Fixar ${panelName}` : `Pin ${panelName}`)}
+          style={{ ...iconBtn, color: pinned.active ? 'var(--anthropic-orange)' : 'var(--text-secondary)' }}
+        ><Pin size={14} {...(pinned.active ? { fill: 'currentColor' } : {})} /></button>
+      )}
       {fullscreen && (
         <button
           className="ag-tap-icon"
@@ -858,22 +883,6 @@ export function PanelFixedControls({
           style={{ ...iconBtn, color: 'var(--anthropic-orange)' }}
         >{collapsed ? <ChevronUp size={14} /> : <Minus size={14} />}</button>
       )}
-      {pinned && (
-        <button
-          className="ag-tap-icon"
-          type="button"
-          aria-pressed={pinned.active}
-          onClick={e => { e.stopPropagation(); pinned.onToggle() }}
-          title={pinned.active
-            ? (pt ? `Desafixar ${panelName}` : `Unpin ${panelName}`)
-            : (pt ? `Fixar ${panelName}` : `Pin ${panelName}`)}
-          aria-label={pinned.active
-            ? (pt ? `Desafixar ${panelName}` : `Unpin ${panelName}`)
-            : (pt ? `Fixar ${panelName}` : `Pin ${panelName}`)}
-          style={{ ...iconBtn, color: pinned.active ? 'var(--anthropic-orange)' : 'var(--text-secondary)' }}
-        ><Pin size={14} {...(pinned.active ? { fill: 'currentColor' } : {})} /></button>
-      )}
-      <BandOverflowMenu label={gearLabel} icon={<Settings size={14} />} entries={gearEntries} isMobile={isMobile} />
     </>
   )
 }
