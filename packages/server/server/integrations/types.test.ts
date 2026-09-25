@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { CAPABILITY_STATES, HARNESS_ORDER, type HarnessId } from '@agentistics/core'
 import { INTEGRATIONS, hasReplay, integrationsInOrder } from './types'
+import { CLAUDE_ADAPTER_VERSION } from './claude/replay-core'
 
 const ABSENT: HarnessId[] = ['codex', 'gemini', 'copilot', 'antigravity', 'kimi']
 
@@ -30,11 +31,13 @@ describe('INTEGRATIONS', () => {
     }
   })
 
-  test('claude is declared, with its replay slot still to be filled by A2.2 and saying so', () => {
+  test('claude replays, and carries the version its events are stamped with', () => {
     const claude = INTEGRATIONS.claude
     expect(claude.id).toBe('claude')
-    expect(hasReplay(claude)).toBe(false)
-    expect(claude.replayAbsent).toContain('A2.2')
+    expect(hasReplay(claude)).toBe(true)
+    expect(claude.replayAbsent).toBeUndefined()
+    expect(claude.version).toBe(CLAUDE_ADAPTER_VERSION)
+    expect(claude.version).not.toBe('0.0.0')
   })
 
   test('an entry states EITHER a replay OR the reason it has none — never both, never neither', () => {

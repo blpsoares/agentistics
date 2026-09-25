@@ -28,6 +28,8 @@ import {
   type CapabilityState,
   type HarnessId,
 } from '@agentistics/core'
+import { claudeReplay } from './claude'
+import { CLAUDE_ADAPTER_VERSION } from './claude/replay-core'
 
 /** One thing a replay can be pointed at — a transcript, a database, a session directory. */
 export interface ReplaySource {
@@ -100,9 +102,9 @@ const P1_CLAUDE_ONLY = 'P1 replays Claude Code transcripts only'
 export const INTEGRATIONS: Record<HarnessId, HarnessIntegration> = {
   claude: {
     id: 'claude',
-    version: UNIMPLEMENTED,
+    version: CLAUDE_ADAPTER_VERSION,
     capabilities: CAPABILITY_STATES.claude,
-    replayAbsent: 'The replay slot is typed here and is filled by A2.2, which reads the transcript through transcript-state.ts.',
+    replay: claudeReplay,
   },
   codex: {
     id: 'codex',
