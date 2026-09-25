@@ -19,7 +19,7 @@
  * about sessions.
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { PanelLeft } from 'lucide-react'
 
 export interface TopBarProps {
@@ -57,6 +57,10 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, t
   // Collapsed, the mark IS the control that reopens the sidebar: hovering (or focusing) it swaps it
   // for the sidebar icon, so there is no second button beside it and the strip stays one mark wide.
   const [markHot, setMarkHot] = useState(false)
+  // The button that sets this unmounts when the sidebar opens — under the pointer, so no
+  // mouseleave ever fires — and the flag would stay true, showing the icon instead of the mark the
+  // next time the sidebar collapses. Whatever changes the state starts it cold.
+  useEffect(() => { setMarkHot(false) }, [collapsed])
   const showLabel = pt ? 'Mostrar barra lateral' : 'Show sidebar'
   const hideLabel = pt ? 'Ocultar barra lateral' : 'Hide sidebar'
   // Deliberately smaller than the band: the mark is a signature, not a banner.
