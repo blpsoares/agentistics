@@ -1195,7 +1195,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
           the one thing this workspace certainly is not. */}
       {mode === 'sessions' ? (
         collapsed ? (
-          <SessionsRail rows={railRows} {...(sessionId ? { selectedId: sessionId } : {})} />
+          <SessionsRail rows={railRows} lang={pt ? 'pt' : 'en'} {...(isCentral ? { hideNew: true } : {})} {...(sessionId ? { selectedId: sessionId } : {})} />
         ) : (
         <>
         {/* On a central the workspace is ABOUT a machine, so the choice sits above the list it
