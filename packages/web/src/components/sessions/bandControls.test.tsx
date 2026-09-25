@@ -319,10 +319,13 @@ describe('BandOverflowMenu', () => {
  * are asserted structurally (titles, button count, inline style strings) since this package has no
  * jsdom to click through — the same approach every other test in this file already takes.
  */
-describe('PanelFixedControls — full screen, minimize, gear, in that order', () => {
+describe('PanelFixedControls — gear, full screen, minimize, in that order (minimize ALWAYS last)', () => {
   const gearEntries = [{ id: 'move-right', label: 'Move Hardware to the right', icon: <span />, onSelect: () => {} }]
 
-  test('the full trio renders, in order — full screen, then minimize, then the gear', () => {
+  // Owner, 2026-09-25: minimize stays at the far right, where a collapsed band's reopen chevron
+  // sits, so the pointer that opened the band closes it without moving. "config, maximizar,
+  // minimizar".
+  test('the full trio renders, in order — the gear, then full screen, then minimize LAST', () => {
     const html = renderToStaticMarkup(
       <PanelFixedControls
         lang="en" panelName="Hardware"
@@ -337,8 +340,8 @@ describe('PanelFixedControls — full screen, minimize, gear, in that order', ()
     expect(fullscreenAt).toBeGreaterThan(-1)
     expect(minimizeAt).toBeGreaterThan(-1)
     expect(gearAt).toBeGreaterThan(-1)
+    expect(gearAt).toBeLessThan(fullscreenAt)
     expect(fullscreenAt).toBeLessThan(minimizeAt)
-    expect(minimizeAt).toBeLessThan(gearAt)
   })
 
   test('full screen is ABSENT — never present and refusing — when the caller offers nowhere to send it', () => {
@@ -435,7 +438,7 @@ describe('PanelFixedControls — full screen, minimize, gear, in that order', ()
  * it (the bottom band's own bars never pass it), present as a fourth control between minimize and
  * the gear, its PRESSED state visible on the row itself (not only in the tooltip).
  */
-describe('PanelFixedControls — pin, between minimize and the gear', () => {
+describe('PanelFixedControls — pin, beside the gear', () => {
   const gearEntries = [{ id: 'move-right', label: 'Move Hardware to the right', icon: <span />, onSelect: () => {} }]
 
   test('absent entirely when the caller offers no pin — the bottom band’s own bars', () => {
@@ -451,7 +454,7 @@ describe('PanelFixedControls — pin, between minimize and the gear', () => {
     expect(html).not.toContain('Unpin Hardware')
   })
 
-  test('present, and sits between minimize and the gear — full screen, minimize, pin, gear, in that order', () => {
+  test('present, and sits beside the gear — gear, pin, full screen, minimize, in that order', () => {
     const html = renderToStaticMarkup(
       <PanelFixedControls
         lang="en" panelName="Hardware"
@@ -469,9 +472,9 @@ describe('PanelFixedControls — pin, between minimize and the gear', () => {
     expect(minimizeAt).toBeGreaterThan(-1)
     expect(pinAt).toBeGreaterThan(-1)
     expect(gearAt).toBeGreaterThan(-1)
+    expect(gearAt).toBeLessThan(pinAt)
+    expect(pinAt).toBeLessThan(fullscreenAt)
     expect(fullscreenAt).toBeLessThan(minimizeAt)
-    expect(minimizeAt).toBeLessThan(pinAt)
-    expect(pinAt).toBeLessThan(gearAt)
   })
 
   test('unpinned: neutral colour, aria-pressed=false, and the "Pin X" label', () => {

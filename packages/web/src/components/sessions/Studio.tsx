@@ -1476,9 +1476,9 @@ export function Studio({
             {toolbarFit.beta !== 'hidden' && (
               <BetaTag what={pt ? 'O Studio' : 'The Studio'} compact={toolbarFit.beta === 'compact'} />
             )}
-            {/* THE FIXED TRIO — full screen, minimize (right slot only), gear — see
-                `fixedControls`' own header for the order and for why minimize is absent here at
-                the bottom. NEVER negotiated away by `toolbarFit` — see that function's own
+            {/* THE FIXED TRIO — gear, full screen, minimize (right slot only, and always LAST, so
+                it keeps one position whether the panel is open or not) — see `fixedControls`' own
+                header for why minimize is absent here at the bottom. NEVER negotiated away by `toolbarFit` — see that function's own
                 header for why. */}
             {fixedControls}
           </>}
