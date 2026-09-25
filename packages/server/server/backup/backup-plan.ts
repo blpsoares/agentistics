@@ -164,6 +164,11 @@ const CROSS_HARNESS_SECRETS: ExcludeRule[] = [
       + 'configuration file holding a key and living where the backups live is exactly what this '
       + 'table exists to keep out of an archive.',
   },
+  {
+    pattern: '.agentistics/provider-keys', match: 'prefix', reason: 'secret',
+    restoreWith: 'agentop provider key set anthropic',
+    why: 'Provider API keys entered for the native runtime (credentials.ts, 0600, never logged).',
+  },
   // `.claude/sessions/<pid>.<hash>.key` (141 files on the reference machine) and
   // `.claude/daemon/control.key` are local control-socket tokens for the session manager and the
   // daemon dispatch socket. Both the `secret` and `runtime` reasons apply — they are credential-
