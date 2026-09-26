@@ -169,3 +169,121 @@ retention (D6). Nothing was tuned.
   as an exact file source. `carried()` matches only equal paths or `rel + '/'` prefixes, so neither
   file is carried. Neither is excluded either. Both are **undecided** backup paths. The lint cannot see
   them because they are template strings. No row was added.
+
+## 7. The 10 residual sessions, root-caused (A2.6, 2026-09-26)
+
+**Result: all 18 invocation rows and the 10 session totals (tokens and cost) belong to ONE class, and
+they are now `explained` with a per-session proof. After this, the real store has 0 `bug` rows.**
+The new sentences are `forkReplaysMain` / `forkReplaysMainCost` in `EXPLANATIONS`. Nothing about
+money changed. `jsonl.ts`, `subagent-parse.ts`, `usage-dedupe.ts`, the replay and the projection are
+untouched.
+
+### 7.1 §4's hypothesis is refuted, and so is "neither side reproduces"
+
+- **The legacy side always reproduced.** Legacy's own recount (`legacyRootEvidence`) equals the legacy
+  value on all 18 rows. Only the projected recount missed, and it always missed HIGH. The projected
+  value sat below the recount by a whole response's tokens, never by a partial-vs-final delta.
+- **The cause is not a non-contiguous repeat inside one file.** Every one of the 18 invocations is a
+  **single file** (no nested members). Its missing tokens are one `message.id` that **the main
+  transcript also carries**.
+
+### 7.2 The class: a subagent transcript that carries a main-transcript response
+
+All 18 roots are top-level `meta.isFork: true` launches. In each one, exactly one real (non-synthetic)
+`message.id` appears both in the fork's transcript and in the main transcript. The difference is:
+
+- **Replay.** The main transcript is folded BEFORE any subagent (`integrations/claude/index.ts`,
+  `doReplay` then `runSubagentPass`). `model.completed` is keyed on the provider response id alone
+  (O-8), and the projection's `s.seen` is session-wide. So the fork's copy is the same event id as the
+  main transcript's and is dropped. The response is reported once, under the main transcript.
+- **Legacy.** `summarizeSubagentTranscript` dedups with a set that is local to ONE file
+  (`subagent-parse.ts:168`, `countedUsageIds`). It has no view of the parent's ids, so the response is
+  counted inside the invocation as well as in the main transcript's totals.
+
+The per-root recount that A2.5 wrote deduped within a root only. It never pre-claimed the main
+transcript's ids, so it could not reproduce the projected side. `globalDedupPerModel` now takes the
+main transcript's ids as `preclaimed` and counts how many it hit (`RootEvidence.mainSharedIds`). A row
+gets `forkReplaysMain` only when legacy equals its recount AND projected equals the main-aware
+recount AND at least one id was pre-claimed. Otherwise the old sentences apply unchanged. For every
+root that shares no id with the main transcript, the main-aware recount is identical to the old one,
+so the 460 + 41 rows that were already explained are unaffected. On the full store they still come
+out explained: 478 = 460 + 18 invocation rows, and 51 = 41 + 10 totals.
+
+### 7.3 Per-invocation proof (numbers only)
+
+`deficit` = main-unaware projected recount − projected value. It equals the four-counter sum of the
+single shared id in every row. `shared` = the number of real ids the fork shares with the main transcript.
+
+| session | invocation | legacy | projected | shared | deficit |
+|---|---|---:|---:|---:|---:|
+| 4a57e60c | a7ed8864dfd162600 | 2,493,272 | 2,277,395 | 1 | 222,436 |
+| 4a57e60c | aff78ea94a0c83b2e | 3,799,786 | 3,172,690 | 1 | 629,980 |
+| e40a8cd0 | af19e4294d581e64d | 36,819,990 | 36,406,430 | 1 | 456,416 |
+| 62ec3fd0 | ae66fe6d39062f2fb | 3,540,358 | 3,193,278 | 1 | 347,345 |
+| 813e0cce | a719fc42d5edb2e62 | 2,075,653 | 2,001,183 | 1 | 78,678 |
+| 813e0cce | aa07b578c0171d31b | 1,880,579 | 1,801,901 | 1 | 78,678 |
+| 813e0cce | aa3fa14971f30dbb9 | 2,102,289 | 2,025,817 | 1 | 78,678 |
+| 813e0cce | abf76e168a8038050 | 1,697,020 | 1,621,497 | 1 | 78,678 |
+| 813e0cce | a6f9a1d172c695060 | 2,380,538 | 2,308,487 | 1 | 78,678 |
+| 813e0cce | ab4b71232d0896c2b | 600,837 | 518,919 | 1 | 83,409 |
+| 813e0cce | a008d2f672d57bdb5 | 1,270,789 | 1,177,930 | 1 | 95,232 |
+| 3c724061 | a6970d8ecc92fcaad | 1,738,229 | 1,392,648 | 1 | 345,581 |
+| 50feb1c7 | a6d7ec16c2f904dff | 11,643,190 | 11,620,756 | 1 | 76,201 |
+| 922179a6 | a05b015b0bde016dc | 14,061,869 | 14,020,288 | 1 | 87,090 |
+| ec2208b6 | a1a220db5b4948cb2 | 14,680,702 | 14,652,739 | 1 | 76,680 |
+| ec2208b6 | abb677b1d245d0837 | 4,861,063 | 4,635,965 | 1 | 244,327 |
+| bc2f6dbb | a5f4fba490a6268a8 | 441,974 | 368,808 | 1 | 76,676 |
+| 7c821040 | ac83206bae2493f03 | 426,830 | 358,938 | 1 | 73,242 |
+
+Why legacy can sit below the projected recount while being above the projected value (for example
+e40a8cd0: 36,819,990 < 36,862,846 but > 36,406,430): the `firstWins` defect (§3.1) and this class stack
+on the same file. Legacy keeps the partial first line of each streamed id, and it also keeps the
+shared id.
+
+**Independent byte check (Sonnet 5 subagent, its own script, read-only).** It re-derived every row
+from the raw JSONL without using the differential's code. It confirmed `isFork: true` and exactly one
+shared real id on all 18, with every deficit equal to the fork's last-line four-counter sum. The shared
+id is always the fork file's **first** assistant usage line: line 2, right after a `fork-context-ref`
+line 1. In the main transcript, that id is the parent turn whose `tool_use` launched the fork, and the
+launch line (`meta.toolUseId`) is one of that id's own lines. All ids are `claude-sonnet-5`. So a
+forked transcript opens with the launching response under its original `message.id`: one billed
+response, written in two files.
+
+**Five of the 18 copies are NOT byte-identical.** 813e0cce launched six forks from ONE streamed
+parent response. The main transcript writes that response over 8 lines and settles at 83,409. Forks
+a719fc42, aa07b578, aa3fa149, abf76e16 and a6f9a1d1 were launched from earlier lines of that response,
+and each carries the earlier snapshot 78,678. Only ab4b7123, launched from the last line, carries
+83,409. For those five the harness sets `conflict: true`. They are still `explained`, because both
+sides reproduce exactly under the replay's real claim order (see §7.4). What legacy double-counts
+there is a **partial** copy of the response, not the final one.
+
+### 7.4 Which side is wrong — for the owner, not fixed here
+
+In my reading, **the legacy invocation total over-counts** by one billed response per fork launch.
+It is the same response that the main transcript's totals already carry, and `message.id` is one API
+response and one billing event (CLAUDE.md, "One billed response is counted ONCE"). This is the
+main↔subagent twin of §3.4's fork double-count, which is still pending the owner, and the same
+decision covers both. The fix would sit in `subagent-parse.ts` (dedup across the parent's ids as well
+as the file's own). It changes money on every agent surface, so it is not made here.
+
+One property of the replay side is worth naming. Which copy the projection keeps depends on claim
+order. The main transcript is folded first, so it wins. That order is structural: it comes from
+`doReplay`, which folds the main transcript before `runSubagentPass`, not from a directory listing.
+The recount therefore models it, and I treat it as proof rather than coincidence. It is still an
+order dependency.
+- **The per-invocation split** would flip if the order ever changed.
+- **The totals** would also move on the five 813e0cce forks. Their copy differs from the main
+  transcript's (78,678 against 83,409), so the value kept would change with it.
+
+This is P1 §8's "latent" cross-file risk, now **observed** on this store. It is 5 conflicting ids, all
+on the main↔fork boundary, and still 0 between subagent files. The explanation is applied with
+`conflict: true` present. If the coordinator reads that as order-dependent rather than proven, those
+five rows and 813e0cce's total go back to `bug` with `CROSS_FILE_CONFLICT_REASON`. That is a one-line
+guard in `compareTools`.
+
+### 7.5 Run
+
+Base `feat/parity-differential` @ 7529bc53, isolated `AGENTISTICS_DIR`, real store read-only. Before:
+10 sessions with `bug` rows (reproduced exactly as in §4). After: 487 compared, 2 skipped as live, 0
+unreadable, **0 with a `bug` row**. The store grew by one session since A2.5's run. The two live ones
+are sessions being written right now and are none of the ten.

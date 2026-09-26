@@ -95,6 +95,15 @@ export const EXPLANATIONS = {
   nestedRollupCost:
     'the price of the nested-rollup difference above: repricing each side\'s own recount per model at '
     + "its own rate equals that side's reported costUSD exactly",
+  forkReplaysMain:
+    'a subagent transcript carries a response of the MAIN transcript under the '
+    + 'same message.id; legacy counts it again inside the invocation, the replay keeps it once, in the main '
+    + 'transcript (model.completed is keyed on the provider response id alone, O-8, and the main transcript '
+    + 'is folded before any subagent); a recount under each side\'s own rule, the main transcript\'s ids '
+    + 'pre-claimed on the replay side, reproduces both totals exactly',
+  forkReplaysMainCost:
+    'the price of the fork-replays-main difference above: repricing each side\'s own recount per model at '
+    + "its own rate, the main transcript's ids pre-claimed on the replay side, equals that side's reported costUSD exactly",
 } as const
 
 /**
@@ -122,8 +131,13 @@ export interface RootEvidence {
   legacy: { tokens: number; costUSD: number; toolUseCount: number; toolStats: ToolStats4 }
   projected: { tokens: number; costUSD: number; toolUseCount: number; toolStats: ToolStats4 }
   /** True when some message.id in this root's member set carries DIFFERENT usage in two of its own
-   * transcripts — the projected recount is then order-dependent, never a proof either way. */
+   * transcripts (or differs from the main transcript's copy) — the projected recount is then
+   * order-dependent, never a proof either way. */
   conflict: boolean
+  /** How many of this root's message.ids the MAIN transcript already carries. The replay folds the
+   * main transcript first and `model.completed` is keyed on the id alone (O-8), so the projection
+   * reports each of these under the main transcript and never under the invocation. */
+  mainSharedIds: number
 }
 
 /** What the two counting rules give over the same lines — the only thing that can EXPLAIN a token row. */
@@ -253,10 +267,16 @@ export function fileUsageById(lines: Iterable<string>): { byId: Map<string, IdUs
  */
 export function globalDedupPerModel(
   files: readonly { byId: Map<string, IdUsage>; anonymous: IdUsage[] }[],
-): { byModel: Map<string, Tokens4>; conflict: boolean } {
+  preclaimed?: ReadonlyMap<string, IdUsage>,
+): { byModel: Map<string, Tokens4>; conflict: boolean; preclaimedHits: number } {
   const firstSeen = new Map<string, Tokens4>()
   const byModel = new Map<string, Tokens4>()
   let conflict = false
+  let preclaimedHits = 0
+  // Ids a file folded EARLIER in the same session already reported (the main transcript): each one
+  // is already seen, so every copy of it here is dropped exactly as a later file's copy is.
+  for (const [id, u] of preclaimed ?? []) firstSeen.set(id, u.tokens)
+  const counted = new Set<string>()
   const addTo = (model: string, t: Tokens4) => {
     const cur = byModel.get(model) ?? zero4()
     add4(cur, t)
@@ -267,6 +287,7 @@ export function globalDedupPerModel(
       const prior = firstSeen.get(id)
       if (prior) {
         if (sum4(prior) !== sum4(u.tokens)) conflict = true
+        if (preclaimed?.has(id) && !counted.has(id)) { counted.add(id); preclaimedHits++ }
         continue
       }
       firstSeen.set(id, u.tokens)
@@ -274,7 +295,7 @@ export function globalDedupPerModel(
     }
     for (const u of f.anonymous) addTo(u.model, u.tokens)
   }
-  return { byModel, conflict }
+  return { byModel, conflict, preclaimedHits }
 }
 
 // ── The comparison ──────────────────────────────────────────────────────────────────────────────
@@ -452,6 +473,7 @@ export function compareTools(
     let coverageComplete = true
     let anyMeasured = false
     let anyConflict = false
+    let anyMainShared = false
 
     for (const { key, l, q } of pairInvocations(conversationId, legacy, p)) {
       const base = `agentMetrics.invocations[${key}]`
@@ -490,8 +512,12 @@ export function compareTools(
         if (rStats.verdict === 'bug' && same(rStats.legacy, rootEv.legacy.toolStats) && same(rStats.projected, rootEv.projected.toolStats)) {
           rStats = { ...rStats, verdict: 'explained', reason: EXPLANATIONS.nestedRollup }
         }
+        if (rootEv.mainSharedIds > 0) anyMainShared = true
         if (rTok.verdict === 'bug' && rTok.legacy === rootEv.legacy.tokens && rTok.projected === rootEv.projected.tokens) {
-          rTok = { ...rTok, verdict: 'explained', reason: EXPLANATIONS.nestedRollup }
+          rTok = {
+            ...rTok, verdict: 'explained',
+            reason: rootEv.mainSharedIds > 0 ? EXPLANATIONS.forkReplaysMain : EXPLANATIONS.nestedRollup,
+          }
         } else if (rTok.verdict === 'bug' && rootEv.conflict) {
           rTok = { ...rTok, reason: CROSS_FILE_CONFLICT_REASON }
         }
@@ -508,13 +534,13 @@ export function compareTools(
     if (coverageComplete && anyMeasured) {
       if (tot.verdict === 'bug' && typeof tot.legacy === 'number' && typeof tot.projected === 'number'
         && legacySum === tot.legacy && projectedSum === tot.projected) {
-        tot = { ...tot, verdict: 'explained', reason: EXPLANATIONS.nestedRollup }
+        tot = { ...tot, verdict: 'explained', reason: anyMainShared ? EXPLANATIONS.forkReplaysMain : EXPLANATIONS.nestedRollup }
       } else if (tot.verdict === 'bug' && anyConflict) {
         tot = { ...tot, reason: CROSS_FILE_CONFLICT_REASON }
       }
       if (cost.verdict === 'bug' && typeof cost.legacy === 'number' && typeof cost.projected === 'number'
         && legacyCostSum === cost.legacy && projectedCostSum === cost.projected) {
-        cost = { ...cost, verdict: 'explained', reason: EXPLANATIONS.nestedRollupCost }
+        cost = { ...cost, verdict: 'explained', reason: anyMainShared ? EXPLANATIONS.forkReplaysMainCost : EXPLANATIONS.nestedRollupCost }
       } else if (cost.verdict === 'bug' && anyConflict) {
         cost = { ...cost, reason: CROSS_FILE_CONFLICT_REASON }
       }
@@ -718,7 +744,8 @@ async function legacyRootEvidence(
  */
 async function projectedRootEvidence(
   dir: string, rootId: string, entries: readonly AgentEntry[], cache: Map<string, string[] | null>,
-): Promise<(RootEvidence['projected'] & { conflict: boolean }) | null> {
+  mainById: ReadonlyMap<string, IdUsage>,
+): Promise<(RootEvidence['projected'] & { conflict: boolean; mainSharedIds: number }) | null> {
   const members = metaChainMembers(rootId, entries)
   const perFile: ReturnType<typeof fileUsageById>[] = []
   const toolStats = zeroToolStats4()
@@ -738,7 +765,7 @@ async function projectedRootEvidence(
     toolStats.otherToolCount += s.toolStats.otherToolCount
   }
   if (!any) return null
-  const { byModel, conflict } = globalDedupPerModel(perFile)
+  const { byModel, conflict, preclaimedHits } = globalDedupPerModel(perFile, mainById)
   let tokens = 0, costUSD = 0
   for (const [model, t] of byModel) {
     tokens += sum4(t)
@@ -747,12 +774,15 @@ async function projectedRootEvidence(
       model,
     )
   }
-  return { tokens, costUSD, toolUseCount, toolStats, conflict }
+  return { tokens, costUSD, toolUseCount, toolStats, conflict, mainSharedIds: preclaimedHits }
 }
 
 async function evidenceFor(loc: Located): Promise<UsageEvidence> {
   const text = await readFile(loc.path, 'utf-8')
   const main = recountUsage(text.split('\n'))
+  // The replay folds the main transcript BEFORE any subagent (integrations/claude/index.ts), so every
+  // id it carries is already claimed when a subagent's copy of the same id arrives.
+  const mainById = fileUsageById(text.split('\n')).byId
   const entries = await subagentEntries(loc.subagentsDir)
   const cache = new Map<string, string[] | null>()
   const roots: UsageEvidence['roots'] = {}
@@ -763,12 +793,13 @@ async function evidenceFor(loc: Located): Promise<UsageEvidence> {
     if (e.meta && isNestedAgent(e.meta) && e.meta.parentAgentId) continue
     try {
       const legacy = await legacyRootEvidence(loc.subagentsDir, e.agentId, cache)
-      const projected = await projectedRootEvidence(loc.subagentsDir, e.agentId, entries, cache)
+      const projected = await projectedRootEvidence(loc.subagentsDir, e.agentId, entries, cache, mainById)
       if (legacy && projected) {
         roots[e.agentId] = {
           legacy,
           projected: { tokens: projected.tokens, costUSD: projected.costUSD, toolUseCount: projected.toolUseCount, toolStats: projected.toolStats },
           conflict: projected.conflict,
+          mainSharedIds: projected.mainSharedIds,
         }
       }
     } catch { /* unreadable subagent: no evidence, so nothing about it can be explained */ }

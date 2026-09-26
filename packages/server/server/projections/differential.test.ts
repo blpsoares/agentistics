@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import type { AgentInvocation, SessionMeta } from '@agentistics/core'
 import {
-  EXPLANATIONS, compareSession, compareTokens, compareTime, fileUsageById, globalDedupPerModel,
+  EXPLANATIONS, compareSession, compareTokens, compareTime, compareTools, fileUsageById, globalDedupPerModel,
   metaChainMembers, pairInvocations, recountUsage, renderReport, runDifferential, summarize,
   type UsageEvidence,
 } from './differential'
@@ -197,6 +197,81 @@ describe('cross-file dedup — the same message.id can never be counted twice, a
     const fileB = fileUsageById([anon])
     const { byModel } = globalDedupPerModel([fileA, fileB])
     expect(byModel.get('m')!.output).toBe(6) // both counted — an id-less line can never be shown a duplicate
+  })
+})
+
+describe('a subagent transcript carrying a MAIN-transcript response under the same message.id (A2.6)', () => {
+  const line = (id: string, model: string, output: number) =>
+    JSON.stringify({ type: 'assistant', message: { id, model, usage: { input_tokens: 1, output_tokens: output } } })
+
+  test('an id the main transcript already carries is pre-claimed: dropped from the invocation, and counted', () => {
+    const main = fileUsageById([line('parentLast', 'm', 40)])
+    const fork = fileUsageById([line('parentLast', 'm', 40), line('ownWork', 'm', 7)])
+    const { byModel, conflict, preclaimedHits } = globalDedupPerModel([fork], main.byId)
+    expect(conflict).toBe(false)
+    expect(preclaimedHits).toBe(1)
+    // only ownWork(1+7) — the main transcript's response is never billed to the invocation too
+    expect(byModel.get('m')!.output).toBe(7)
+    expect(byModel.get('m')!.input).toBe(1)
+  })
+  test('the pre-claimed copy disagreeing with the subagent\'s copy is a conflict, never a silent pick', () => {
+    const main = fileUsageById([line('parentLast', 'm', 40)])
+    const fork = fileUsageById([line('parentLast', 'm', 41)])
+    const { conflict, preclaimedHits } = globalDedupPerModel([fork], main.byId)
+    expect(conflict).toBe(true)
+    expect(preclaimedHits).toBe(1)
+  })
+  test('no pre-claimed ids: the result is exactly the pre-A2.6 one', () => {
+    const fork = fileUsageById([line('a', 'm', 3), line('b', 'm', 4)])
+    const without = globalDedupPerModel([fork])
+    const withEmpty = globalDedupPerModel([fork], new Map())
+    expect(withEmpty.byModel).toEqual(without.byModel)
+    expect(without.preclaimedHits).toBe(0)
+  })
+
+  const conversationId = 'conv-fork'
+  const stats = { readCount: 0, searchCount: 0, bashCount: 0, editFileCount: 0, otherToolCount: 0 }
+  const legacyWith = (tokens: number, cost: number) => legacy({ agentMetrics: {
+    invocations: [{
+      toolUseId: 't1', agentId: 'aFork', agentType: 'general-purpose', description: '', status: 'completed',
+      totalTokens: tokens, totalDurationMs: 0, totalToolUseCount: 0,
+      inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+      toolStats: { ...stats, linesAdded: 0, linesRemoved: 0 }, costUSD: cost,
+    }],
+    totalInvocations: 1, unmeasuredInvocations: 0, totalTokens: tokens, totalDurationMs: 0, totalCostUSD: cost,
+  } })
+  const projWith = (tokens: number, cost: number) => projection({ agentMetrics: {
+    invocations: [{
+      agentId: subagentIdOf(conversationId, 'aFork'), status: 'completed', totalTokens: tokens,
+      inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalToolUseCount: 0,
+      toolStats: stats, costUSD: cost,
+    }],
+    totalInvocations: 1, unmeasuredInvocations: 0, totalTokens: tokens, totalCostUSD: cost,
+  } })
+  const ev = (mainSharedIds: number, projected: number, projectedCost: number): UsageEvidence => ({
+    main: { firstWins: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, lastWins: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, usageLines: 0, apiErrorZeroTtlLines: 0 },
+    mainBytes: 1,
+    roots: { aFork: {
+      legacy: { tokens: 1000, costUSD: 2, toolUseCount: 0, toolStats: stats },
+      projected: { tokens: projected, costUSD: projectedCost, toolUseCount: 0, toolStats: stats },
+      conflict: false, mainSharedIds,
+    } },
+  })
+
+  test('both sides reproduced with the main transcript\'s ids pre-claimed: explained by forkReplaysMain', () => {
+    const rows = compareTools(conversationId, legacyWith(1000, 2), projWith(800, 1.5), ev(1, 800, 1.5))
+    expect(rows.find(r => r.field === 'agentMetrics.invocations[aFork].totalTokens')!.reason).toBe(EXPLANATIONS.forkReplaysMain)
+    expect(rows.find(r => r.field === 'agentMetrics.totalTokens')!.reason).toBe(EXPLANATIONS.forkReplaysMain)
+    expect(rows.find(r => r.field === 'agentMetrics.totalCostUSD')!.reason).toBe(EXPLANATIONS.forkReplaysMainCost)
+  })
+  test('the same numbers with nothing shared with the main transcript keep the nested-rollup sentence', () => {
+    const rows = compareTools(conversationId, legacyWith(1000, 2), projWith(800, 1.5), ev(0, 800, 1.5))
+    expect(rows.find(r => r.field === 'agentMetrics.invocations[aFork].totalTokens')!.reason).toBe(EXPLANATIONS.nestedRollup)
+  })
+  test('a pre-claimed id that does NOT account for the difference is still a bug', () => {
+    const rows = compareTools(conversationId, legacyWith(1000, 2), projWith(800, 1.5), ev(1, 801, 1.5))
+    expect(rows.find(r => r.field === 'agentMetrics.invocations[aFork].totalTokens')!.verdict).toBe('bug')
+    expect(rows.find(r => r.field === 'agentMetrics.totalTokens')!.verdict).toBe('bug')
   })
 })
 
