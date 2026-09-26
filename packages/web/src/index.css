@@ -963,3 +963,12 @@ button:focus-within .ag-row-pin,
   .ag-attn-bar { animation: none; box-shadow: inset 3px 0 0 0 var(--anthropic-orange) !important; }
   .ag-attn-count { animation: none; color: var(--anthropic-orange) !important; }
 }
+
+/* A group whose name is hidden: the text stays in the layout, so the block is exactly as long as the
+   name, and a grey rounded block is painted over it — the skeleton of a loading page, which reads as
+   "there is something here" rather than as a bug. Not selectable or copyable. */
+.ag-name-mask {
+  color: transparent !important; user-select: none; -webkit-user-select: none;
+  background: color-mix(in srgb, var(--text-tertiary) 38%, transparent);
+  border-radius: 5px; text-decoration: none;
+}

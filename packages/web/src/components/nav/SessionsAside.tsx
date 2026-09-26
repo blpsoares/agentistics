@@ -32,6 +32,7 @@ import {
 import { sessionCardStyle, STATE_COLOR } from '../../lib/sessionCardStyle'
 import { SessionsGroupMenu } from './SessionsGroupMenu'
 import type { SessionOrder } from '@agentistics/tui/control/session-order'
+import { displayName, toggleHidden } from '../../lib/groupNameMask'
 import { ATTN_BAR_CLASS, ATTN_COUNT_CLASS, attentionCount, attentionIds, pruneDismissed } from './AttentionDot'
 import { rowSelected } from '../../lib/fleetSelection'
 import { filterFleet, ignoredDimensions } from '../../lib/fleetFilter'
@@ -345,6 +346,13 @@ export function SessionsAside({
   const [deletingGroup, setDeletingGroup] = useState<SessionUserGroup | null>(null)
   /** The "⋮" menu on a group's own heading (rename/delete) — reuses `SessionRowMenu`. */
   const [groupMenu, setGroupMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  // Groups whose name is hidden on THIS screen — see `lib/groupNameMask.ts`.
+  const [hiddenGroups, setHiddenGroups] = useState<ReadonlySet<string>>(new Set(storedGroupPrefs.hiddenUserGroups))
+  const toggleGroupNameHidden = (id: string) => {
+    const next = toggleHidden(hiddenGroups, id)
+    setHiddenGroups(next)
+    writeAsideGroupPrefs({ hiddenUserGroups: [...next] })
+  }
   // What the open group menu could silence: only a FOLDED group signals, so only a folded one offers it.
   const menuGroupAttnIds = groupMenu && foldedUserGroups.has(groupMenu.id)
     ? attentionIds(groupRowsResolved.find(g => g.group.id === groupMenu.id)?.rows ?? [], dismissedAttn)
@@ -979,10 +987,18 @@ export function SessionsAside({
                   >
                     {folded ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
                     <Folder size={11} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
-                    <span style={{
-                      fontSize: 12, fontWeight: 700, color: 'var(--text-primary)',
-                      minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}>
+                    {/* Hidden: the name stays in the layout (so the block is exactly as long as it) and
+                        a grey block is painted over it. `role="img"` makes a reader announce the
+                        label instead of reading the text out. */}
+                    <span
+                      {...(hiddenGroups.has(group.id)
+                        ? { className: 'ag-name-mask', role: 'img', 'aria-label': pt ? 'Nome oculto' : 'Name hidden' }
+                        : {})}
+                      style={{
+                        fontSize: 12, fontWeight: 700, color: 'var(--text-primary)',
+                        minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}
+                    >
                       {group.name}
                     </span>
                     <span style={{ fontSize: 10.5, fontWeight: 600, opacity: 0.65 }}>{gRows.length}</span>
@@ -1148,7 +1164,8 @@ export function SessionsAside({
         <SessionRowMenu
           x={groupPicker.x} y={groupPicker.y}
           entries={[
-            ...groupsValue.groups.map(g => ({ action: g.id, label: g.name, enabled: true })),
+            // A hidden group stays hidden here too: this menu prints the name as text.
+            ...groupsValue.groups.map(g => ({ action: g.id, label: displayName(g.name, hiddenGroups.has(g.id)), enabled: true })),
             { action: '__new_group__', label: pt ? 'Novo grupo…' : 'New group…', enabled: true },
           ]}
           onPick={action => {
@@ -1181,6 +1198,11 @@ export function SessionsAside({
           entries={[
             { action: 'rename', label: pt ? 'Renomear' : 'Rename', enabled: true },
             {
+              action: 'toggle-hide-name',
+              label: hiddenGroups.has(groupMenu.id) ? (pt ? 'Mostrar nome' : 'Show name') : (pt ? 'Ocultar nome' : 'Hide name'),
+              enabled: true,
+            },
+            {
               action: 'move-up', label: pt ? 'Mover para cima' : 'Move up',
               enabled: groupsValue.groups.findIndex(g => g.id === groupMenu.id) > 0,
             },
@@ -1201,6 +1223,7 @@ export function SessionsAside({
               setRenameGroupDraft(g?.name ?? '')
               setRenamingGroup({ id: groupMenu.id })
             }
+            if (action === 'toggle-hide-name') toggleGroupNameHidden(groupMenu.id)
             if (action === 'move-up') stepSessionGroup(groupMenu.id, -1)
             if (action === 'move-down') stepSessionGroup(groupMenu.id, 1)
             if (action === 'delete' && g) setDeletingGroup(g)
@@ -1434,8 +1457,8 @@ export function SessionsAside({
         open={deletingGroup !== null}
         title={pt ? 'Excluir grupo' : 'Delete group'}
         message={pt
-          ? `Excluir o grupo "${deletingGroup?.name ?? ''}"? As sessões não são apagadas, só saem do grupo.`
-          : `Delete the group "${deletingGroup?.name ?? ''}"? Sessions are not deleted, they only leave the group.`}
+          ? `Excluir o grupo "${deletingGroup ? displayName(deletingGroup.name, hiddenGroups.has(deletingGroup.id)) : ''}"? As sessões não são apagadas, só saem do grupo.`
+          : `Delete the group "${deletingGroup ? displayName(deletingGroup.name, hiddenGroups.has(deletingGroup.id)) : ''}"? Sessions are not deleted, they only leave the group.`}
         confirmLabel={pt ? 'Excluir' : 'Delete'}
         cancelLabel={pt ? 'Cancelar' : 'Cancel'}
         onConfirm={() => {

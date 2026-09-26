@@ -48,11 +48,14 @@ export interface AsideGroupPrefs {
    *  surfaces answer "sort by recent" the same way). The default is the one that puts what is
    *  blocked on you first — the reason the list exists. Per-viewer, like the rest of the arrangement. */
   sort: SessionOrder
+  /** User groups whose NAME is hidden (a grey block instead of text). Per-viewer: it is about what is
+   *  on THIS screen — a shared one, a recording — not a fact about the work. */
+  hiddenUserGroups: string[]
 }
 
 export const DEFAULT_ASIDE_GROUP_PREFS: AsideGroupPrefs = {
   groupBy: 'project', order: {}, collapsed: [], cardColor: 'wash', collapsedUserGroups: [],
-  sort: DEFAULT_ORDER,
+  sort: DEFAULT_ORDER, hiddenUserGroups: [],
 }
 
 /** Total: anything that is not a known key and direction reads as the default. */
@@ -101,6 +104,9 @@ export function readAsideGroupPrefs(): AsideGroupPrefs {
         ? p.collapsedUserGroups.filter((x): x is string => typeof x === 'string')
         : [],
       sort: readSessionSort(p.sort),
+      hiddenUserGroups: Array.isArray(p.hiddenUserGroups)
+        ? p.hiddenUserGroups.filter((x): x is string => typeof x === 'string')
+        : [],
     }
   } catch { return DEFAULT_ASIDE_GROUP_PREFS }
 }

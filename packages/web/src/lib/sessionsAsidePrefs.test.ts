@@ -74,6 +74,7 @@ describe('writeAsideGroupPrefs', () => {
       cardColor: 'neutral',
       collapsedUserGroups: ['g1'],
       sort: { by: 'recent', dir: 'asc' },
+      hiddenUserGroups: ['g2'],
     })
     expect(readAsideGroupPrefs()).toEqual({
       groupBy: 'status',
@@ -82,6 +83,7 @@ describe('writeAsideGroupPrefs', () => {
       cardColor: 'neutral',
       collapsedUserGroups: ['g1'],
       sort: { by: 'recent', dir: 'asc' },
+      hiddenUserGroups: ['g2'],
     })
   })
 
@@ -118,4 +120,11 @@ describe('the sort preference', () => {
     expect(readSessionSort(null)).toEqual({ by: 'state', dir: 'desc' })
     expect(readSessionSort('recent')).toEqual({ by: 'state', dir: 'desc' })
   })
+})
+
+test('hiddenUserGroups: absent reads as none hidden, and junk entries are dropped', () => {
+  localStorage.setItem('agentistics-sessions-aside-v1', JSON.stringify({ groupBy: 'task' }))
+  expect(readAsideGroupPrefs().hiddenUserGroups).toEqual([])
+  localStorage.setItem('agentistics-sessions-aside-v1', JSON.stringify({ hiddenUserGroups: ['a', 3, null, 'b'] }))
+  expect(readAsideGroupPrefs().hiddenUserGroups).toEqual(['a', 'b'])
 })
